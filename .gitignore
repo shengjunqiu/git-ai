@@ -1,0 +1,92 @@
+# Rust / Cargo
+target/
+*.profraw
+lcov.info
+coverage/
+
+# Taskfile / local automation
+.task/
+
+# Build and release artifacts
+/dist/
+/enterprise-server/deploy/images/
+/enterprise-server/*-deploy.tar.gz
+
+# Node / editor extension builds
+node_modules/
+/agent-support/vscode/out/
+/agent-support/vscode/dist/
+/agent-support/vscode/.vscode-test/
+/agent-support/vscode/*.vsix
+/agent-support/vscode/git-ai.png
+/agent-support/opencode/node_modules/
+
+# IntelliJ / Gradle plugin builds
+.gradle/
+.kotlin/
+.intellijPlatform/
+.qodana/
+.sandbox/
+build/
+
+# Local databases and generated report data
+/prompts.db
+/prompts.db-*
+/demo-report.sqlite
+/data/*.sqlite
+/data/*.sqlite-shm
+/data/*.sqlite-wal
+/data/*.log
+/data/*.pid
+
+# Logs and local command output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dev-debug.log
+/dev_stdout.txt
+/dev_stderr.txt
+/test-output.txt
+/test_output.txt
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Benchmark, fuzz, and temporary worktrees
+.benchmarks/
+.performance-repos/
+fuzz/artifacts/
+fuzz/corpus/
+.worktrees/
+.claude/worktrees/
+
+# Python helpers
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local task files
+tasks.json
+tasks/
+
+# Local git-ai state, if created inside the checkout
+.git-ai/

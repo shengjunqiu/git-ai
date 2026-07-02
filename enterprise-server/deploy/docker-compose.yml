@@ -1,0 +1,107 @@
+# Git AI Enterprise Server - Production Deployment
+# =================================================
+# Usage:
+#   1. Copy .env.example to .env and fill in the values
+#   2. Load images: docker load -i images/git-ai-enterprise-server-api.tar
+#   3. Start services: docker compose up -d
+#   4. Run migrations: ./scripts/migrate.sh
+#
+
+services:
+  # Enterprise Server API
+  api:
+    image: git-ai-enterprise-server-api:latest
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-gitai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gitai_enterprise}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
+      - S3_BUCKET=${S3_BUCKET:-git-ai-cas}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - BASE_URL=${BASE_URL:-http://localhost:8080}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - POSTHOG_HOST=${POSTHOG_HOST:-}
+      - POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
+      - RUST_LOG=${RUST_LOG:-git_ai_enterprise_server=info,tower_http=warn}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gitai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-gitai_enterprise}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gitai} -d ${POSTGRES_DB:-gitai_enterprise}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MinIO (S3-compatible CAS storage)
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  # MinIO initialization - create bucket
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin};
+      mc mb myminio/${S3_BUCKET:-git-ai-cas} --ignore-existing;
+      echo 'Bucket created';
+      "
+    profiles:
+      - init
+
+volumes:
+  pgdata:
+  minio_data:

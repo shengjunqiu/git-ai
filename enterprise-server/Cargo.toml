@@ -1,0 +1,55 @@
+[package]
+name = "git-ai-enterprise-server"
+version = "0.1.0"
+edition = "2021"
+default-run = "git-ai-enterprise-server"
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["macros", "ws", "multipart"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "limit"] }
+
+# Database
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "postgres", "json", "chrono", "uuid"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+anyhow = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+rand = "0.8"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+dotenvy = "0.15"
+clap = { version = "4", features = ["derive", "env"] }
+url = "2"
+regex = "1"
+envy = "0.4"
+
+# CAS object storage
+object_store = { version = "0.11", features = ["aws"] }
+
+# HTTP client (JetBrains proxy, etc.)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Bytes
+bytes = "1"
+
+[dev-dependencies]
+tempfile = "3"

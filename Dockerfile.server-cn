@@ -1,0 +1,83 @@
+# ============================================================
+# Stage 1: Build（国内网络优化版）
+# 用 debian 基础镜像 + rustup 国内镜像，避免拉取 rust 官方镜像
+# ============================================================
+FROM docker.m.daocloud.io/library/debian:bookworm-slim AS builder
+
+# 换国内 apt 源（中科大）
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list 2>/dev/null || true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 用中科大 rustup 镜像安装 rust 1.93
+ENV RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
+ENV RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://mirrors.ustc.edu.cn/misc/rustup-install.sh | \
+    sh -s -- -y --default-toolchain 1.93.0 --profile minimal --no-modify-path 2>/dev/null || \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain 1.93.0 --profile minimal --no-modify-path
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# 配置 cargo 国内镜像源（中科大 crates.io 镜像）
+RUN mkdir -p /root/.cargo && cat > /root/.cargo/config.toml <<'EOF'
+[source.crates-io]
+replace-with = "ustc"
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+EOF
+
+WORKDIR /build
+
+# Copy dependency manifests first for better layer caching
+COPY Cargo.toml Cargo.lock ./
+
+# Pre-fetch dependencies
+RUN mkdir -p src && echo 'fn main(){}' > src/main.rs && \
+    cargo fetch --locked && \
+    rm -rf src
+
+# Copy full source
+COPY . .
+
+# Build release binary
+RUN cargo build --release --locked --bin git-ai
+
+# ============================================================
+# Stage 2: Runtime
+# ============================================================
+FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runner
+
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list 2>/dev/null || true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -r -u 1001 -g root -s /sbin/nologin gitai
+
+COPY --from=builder /build/target/release/git-ai /usr/local/bin/git-ai
+
+RUN mkdir -p /data && chown gitai /data
+
+USER gitai
+WORKDIR /data
+
+ENV GIT_AI_REPORT_ADDR=0.0.0.0:8787
+ENV GIT_AI_REPORT_DB=/data/report.sqlite
+
+EXPOSE 8787
+
+ENTRYPOINT ["/usr/local/bin/git-ai", "report", "server"]
+CMD ["--addr", "0.0.0.0:8787", "--db", "/data/report.sqlite"]
