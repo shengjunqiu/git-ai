@@ -478,8 +478,8 @@ async fn async_run_install(
     // Track detailed results for metrics (tool_id, result)
     let mut detailed_results: Vec<(String, InstallResult)> = Vec::new();
 
-    // Ensure git symlinks for Fork compatibility
-    if let Err(e) = crate::mdm::ensure_git_symlinks() {
+    // Ensure managed git shims and the libexec symlink used by Git clients.
+    if !dry_run && let Err(e) = crate::mdm::ensure_git_symlinks() {
         eprintln!("Warning: Failed to create git symlinks: {}", e);
     }
 

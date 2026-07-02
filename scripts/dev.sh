@@ -68,6 +68,13 @@ cp "target/$BUILD_TYPE/git-ai" "$TMP_BIN"
 mv -f "$TMP_BIN" "$HOME/.git-ai/bin/git-ai"
 chmod +x "$HOME/.git-ai/bin/git-ai"
 
+echo "Ensuring git shim in ~/.git-ai/bin..."
+ln -sf "$HOME/.git-ai/bin/git-ai" "$HOME/.git-ai/bin/git"
+REAL_GIT_PATH="$("$HOME/.git-ai/bin/git-ai" git-path 2>/dev/null || true)"
+if [[ -n "$REAL_GIT_PATH" ]]; then
+    ln -sf "$REAL_GIT_PATH" "$HOME/.git-ai/bin/git-og"
+fi
+
 # Run install hooks
 echo "Running install hooks..."
 ~/.git-ai/bin/git-ai install

@@ -9,8 +9,9 @@ use std::process::Command;
 
 mod paths;
 pub use paths::{
-    claude_config_dir, clean_path, get_current_binary_path, git_shim_path, git_shim_path_string,
-    home_dir, to_git_bash_path, to_windows_git_bash_style_path,
+    claude_config_dir, clean_path, get_current_binary_path, git_ai_binary_name,
+    git_shim_binary_name, git_shim_path, git_shim_path_string, home_dir, managed_install_bin_dir,
+    to_git_bash_path, to_windows_git_bash_style_path,
 };
 
 // Minimum version requirements

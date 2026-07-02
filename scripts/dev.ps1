@@ -127,11 +127,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Installing binary to $GitAiExe..."
 Install-Binary -SrcPath "target\$BuildType\git-ai.exe" -DstPath $GitAiExe -GitAiExe $GitAiExe
 
-# Keep the git.exe shim in sync with the updated binary
-if (Test-Path -LiteralPath $GitShim) {
-    Write-Host 'Updating git.exe shim...'
-    Install-Binary -SrcPath $GitAiExe -DstPath $GitShim -GitAiExe $GitAiExe
-}
+# Keep the git.exe shim in sync with the updated binary, recreating it if missing
+Write-Host 'Updating git.exe shim...'
+Install-Binary -SrcPath $GitAiExe -DstPath $GitShim -GitAiExe $GitAiExe
 
 # Run install hooks
 Write-Host 'Running install hooks...'

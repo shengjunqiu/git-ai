@@ -114,22 +114,32 @@ pub fn get_current_binary_path() -> Result<PathBuf, GitAiError> {
     Ok(clean_path(canonical))
 }
 
+/// Platform-specific executable name for the git-ai binary.
+pub fn git_ai_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "git-ai.exe"
+    } else {
+        "git-ai"
+    }
+}
+
+/// Platform-specific executable name for the git shim.
+pub fn git_shim_binary_name() -> &'static str {
+    if cfg!(windows) { "git.exe" } else { "git" }
+}
+
+/// The managed install directory used by the install scripts.
+pub fn managed_install_bin_dir() -> PathBuf {
+    home_dir().join(".git-ai").join("bin")
+}
+
 /// Path to the git shim that git clients should use
 /// This is in the same directory as the git-ai executable, but named "git"
 pub fn git_shim_path() -> PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("git")))
-        .unwrap_or_else(|| {
-            #[cfg(windows)]
-            {
-                home_dir().join(".git-ai").join("bin").join("git")
-            }
-            #[cfg(not(windows))]
-            {
-                home_dir().join(".local").join("bin").join("git")
-            }
-        })
+        .and_then(|exe| exe.parent().map(|p| p.join(git_shim_binary_name())))
+        .unwrap_or_else(|| managed_install_bin_dir().join(git_shim_binary_name()))
 }
 
 /// Get the git shim path as a string (for use in settings files)
