@@ -85,6 +85,8 @@ services:
       mc mb myminio/git-ai-cas --ignore-existing;
       echo 'Bucket created';
       "
+    profiles:
+      - init
 
 volumes:
   pgdata:
