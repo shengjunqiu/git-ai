@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Build
 # ============================================================
-FROM docker.m.daocloud.io/library/rust:1.93-slim-bookworm AS builder
+FROM rust:1.93-slim-bookworm AS builder
 
 # Install build dependencies (OpenSSL vendored via feature, but needs pkg-config & cc)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,7 +30,7 @@ RUN cargo build --release --locked --bin git-ai
 # ============================================================
 # Stage 2: Runtime
 # ============================================================
-FROM docker.m.daocloud.io/library/debian:bookworm-slim AS runner
+FROM debian:bookworm-slim AS runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

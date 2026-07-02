@@ -457,7 +457,7 @@ git-ai report summary . --server http://127.0.0.1:8787
 
 ### Docker 拉镜像失败
 
-`enterprise-server/docker-compose.yml` 使用了镜像源地址，例如 `docker.m.daocloud.io/library/postgres:16-alpine`。如果网络或镜像源不可用，可以换成官方镜像：
+默认 Docker 配置使用官方镜像。如果你在旧版本或本地改动里看到类似 `docker.m.daocloud.io/library/postgres:16-alpine` 的镜像源地址，并遇到镜像源不可用，可以换成官方镜像：
 
 ```yaml
 postgres:16-alpine

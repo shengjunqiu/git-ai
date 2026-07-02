@@ -37,7 +37,7 @@ services:
 
   # PostgreSQL Database
   postgres:
-    image: docker.m.daocloud.io/library/postgres:16-alpine
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: gitai
       POSTGRES_PASSWORD: gitai
@@ -55,7 +55,7 @@ services:
 
   # Redis Cache
   redis:
-    image: docker.m.daocloud.io/library/redis:7-alpine
+    image: redis:7-alpine
     ports:
       - "6379:6379"
     healthcheck:
@@ -67,7 +67,7 @@ services:
 
   # MinIO (S3-compatible CAS storage)
   minio:
-    image: docker.m.daocloud.io/minio/minio:latest
+    image: minio/minio:latest
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
@@ -81,7 +81,7 @@ services:
 
   # MinIO initialization - create bucket
   minio-init:
-    image: docker.m.daocloud.io/minio/mc:latest
+    image: minio/mc:latest
     depends_on:
       - minio
     entrypoint: >
@@ -94,7 +94,7 @@ services:
 
   # Database initialization - create default admin user and organization
   db-init:
-    image: docker.m.daocloud.io/library/postgres:16-alpine
+    image: postgres:16-alpine
     depends_on:
       api:
         condition: service_started
