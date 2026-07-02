@@ -25,8 +25,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # PostgreSQL Database
@@ -85,9 +85,6 @@ services:
       mc mb myminio/git-ai-cas --ignore-existing;
       echo 'Bucket created';
       "
-    profiles:
-      - init
-
 volumes:
   pgdata:
   minio_data:

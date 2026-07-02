@@ -23,6 +23,7 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
         ("001_initial_schema", include_str!("../../migrations/001_initial_schema.sql")),
         ("002_repo_access_list", include_str!("../../migrations/002_repo_access_list.sql")),
         ("003_phase6_enterprise", include_str!("../../migrations/003_phase6_enterprise.sql")),
+        ("004_data_isolation", include_str!("../../migrations/004_data_isolation.sql")),
     ];
 
     for (name, sql) in migrations {

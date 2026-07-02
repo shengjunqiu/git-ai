@@ -61,12 +61,57 @@ pub async fn upload_report(
     .bind(project_id)
     .bind(&report.schema_version)
     .bind(&report.generated_at)
-    .bind(report.range.as_ref().and_then(|r| r.commit_count).unwrap_or(0))
+    .bind(report.commits.len() as i64)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
     let upload_id = upload_row.0;
+    let mut inserted_commits = 0i64;
+    let mut duplicate_commits = 0i64;
+
+    for commit in &report.commits {
+        if commit.sha.trim().is_empty() {
+            continue;
+        }
+
+        let stats = &commit.stats;
+        let result = sqlx::query(
+            r#"INSERT INTO commit_stats (
+                project_id, sha, author, author_time, subject, has_authorship_note,
+                git_diff_added_lines, git_diff_deleted_lines, ai_additions, human_additions,
+                mixed_additions, unknown_additions, ai_accepted, total_ai_additions,
+                total_ai_deletions, time_waiting_for_ai
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (project_id, sha) DO NOTHING"#,
+        )
+        .bind(project_id)
+        .bind(&commit.sha)
+        .bind(&commit.author)
+        .bind(&commit.author_time)
+        .bind(&commit.subject)
+        .bind(commit.has_authorship_note)
+        .bind(stats.git_diff_added_lines.unwrap_or(0))
+        .bind(stats.git_diff_deleted_lines.unwrap_or(0))
+        .bind(stats.ai_additions.unwrap_or(0))
+        .bind(stats.human_additions.unwrap_or(0))
+        .bind(stats.mixed_additions.unwrap_or(0))
+        .bind(stats.unknown_additions.unwrap_or(0))
+        .bind(stats.ai_accepted.unwrap_or(0))
+        .bind(stats.total_ai_additions.unwrap_or(0))
+        .bind(stats.total_ai_deletions.unwrap_or(0))
+        .bind(stats.time_waiting_for_ai.unwrap_or(0))
+        .execute(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+
+        if result.rows_affected() == 0 {
+            duplicate_commits += 1;
+        } else {
+            inserted_commits += 1;
+        }
+    }
 
     // Store tool_model_breakdown
     if let Some(breakdown) = &report.tool_model_breakdown {
@@ -97,8 +142,8 @@ pub async fn upload_report(
     Ok(Json(serde_json::json!({
         "project_id": project_id,
         "upload_id": upload_id,
-        "inserted_commits": report.range.as_ref().and_then(|r| r.commits_with_authorship).unwrap_or(0),
-        "duplicate_commits": report.range.as_ref().and_then(|r| r.commits_without_authorship).unwrap_or(0),
+        "inserted_commits": inserted_commits,
+        "duplicate_commits": duplicate_commits,
     })))
 }
 

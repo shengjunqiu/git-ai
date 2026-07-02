@@ -42,7 +42,7 @@ fn scan_value_recursive(value: &serde_json::Value, path: &str, detections: &mut 
     match value {
         serde_json::Value::String(s) => {
             if let Some(secret) = find_high_entropy_substring(s) {
-                let preview = format!("{}...{}", &secret[..4.min(secret.len())], &secret[secret.len().saturating_sub(4)..]);
+                let preview = secret_preview(&secret);
                 detections.push((path.to_string(), preview));
             }
         }
@@ -151,6 +151,13 @@ fn looks_like_secret(s: &str) -> bool {
     categories >= 3
 }
 
+fn secret_preview(secret: &str) -> String {
+    let prefix: String = secret.chars().take(4).collect();
+    let suffix_chars: Vec<char> = secret.chars().rev().take(4).collect();
+    let suffix: String = suffix_chars.into_iter().rev().collect();
+    format!("{}...{}", prefix, suffix)
+}
+
 /// Check if a string looks like a UUID
 fn is_uuid_like(s: &str) -> bool {
     // UUID format: 8-4-4-4-12 hex digits
@@ -208,5 +215,15 @@ mod tests {
         let result = scan_json_for_secrets(&json);
         assert_eq!(result.secrets_found, 1);
         assert!(result.detections[0].0.contains("api_key"));
+    }
+
+    #[test]
+    fn test_scan_json_handles_unicode_secret_preview() {
+        let json = serde_json::json!({
+            "message": "GitAiError，不要随意引入新的错误风格。跨平台逻辑用明确的"
+        });
+        let result = scan_json_for_secrets(&json);
+        assert_eq!(result.secrets_found, 1);
+        assert_eq!(result.detections[0].1, "GitA...用明确的");
     }
 }

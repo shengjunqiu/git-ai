@@ -1113,18 +1113,46 @@ pub async fn aggregate_summary(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let total_ai = row.1.unwrap_or(0);
-    let total_human = row.2.unwrap_or(0);
+    let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+        r#"SELECT
+            COUNT(cs.sha) as total_commits,
+            COALESCE(SUM(cs.ai_additions), 0) as total_ai_lines,
+            COALESCE(SUM(cs.human_additions), 0) as total_human_lines,
+            COUNT(DISTINCT cs.author) as total_developers,
+            COUNT(DISTINCT p.id) as total_projects
+        FROM projects p
+        JOIN commit_stats cs ON cs.project_id = p.id
+        WHERE ($1::uuid IS NULL OR p.user_id = $1)
+          AND ($2::uuid IS NULL OR p.org_id = $2)
+          AND NOT EXISTS (
+              SELECT 1 FROM metrics_events m
+              WHERE m.event_type = 1
+                AND m.commit_sha = cs.sha
+                AND ($1::uuid IS NULL OR m.user_id = $1)
+                AND ($2::uuid IS NULL OR m.org_id = $2)
+          )"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+
+    let total_commits = row.0.unwrap_or(0) + report_row.0.unwrap_or(0);
+    let total_ai = row.1.unwrap_or(0) + report_row.1.unwrap_or(0);
+    let total_human = row.2.unwrap_or(0) + report_row.2.unwrap_or(0);
+    let total_developers = row.3.unwrap_or(0) + report_row.3.unwrap_or(0);
+    let total_projects = row.4.unwrap_or(0) + report_row.4.unwrap_or(0);
     let total = total_ai + total_human;
     let pct_ai = if total > 0 { (total_ai as f64 / total as f64) * 100.0 } else { 0.0 };
 
     Ok(Json(json!({
-        "total_commits": row.0.unwrap_or(0),
+        "total_commits": total_commits,
         "total_ai_lines": total_ai,
         "total_human_lines": total_human,
         "pct_ai_lines": pct_ai,
-        "total_developers": row.3.unwrap_or(0),
-        "total_projects": row.4.unwrap_or(0),
+        "total_developers": total_developers,
+        "total_projects": total_projects,
     })))
 }
 
@@ -1334,21 +1362,57 @@ pub async fn aggregate_developers(
     // Extract the email portion when present, otherwise use the value as-is.
     let rows: Vec<(String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
-            author_email,
-            CASE
-                WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
-                ELSE author_email
-            END as display_email,
-            COUNT(*),
-            COALESCE(SUM(git_diff_added_lines), 0),
-            COALESCE(SUM(ai_additions), 0),
-            COALESCE(SUM(human_additions), 0)
-        FROM metrics_events
-        WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
-        GROUP BY author_email, display_email
-        ORDER BY COUNT(*) DESC"#
+            raw_author,
+            display_email,
+            SUM(commits)::bigint,
+            SUM(added)::bigint,
+            SUM(ai)::bigint,
+            SUM(human)::bigint
+        FROM (
+            SELECT
+                author_email as raw_author,
+                CASE
+                    WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
+                    ELSE author_email
+                END as display_email,
+                COUNT(*) as commits,
+                COALESCE(SUM(git_diff_added_lines), 0) as added,
+                COALESCE(SUM(ai_additions), 0) as ai,
+                COALESCE(SUM(human_additions), 0) as human
+            FROM metrics_events
+            WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+            GROUP BY author_email, display_email
+
+            UNION ALL
+
+            SELECT
+                cs.author as raw_author,
+                CASE
+                    WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
+                    ELSE cs.author
+                END as display_email,
+                COUNT(*) as commits,
+                COALESCE(SUM(cs.git_diff_added_lines), 0) as added,
+                COALESCE(SUM(cs.ai_additions), 0) as ai,
+                COALESCE(SUM(cs.human_additions), 0) as human
+            FROM projects p
+            JOIN commit_stats cs ON cs.project_id = p.id
+            WHERE cs.author IS NOT NULL AND cs.author != ''
+              AND ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND NOT EXISTS (
+                  SELECT 1 FROM metrics_events m
+                  WHERE m.event_type = 1
+                    AND m.commit_sha = cs.sha
+                    AND ($1::uuid IS NULL OR m.user_id = $1)
+                    AND ($2::uuid IS NULL OR m.org_id = $2)
+              )
+            GROUP BY cs.author, display_email
+        ) combined
+        GROUP BY raw_author, display_email
+        ORDER BY SUM(commits) DESC"#
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1583,19 +1647,51 @@ pub async fn aggregate_trends(
 
     let rows: Vec<(chrono::NaiveDate, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         &format!(r#"SELECT
-            DATE_TRUNC('{}', created_at)::date AS period,
-            COALESCE(SUM(ai_additions), 0) AS ai_lines,
-            COALESCE(SUM(human_additions), 0) AS human_lines,
-            COUNT(*) AS commits
-        FROM metrics_events
-        WHERE event_type = 1
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
-          AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-          AND ($4::timestamptz IS NULL OR created_at >= $4)
-          AND ($5::timestamptz IS NULL OR created_at <= $5)
-        GROUP BY DATE_TRUNC('{}', created_at)
-        ORDER BY period"#, date_trunc, date_trunc)
+            period,
+            COALESCE(SUM(ai_lines), 0)::bigint AS ai_lines,
+            COALESCE(SUM(human_lines), 0)::bigint AS human_lines,
+            COALESCE(SUM(commits), 0)::bigint AS commits
+        FROM (
+            SELECT
+                DATE_TRUNC('{0}', created_at)::date AS period,
+                COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
+                COALESCE(SUM(human_additions), 0)::bigint AS human_lines,
+                COUNT(*)::bigint AS commits
+            FROM metrics_events
+            WHERE event_type = 1
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+              AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+              AND ($5::timestamptz IS NULL OR created_at <= $5::timestamptz)
+            GROUP BY DATE_TRUNC('{0}', created_at)
+
+            UNION ALL
+
+            SELECT
+                DATE_TRUNC('{0}', cs.author_time::timestamptz)::date AS period,
+                COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
+                COALESCE(SUM(cs.human_additions), 0)::bigint AS human_lines,
+                COUNT(*)::bigint AS commits
+            FROM projects p
+            JOIN commit_stats cs ON cs.project_id = p.id
+            WHERE cs.author_time IS NOT NULL AND cs.author_time != ''
+              AND ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
+              AND ($4::timestamptz IS NULL OR cs.author_time::timestamptz >= $4::timestamptz)
+              AND ($5::timestamptz IS NULL OR cs.author_time::timestamptz <= $5::timestamptz)
+              AND NOT EXISTS (
+                  SELECT 1 FROM metrics_events m
+                  WHERE m.event_type = 1
+                    AND m.commit_sha = cs.sha
+                    AND ($1::uuid IS NULL OR m.user_id = $1)
+                    AND ($2::uuid IS NULL OR m.org_id = $2)
+              )
+            GROUP BY DATE_TRUNC('{0}', cs.author_time::timestamptz)
+        ) combined
+        GROUP BY period
+        ORDER BY period"#, date_trunc)
     )
     .bind(user_filter)
     .bind(org_filter)

@@ -19,7 +19,7 @@ pub struct ReportDocument {
     #[serde(default)]
     pub tool_model_breakdown: Option<HashMap<String, ToolModelBreakdown>>,
     #[serde(default)]
-    pub commits: Vec<serde_json::Value>,
+    pub commits: Vec<ReportCommit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +72,36 @@ pub struct ToolModelBreakdown {
     pub total_ai_additions: Option<i64>,
     pub total_ai_deletions: Option<i64>,
     pub ai_accepted: Option<i64>,
+    pub time_waiting_for_ai: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReportCommit {
+    #[serde(default)]
+    pub sha: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub author_time: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub has_authorship_note: bool,
+    #[serde(default)]
+    pub stats: ReportCommitStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReportCommitStats {
+    pub git_diff_added_lines: Option<i64>,
+    pub git_diff_deleted_lines: Option<i64>,
+    pub ai_additions: Option<i64>,
+    pub human_additions: Option<i64>,
+    pub mixed_additions: Option<i64>,
+    pub unknown_additions: Option<i64>,
+    pub ai_accepted: Option<i64>,
+    pub total_ai_additions: Option<i64>,
+    pub total_ai_deletions: Option<i64>,
     pub time_waiting_for_ai: Option<i64>,
 }
 

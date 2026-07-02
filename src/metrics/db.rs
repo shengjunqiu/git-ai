@@ -4,12 +4,12 @@
 //! Server handles idempotency - no retry/queue logic needed.
 
 use crate::error::GitAiError;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// Current schema version (must match MIGRATIONS.len())
-const SCHEMA_VERSION: usize = 2;
+const SCHEMA_VERSION: usize = 4;
 
 /// Database migrations - each migration upgrades the schema by one version
 const MIGRATIONS: &[&str] = &[
@@ -26,6 +26,50 @@ const MIGRATIONS: &[&str] = &[
         prompt_id TEXT PRIMARY KEY,
         last_sent_ts INTEGER NOT NULL
     );
+    "#,
+    // Migration 2 -> 3: Retry bookkeeping for metrics uploads
+    r#"
+    ALTER TABLE metrics ADD COLUMN delivered_ts INTEGER;
+    ALTER TABLE metrics ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE metrics ADD COLUMN last_sync_error TEXT;
+    ALTER TABLE metrics ADD COLUMN last_sync_at INTEGER;
+    ALTER TABLE metrics ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE metrics ADD COLUMN processing_started_at INTEGER;
+
+    CREATE INDEX IF NOT EXISTS metrics_pending_retry
+        ON metrics (delivered_ts, next_retry_at, id)
+        WHERE delivered_ts IS NULL;
+    CREATE INDEX IF NOT EXISTS metrics_processing_started_at
+        ON metrics (processing_started_at)
+        WHERE delivered_ts IS NULL AND processing_started_at IS NOT NULL;
+    "#,
+    // Migration 3 -> 4: Denormalized event metadata for diagnostics and session queries
+    r#"
+    ALTER TABLE metrics ADD COLUMN event_ts INTEGER DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN event_kind INTEGER DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN trace_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN session_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN parent_session_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN tool TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN external_session_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN external_parent_session_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN external_event_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN external_parent_event_id TEXT DEFAULT NULL;
+    ALTER TABLE metrics ADD COLUMN external_tool_use_id TEXT DEFAULT NULL;
+
+    CREATE INDEX IF NOT EXISTS metrics_event_ts_kind
+        ON metrics (event_ts, event_kind, id)
+        WHERE event_ts IS NOT NULL AND event_kind IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS metrics_session_kind_ts
+        ON metrics (session_id, event_kind, event_ts, id)
+        WHERE session_id IS NOT NULL
+            AND event_kind IS NOT NULL
+            AND event_ts IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS metrics_parent_session_kind_ts
+        ON metrics (parent_session_id, event_kind, event_ts, id)
+        WHERE parent_session_id IS NOT NULL
+            AND event_kind IS NOT NULL
+            AND event_ts IS NOT NULL;
     "#,
 ];
 
@@ -214,17 +258,41 @@ impl MetricsDatabase {
 
     /// Get batch of events (oldest first)
     pub fn get_batch(&self, limit: usize) -> Result<Vec<MetricRecord>, GitAiError> {
+        if self.column_exists("metrics", "delivered_ts")? {
+            let now_ts = current_unix_ts();
+            let mut stmt = self.conn.prepare(
+                "SELECT id, event_json FROM metrics \
+                 WHERE delivered_ts IS NULL AND next_retry_at <= ?1 \
+                 ORDER BY id ASC LIMIT ?2",
+            )?;
+            return Self::collect_metric_records(stmt.query_map(
+                params![now_ts, limit as i64],
+                |row| {
+                    Ok(MetricRecord {
+                        id: row.get(0)?,
+                        event_json: row.get(1)?,
+                    })
+                },
+            )?);
+        }
+
         let mut stmt = self
             .conn
             .prepare("SELECT id, event_json FROM metrics ORDER BY id ASC LIMIT ?1")?;
-
-        let rows = stmt.query_map(params![limit], |row| {
+        Self::collect_metric_records(stmt.query_map(params![limit as i64], |row| {
             Ok(MetricRecord {
                 id: row.get(0)?,
                 event_json: row.get(1)?,
             })
-        })?;
+        })?)
+    }
 
+    fn collect_metric_records<F>(
+        rows: rusqlite::MappedRows<'_, F>,
+    ) -> Result<Vec<MetricRecord>, GitAiError>
+    where
+        F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<MetricRecord>,
+    {
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);
@@ -255,10 +323,29 @@ impl MetricsDatabase {
 
     /// Get count of pending metrics
     pub fn count(&self) -> Result<usize, GitAiError> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM metrics", [], |row| row.get(0))?;
+        let count: i64 = if self.column_exists("metrics", "delivered_ts")? {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM metrics WHERE delivered_ts IS NULL",
+                [],
+                |row| row.get(0),
+            )?
+        } else {
+            self.conn
+                .query_row("SELECT COUNT(*) FROM metrics", [], |row| row.get(0))?
+        };
         Ok(count as usize)
+    }
+
+    fn column_exists(&self, table: &str, column: &str) -> Result<bool, GitAiError> {
+        let query = format!("PRAGMA table_info({})", table);
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for row in rows {
+            if row? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Returns whether an `agent_usage` event should be emitted for this prompt_id.
@@ -303,6 +390,13 @@ impl MetricsDatabase {
     }
 }
 
+fn current_unix_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,7 +439,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, "2");
+        assert_eq!(version, "4");
     }
 
     #[test]
@@ -363,6 +457,10 @@ mod tests {
                 value TEXT NOT NULL
             );
             INSERT INTO schema_metadata (key, value) VALUES ('version', '1');
+            CREATE TABLE metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_json TEXT NOT NULL
+            );
             CREATE TABLE agent_usage_throttle (
                 tool TEXT PRIMARY KEY NOT NULL,
                 agent_last_seen_at INTEGER NOT NULL,
@@ -383,7 +481,63 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, "2");
+        assert_eq!(version, "4");
+    }
+
+    #[test]
+    fn test_initialize_schema_accepts_v4_and_reads_only_pending() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("v4.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_metadata (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            );
+            INSERT INTO schema_metadata (key, value) VALUES ('version', '4');
+            CREATE TABLE metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_json TEXT NOT NULL,
+                delivered_ts INTEGER,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_sync_error TEXT,
+                last_sync_at INTEGER,
+                next_retry_at INTEGER NOT NULL DEFAULT 0,
+                processing_started_at INTEGER,
+                event_ts INTEGER DEFAULT NULL,
+                event_kind INTEGER DEFAULT NULL,
+                trace_id TEXT DEFAULT NULL,
+                session_id TEXT DEFAULT NULL,
+                parent_session_id TEXT DEFAULT NULL,
+                tool TEXT DEFAULT NULL,
+                external_session_id TEXT DEFAULT NULL,
+                external_parent_session_id TEXT DEFAULT NULL,
+                external_event_id TEXT DEFAULT NULL,
+                external_parent_event_id TEXT DEFAULT NULL,
+                external_tool_use_id TEXT DEFAULT NULL
+            );
+            CREATE TABLE agent_usage_throttle (
+                prompt_id TEXT PRIMARY KEY,
+                last_sent_ts INTEGER NOT NULL
+            );
+            INSERT INTO metrics (event_json, delivered_ts, next_retry_at)
+                VALUES ('{"t":1,"e":1,"v":{},"a":{}}', 1000, 0);
+            INSERT INTO metrics (event_json, delivered_ts, next_retry_at)
+                VALUES ('{"t":2,"e":1,"v":{},"a":{}}', NULL, 0);
+            INSERT INTO metrics (event_json, delivered_ts, next_retry_at)
+                VALUES ('{"t":3,"e":1,"v":{},"a":{}}', NULL, 9999999999);
+            "#,
+        )
+        .unwrap();
+
+        let mut db = MetricsDatabase { conn };
+        db.initialize_schema().unwrap();
+
+        let batch = db.get_batch(10).unwrap();
+        assert_eq!(batch.len(), 1);
+        assert!(batch[0].event_json.contains("\"t\":2"));
+        assert_eq!(db.count().unwrap(), 2);
     }
 
     #[test]
@@ -484,19 +638,16 @@ mod tests {
         let prompt_id = "prompt-123";
 
         // First event for a prompt should be allowed.
-        assert!(
-            db.should_emit_agent_usage(prompt_id, 1_700_000_000, 300)
-                .unwrap()
-        );
+        assert!(db
+            .should_emit_agent_usage(prompt_id, 1_700_000_000, 300)
+            .unwrap());
         // Subsequent event inside the window should be throttled.
-        assert!(
-            !db.should_emit_agent_usage(prompt_id, 1_700_000_120, 300)
-                .unwrap()
-        );
+        assert!(!db
+            .should_emit_agent_usage(prompt_id, 1_700_000_120, 300)
+            .unwrap());
         // Event outside the window should be allowed again.
-        assert!(
-            db.should_emit_agent_usage(prompt_id, 1_700_000_301, 300)
-                .unwrap()
-        );
+        assert!(db
+            .should_emit_agent_usage(prompt_id, 1_700_000_301, 300)
+            .unwrap());
     }
 }

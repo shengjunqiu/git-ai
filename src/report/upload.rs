@@ -1,3 +1,4 @@
+use crate::api::ApiContext;
 use crate::error::GitAiError;
 use crate::report::model::{ProjectSummaryReport, ReportDocument, UploadResult};
 
@@ -50,16 +51,11 @@ pub struct HttpUploader {
 
 impl ReportUploader for HttpUploader {
     fn upload(&self, payload: &ReportDocument) -> Result<UploadResult, GitAiError> {
-        let endpoint = report_ingest_endpoint(&self.server_url)?;
+        let context = ApiContext::new(Some(self.server_url.clone()));
+        let endpoint = report_ingest_endpoint(&context.base_url)?;
         let body = serde_json::to_string(payload)?;
-        let agent = crate::http::build_agent(Some(30));
-        let request = agent
-            .post(&endpoint)
-            .set(
-                "User-Agent",
-                &format!("git-ai/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .set("Content-Type", "application/json");
+        let (_agent, request) = ApiContext::http_post(&endpoint, context.timeout_secs);
+        let request = apply_auth_headers(request.set("Content-Type", "application/json"), &context);
         let response = crate::http::send_with_body(request, &body).map_err(GitAiError::Generic)?;
         let response_body = response.as_str().map_err(GitAiError::from)?;
 
@@ -93,16 +89,11 @@ impl ReportUploader for HttpUploader {
 
 impl SummaryUploader for HttpUploader {
     fn upload_summary(&self, payload: &ProjectSummaryReport) -> Result<UploadResult, GitAiError> {
-        let endpoint = summary_ingest_endpoint(&self.server_url)?;
+        let context = ApiContext::new(Some(self.server_url.clone()));
+        let endpoint = summary_ingest_endpoint(&context.base_url)?;
         let body = serde_json::to_string(payload)?;
-        let agent = crate::http::build_agent(Some(30));
-        let request = agent
-            .post(&endpoint)
-            .set(
-                "User-Agent",
-                &format!("git-ai/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .set("Content-Type", "application/json");
+        let (_agent, request) = ApiContext::http_post(&endpoint, context.timeout_secs);
+        let request = apply_auth_headers(request.set("Content-Type", "application/json"), &context);
         let response = crate::http::send_with_body(request, &body).map_err(GitAiError::Generic)?;
         let response_body = response.as_str().map_err(GitAiError::from)?;
 
@@ -122,6 +113,19 @@ impl SummaryUploader for HttpUploader {
             commit_count: payload.total_commits,
         })
     }
+}
+
+fn apply_auth_headers(mut request: ureq::Request, context: &ApiContext) -> ureq::Request {
+    if let Some(api_key) = &context.api_key {
+        request = request.set("X-API-Key", api_key);
+        if let Some(identity) = &context.author_identity {
+            request = request.set("X-Author-Identity", identity);
+        }
+    }
+    if let Some(token) = &context.auth_token {
+        request = request.set("Authorization", &format!("Bearer {}", token));
+    }
+    request
 }
 
 pub fn to_upload_payload(report: &ReportDocument) -> ReportDocument {
@@ -171,10 +175,12 @@ pub fn validate_server_url(server_url: &str) -> Result<(), GitAiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::types::StoredCredentials;
+    use crate::auth::CredentialStore;
     use crate::authorship::stats::CommitStats;
     use crate::report::model::{
-        DeveloperSummary, ProjectRatios, ProjectSummaryReport, REPORT_SCHEMA_VERSION, ReportCommit,
-        ReportRangeInfo, ReportRangeMode, ReportRatios, ReportRepoInfo, ReportSummary,
+        DeveloperSummary, ProjectRatios, ProjectSummaryReport, ReportCommit, ReportRangeInfo,
+        ReportRangeMode, ReportRatios, ReportRepoInfo, ReportSummary, REPORT_SCHEMA_VERSION,
     };
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
@@ -244,6 +250,7 @@ mod tests {
 
     #[test]
     fn http_uploader_posts_sanitized_report() {
+        let _ = CredentialStore::new().clear();
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
         let addr = listener.local_addr().expect("mock server addr");
         let (request_tx, request_rx) = mpsc::channel();
@@ -287,6 +294,56 @@ mod tests {
             request_text
         );
         handle.join().expect("mock server should finish");
+    }
+
+    #[test]
+    fn http_uploader_sends_stored_bearer_token() {
+        let store = CredentialStore::new();
+        let _ = store.clear();
+        store
+            .store(&StoredCredentials {
+                access_token: "test_report_token".to_string(),
+                refresh_token: "test_refresh_token".to_string(),
+                access_token_expires_at: chrono::Utc::now().timestamp() + 3600,
+                refresh_token_expires_at: chrono::Utc::now().timestamp() + 86400,
+            })
+            .expect("test credentials should be stored");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let addr = listener.local_addr().expect("mock server addr");
+        let (request_tx, request_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("mock server should accept");
+            let request = read_mock_http_request(&mut stream);
+            request_tx
+                .send(request)
+                .expect("mock server should send captured request");
+
+            let body =
+                r#"{"project_id":1,"upload_id":2,"inserted_commits":1,"duplicate_commits":0}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("mock server should respond");
+        });
+
+        HttpUploader {
+            server_url: format!("http://{}", addr),
+        }
+        .upload(&to_upload_payload(&sample_report()))
+        .expect("http upload should succeed");
+
+        let request = request_rx
+            .recv()
+            .expect("mock server should capture request");
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.contains("Authorization: Bearer test_report_token"));
+        handle.join().expect("mock server should finish");
+        let _ = store.clear();
     }
 
     fn read_mock_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
