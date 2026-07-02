@@ -106,6 +106,7 @@ fn print_config_help() {
     eprintln!("  disable_auto_updates         Disable auto updates (bool)");
     eprintln!("  update_channel               Update channel (latest/next)");
     eprintln!("  feature_flags                Feature flags (object)");
+    eprintln!("  api_base_url                 API base URL");
     eprintln!("  api_key                      API key for X-API-Key header");
     eprintln!("  prompt_storage               Prompt storage mode (default/notes/local)");
     eprintln!("  include_prompts_in_repositories  Repos to include for prompt storage (array)");
@@ -121,6 +122,7 @@ fn print_config_help() {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  git-ai config exclude_repositories");
+    eprintln!("  git-ai config set api_base_url http://localhost:8080");
     eprintln!("  git-ai config set disable_auto_updates true");
     eprintln!("  git-ai config set exclude_repositories \"private/*\"");
     eprintln!("  git-ai config set exclude_repositories .         # Uses current repo's remotes");
@@ -289,6 +291,11 @@ fn show_all_config() -> Result<(), String> {
         Value::String(runtime_config.prompt_storage().to_string()),
     );
 
+    effective_config.insert(
+        "api_base_url".to_string(),
+        Value::String(runtime_config.api_base_url().to_string()),
+    );
+
     // include_prompts_in_repositories
     if let Some(ref repos) = file_config.include_prompts_in_repositories {
         effective_config.insert(
@@ -385,6 +392,7 @@ fn get_config_value(key: &str) -> Result<(), String> {
                     Value::Null
                 }
             }
+            "api_base_url" => Value::String(runtime_config.api_base_url().to_string()),
             "prompt_storage" => Value::String(runtime_config.prompt_storage().to_string()),
             "include_prompts_in_repositories" => {
                 if let Some(ref repos) = file_config.include_prompts_in_repositories {
@@ -529,6 +537,11 @@ fn set_config_value(key: &str, value: &str, add_mode: bool) -> Result<(), String
                 crate::config::save_file_config(&file_config)?;
                 let masked = mask_api_key(value);
                 eprintln!("[api_key]: {}", masked);
+            }
+            "api_base_url" => {
+                file_config.api_base_url = Some(value.to_string());
+                crate::config::save_file_config(&file_config)?;
+                eprintln!("[api_base_url]: {}", value);
             }
             "prompt_storage" => {
                 validate_prompt_storage_value(value)?;
@@ -751,6 +764,13 @@ fn unset_config_value(key: &str) -> Result<(), String> {
                 crate::config::save_file_config(&file_config)?;
                 if old_value.is_some() {
                     eprintln!("- [api_key]: ****");
+                }
+            }
+            "api_base_url" => {
+                let old_value = file_config.api_base_url.take();
+                crate::config::save_file_config(&file_config)?;
+                if let Some(v) = old_value {
+                    eprintln!("- [api_base_url]: {}", v);
                 }
             }
             "prompt_storage" => {

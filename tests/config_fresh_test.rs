@@ -5,6 +5,7 @@ use git_ai::auth::client::OAuthClient;
 use git_ai::config::{Config, load_file_config_public, save_file_config};
 use serial_test::serial;
 use std::env;
+use std::process::Command;
 use tempfile::TempDir;
 
 /// RAII guard that redirects home-directory env vars to a temp path for the duration of a test,
@@ -77,6 +78,74 @@ impl Drop for HomeEnvGuard {
             }
         }
     }
+}
+
+#[test]
+fn config_cli_supports_api_base_url_set_get_unset() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let config_path = temp_dir.path().join(".git-ai").join("config.json");
+
+    let set_output = Command::new(env!("CARGO_BIN_EXE_git-ai"))
+        .args(["config", "set", "api_base_url", "http://localhost:8080"])
+        .env("HOME", temp_dir.path())
+        .env("USERPROFILE", temp_dir.path())
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
+        .output()
+        .expect("failed to run git-ai config set");
+    assert!(
+        set_output.status.success(),
+        "git-ai config set failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&set_output.stdout),
+        String::from_utf8_lossy(&set_output.stderr)
+    );
+
+    let raw_config = std::fs::read_to_string(&config_path).expect("config file should be written");
+    let json: serde_json::Value =
+        serde_json::from_str(&raw_config).expect("config file should be valid json");
+    assert_eq!(
+        json.get("api_base_url").and_then(serde_json::Value::as_str),
+        Some("http://localhost:8080")
+    );
+
+    let get_output = Command::new(env!("CARGO_BIN_EXE_git-ai"))
+        .args(["config", "api_base_url"])
+        .env("HOME", temp_dir.path())
+        .env("USERPROFILE", temp_dir.path())
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
+        .output()
+        .expect("failed to run git-ai config get");
+    assert!(
+        get_output.status.success(),
+        "git-ai config get failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&get_output.stdout),
+        String::from_utf8_lossy(&get_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&get_output.stdout).trim(),
+        "\"http://localhost:8080\""
+    );
+
+    let unset_output = Command::new(env!("CARGO_BIN_EXE_git-ai"))
+        .args(["config", "unset", "api_base_url"])
+        .env("HOME", temp_dir.path())
+        .env("USERPROFILE", temp_dir.path())
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
+        .output()
+        .expect("failed to run git-ai config unset");
+    assert!(
+        unset_output.status.success(),
+        "git-ai config unset failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&unset_output.stdout),
+        String::from_utf8_lossy(&unset_output.stderr)
+    );
+
+    let raw_config = std::fs::read_to_string(&config_path).expect("config file should remain");
+    let json: serde_json::Value =
+        serde_json::from_str(&raw_config).expect("config file should be valid json");
+    assert!(json.get("api_base_url").is_none());
 }
 
 /// Test that Config::fresh() picks up changes to config file
