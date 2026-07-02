@@ -179,6 +179,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::thread;
 
     fn sample_report() -> ReportDocument {
@@ -245,16 +246,13 @@ mod tests {
     fn http_uploader_posts_sanitized_report() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
         let addr = listener.local_addr().expect("mock server addr");
+        let (request_tx, request_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("mock server should accept");
             let request = read_mock_http_request(&mut stream);
-            let request_text = String::from_utf8_lossy(&request);
-            assert!(request_text.starts_with("POST /api/v1/reports "));
-            assert!(
-                !request_text.contains("/secret/path"),
-                "upload body should not include local workdir: {}",
-                request_text
-            );
+            request_tx
+                .send(request)
+                .expect("mock server should send captured request");
 
             let body =
                 r#"{"project_id":1,"upload_id":2,"inserted_commits":1,"duplicate_commits":0}"#;
@@ -278,6 +276,16 @@ mod tests {
         assert!(result.uploaded);
         assert_eq!(result.commit_count, 1);
         assert!(result.message.contains("inserted 1"));
+        let request = request_rx
+            .recv()
+            .expect("mock server should capture request");
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.starts_with("POST /api/v1/reports "));
+        assert!(
+            !request_text.contains("/secret/path"),
+            "upload body should not include local workdir: {}",
+            request_text
+        );
         handle.join().expect("mock server should finish");
     }
 
