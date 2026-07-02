@@ -20,7 +20,10 @@ fn validate_https_url(url: &str) -> Result<(), String> {
         return Ok(());
     }
     // Allow http:// for localhost (local development / self-hosted servers)
-    if url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1") || url.starts_with("http://[::1]") {
+    if url.starts_with("http://localhost")
+        || url.starts_with("http://127.0.0.1")
+        || url.starts_with("http://[::1]")
+    {
         return Ok(());
     }
     Err(format!(

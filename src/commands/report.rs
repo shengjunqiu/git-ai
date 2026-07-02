@@ -145,8 +145,10 @@ fn handle_upload(args: &[String]) -> Result<(), GitAiError> {
 }
 
 fn handle_server(args: &[String]) -> Result<(), GitAiError> {
-    let mut addr = std::env::var("GIT_AI_REPORT_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
-    let mut db = std::env::var("GIT_AI_REPORT_DB").unwrap_or_else(|_| "git-ai-report-server.sqlite".to_string());
+    let mut addr =
+        std::env::var("GIT_AI_REPORT_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let mut db = std::env::var("GIT_AI_REPORT_DB")
+        .unwrap_or_else(|_| "git-ai-report-server.sqlite".to_string());
 
     let mut i = 0;
     while i < args.len() {
@@ -352,7 +354,9 @@ fn print_help() {
     eprintln!("Commands:");
     eprintln!("  scan      Scan commits and show AI/human attribution stats");
     eprintln!("  export    Export full report to JSON or CSV file");
-    eprintln!("  summary   Generate simplified project summary (all history, per-developer AI ratio)");
+    eprintln!(
+        "  summary   Generate simplified project summary (all history, per-developer AI ratio)"
+    );
     eprintln!("  upload    Upload report to a server");
     eprintln!("  server    Start a report ingestion server");
     eprintln!();

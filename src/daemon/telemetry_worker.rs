@@ -673,7 +673,11 @@ impl std::fmt::Display for TelemetryUploadDiagnostics {
         write!(
             f,
             "TelemetryUploadDiagnostics(api_base_url={}, using_default_api={}, is_logged_in={}, has_api_key={}, should_upload={})",
-            self.api_base_url, self.using_default_api, self.is_logged_in, self.has_api_key, self.should_upload
+            self.api_base_url,
+            self.using_default_api,
+            self.is_logged_in,
+            self.has_api_key,
+            self.should_upload
         )
     }
 }
@@ -718,7 +722,10 @@ mod tests {
     fn test_api_context_default_state() {
         let ctx = ApiContext::without_auth(Some(DEFAULT_API_BASE_URL.to_string()));
         assert_eq!(ctx.base_url, DEFAULT_API_BASE_URL);
-        assert!(ctx.auth_token.is_none(), "without_auth should have no auth_token");
+        assert!(
+            ctx.auth_token.is_none(),
+            "without_auth should have no auth_token"
+        );
     }
 
     /// Test that ApiContext with a custom base URL still has no auth
@@ -771,22 +778,26 @@ mod tests {
         assert!(using_default_api);
         assert!(!client.is_logged_in());
         assert!(!client.has_api_key());
-        assert!(!should_upload, "should NOT upload when using default API with no auth");
+        assert!(
+            !should_upload,
+            "should NOT upload when using default API with no auth"
+        );
     }
 
     /// Test: default API + logged in => should upload
     #[test]
     fn test_should_upload_default_api_logged_in() {
-        let ctx = ApiContext::with_auth(
-            Some(DEFAULT_API_BASE_URL.to_string()),
-            "token".to_string(),
-        );
+        let ctx =
+            ApiContext::with_auth(Some(DEFAULT_API_BASE_URL.to_string()), "token".to_string());
         let using_default_api = ctx.base_url == DEFAULT_API_BASE_URL;
         let client = ApiClient::new(ctx);
         let should_upload = !using_default_api || client.is_logged_in() || client.has_api_key();
         assert!(using_default_api);
         assert!(client.is_logged_in());
-        assert!(should_upload, "should upload when logged in even with default API");
+        assert!(
+            should_upload,
+            "should upload when logged in even with default API"
+        );
     }
 
     /// Test: default API + API key => should upload
@@ -801,7 +812,10 @@ mod tests {
         assert!(using_default_api);
         assert!(client.has_api_key());
         assert!(!client.is_logged_in());
-        assert!(should_upload, "should upload with API key even with default API");
+        assert!(
+            should_upload,
+            "should upload with API key even with default API"
+        );
     }
 
     /// Test: custom API URL + no auth => should upload (enterprise users)
@@ -815,7 +829,10 @@ mod tests {
         let client = ApiClient::new(ctx);
         let should_upload = !using_default_api || client.is_logged_in() || client.has_api_key();
         assert!(!using_default_api);
-        assert!(should_upload, "should upload with custom API URL even without auth");
+        assert!(
+            should_upload,
+            "should upload with custom API URL even without auth"
+        );
     }
 
     /// Test: custom API URL + logged in => should upload
@@ -852,10 +869,8 @@ mod tests {
         assert!(!unblocked_custom, "should NOT be blocked with custom API");
 
         // Unblocked: logged in
-        let mut ctx3 = ApiContext::with_auth(
-            Some(DEFAULT_API_BASE_URL.to_string()),
-            "token".to_string(),
-        );
+        let mut ctx3 =
+            ApiContext::with_auth(Some(DEFAULT_API_BASE_URL.to_string()), "token".to_string());
         ctx3.api_key = None;
         let unblocked_login = !using_default_api_or_authenticated(&ctx3);
         assert!(!unblocked_login, "should NOT be blocked when logged in");

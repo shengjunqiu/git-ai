@@ -292,11 +292,14 @@ fn build_debug_report() -> String {
     let _ = writeln!(out, "API key configured: {}", diag.has_api_key);
     let _ = writeln!(out, "Should upload: {}", diag.should_upload);
     if !diag.should_upload {
-        let _ = writeln!(out, "");
+        let _ = writeln!(out);
         let _ = writeln!(out, "  WARNING: Automatic upload is DISABLED. To enable:");
         let _ = writeln!(out, "    - Set GIT_AI_API_KEY environment variable, or");
         let _ = writeln!(out, "    - Run `git-ai login` to authenticate, or");
-        let _ = writeln!(out, "    - Set GIT_AI_API_BASE_URL to your enterprise server URL");
+        let _ = writeln!(
+            out,
+            "    - Set GIT_AI_API_BASE_URL to your enterprise server URL"
+        );
     }
 
     out

@@ -152,18 +152,13 @@ mod tests {
 
         let result = client.read_ca_prompt_store(&["abc123", "def456"]);
         // The validation should pass; the HTTP call will fail
-        if let Err(e) = result {
-            match e {
-                GitAiError::Generic(msg) => {
-                    // Should NOT be the hash validation error
-                    assert!(
-                        !msg.contains("non-hex characters"),
-                        "Hex hashes should not trigger validation error, got: {}",
-                        msg
-                    );
-                }
-                _ => {}
-            }
+        if let Err(GitAiError::Generic(msg)) = result {
+            // Should NOT be the hash validation error
+            assert!(
+                !msg.contains("non-hex characters"),
+                "Hex hashes should not trigger validation error, got: {}",
+                msg
+            );
         }
     }
 
@@ -190,9 +185,7 @@ mod tests {
     /// Test that empty CAS upload request is valid
     #[test]
     fn test_cas_upload_request_empty() {
-        let request = CasUploadRequest {
-            objects: vec![],
-        };
+        let request = CasUploadRequest { objects: vec![] };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"objects\":[]"));
     }

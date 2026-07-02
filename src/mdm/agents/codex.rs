@@ -11,6 +11,8 @@ use toml::map::Map;
 
 const CODEX_CHECKPOINT_CMD: &str = "checkpoint codex --hook-input stdin";
 const CODEX_HOOK_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "Stop"];
+const CODEX_HOOKS_FEATURE: &str = "hooks";
+const LEGACY_CODEX_HOOKS_FEATURE: &str = "codex_hooks";
 
 pub struct CodexInstaller;
 
@@ -96,11 +98,13 @@ impl CodexInstaller {
     }
 
     fn config_hooks_enabled(config: &TomlValue) -> bool {
-        config
-            .get("features")
-            .and_then(|v| v.get("codex_hooks"))
-            .and_then(|v| v.as_bool())
-            == Some(true)
+        let Some(features) = config.get("features") else {
+            return false;
+        };
+
+        [CODEX_HOOKS_FEATURE, LEGACY_CODEX_HOOKS_FEATURE]
+            .iter()
+            .any(|key| features.get(*key).and_then(|v| v.as_bool()) == Some(true))
     }
 
     fn config_with_installed_hooks(
@@ -113,12 +117,13 @@ impl CodexInstaller {
             .ok_or_else(|| GitAiError::Generic("Codex config root must be a table".to_string()))?;
 
         if let Some(features) = root.get_mut("features").and_then(|v| v.as_table_mut()) {
-            features.insert("codex_hooks".to_string(), TomlValue::Boolean(true));
+            features.remove(LEGACY_CODEX_HOOKS_FEATURE);
+            features.insert(CODEX_HOOKS_FEATURE.to_string(), TomlValue::Boolean(true));
         } else {
             root.insert(
                 "features".to_string(),
                 TomlValue::Table(Map::from_iter([(
-                    "codex_hooks".to_string(),
+                    CODEX_HOOKS_FEATURE.to_string(),
                     TomlValue::Boolean(true),
                 )])),
             );
@@ -347,22 +352,30 @@ impl CodexInstaller {
 
     fn remove_feature_flag_if_unused(
         config: &TomlValue,
-        keep_codex_hooks_enabled: bool,
+        keep_hooks_enabled: bool,
     ) -> Result<TomlValue, GitAiError> {
         let mut merged = config.clone();
         let root = merged
             .as_table_mut()
             .ok_or_else(|| GitAiError::Generic("Codex config root must be a table".to_string()))?;
 
-        if keep_codex_hooks_enabled {
-            return Ok(merged);
-        }
-
         if let Some(features) = root
             .get_mut("features")
             .and_then(|value| value.as_table_mut())
         {
-            features.remove("codex_hooks");
+            if keep_hooks_enabled {
+                let legacy_enabled = features
+                    .remove(LEGACY_CODEX_HOOKS_FEATURE)
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                if legacy_enabled {
+                    features.insert(CODEX_HOOKS_FEATURE.to_string(), TomlValue::Boolean(true));
+                }
+            } else {
+                features.remove(CODEX_HOOKS_FEATURE);
+                features.remove(LEGACY_CODEX_HOOKS_FEATURE);
+            }
+
             if features.is_empty() {
                 root.remove("features");
             }
@@ -696,6 +709,8 @@ notify = ["notify-send", "Codex"]
             r#"
 model = "gpt-5"
 notify = ["/usr/local/bin/git-ai", "checkpoint", "codex", "--hook-input"]
+[features]
+codex_hooks = true
 "#,
         )
         .unwrap();
@@ -706,15 +721,35 @@ notify = ["/usr/local/bin/git-ai", "checkpoint", "codex", "--hook-input"]
         assert_eq!(
             merged
                 .get("features")
-                .and_then(|value| value.get("codex_hooks"))
+                .and_then(|value| value.get(CODEX_HOOKS_FEATURE))
                 .and_then(|value| value.as_bool()),
             Some(true)
+        );
+        assert!(
+            merged
+                .get("features")
+                .and_then(|value| value.get(LEGACY_CODEX_HOOKS_FEATURE))
+                .is_none(),
+            "deprecated codex_hooks feature flag should be removed"
         );
         assert_eq!(
             merged.get("model").and_then(|value| value.as_str()),
             Some("gpt-5"),
             "other config should be preserved"
         );
+    }
+
+    #[test]
+    fn test_config_hooks_enabled_accepts_legacy_feature_flag() {
+        let config = CodexInstaller::parse_config_toml(
+            r#"
+[features]
+codex_hooks = true
+"#,
+        )
+        .unwrap();
+
+        assert!(CodexInstaller::config_hooks_enabled(&config));
     }
 
     #[test]
@@ -832,9 +867,16 @@ notify = ["/usr/local/bin/git-ai", "checkpoint", "codex", "--hook-input"]
             assert_eq!(
                 parsed
                     .get("features")
-                    .and_then(|value| value.get("codex_hooks"))
+                    .and_then(|value| value.get(CODEX_HOOKS_FEATURE))
                     .and_then(|value| value.as_bool()),
                 Some(true)
+            );
+            assert!(
+                parsed
+                    .get("features")
+                    .and_then(|value| value.get(LEGACY_CODEX_HOOKS_FEATURE))
+                    .is_none(),
+                "deprecated codex_hooks feature flag should not be written"
             );
 
             let hooks_json: serde_json::Value =
@@ -885,10 +927,17 @@ notify = ["/usr/local/bin/git-ai", "checkpoint", "codex", "--hook-input"]
             assert_eq!(
                 parsed
                     .get("features")
-                    .and_then(|v| v.get("codex_hooks"))
+                    .and_then(|v| v.get(CODEX_HOOKS_FEATURE))
                     .and_then(|v| v.as_bool()),
                 Some(true),
-                "install should enable codex_hooks feature flag"
+                "install should enable Codex hooks feature flag"
+            );
+            assert!(
+                parsed
+                    .get("features")
+                    .and_then(|v| v.get(LEGACY_CODEX_HOOKS_FEATURE))
+                    .is_none(),
+                "install should remove deprecated codex_hooks feature flag"
             );
 
             let hooks_content = fs::read_to_string(&hooks_path).unwrap();
@@ -987,10 +1036,17 @@ notify = ["notify-send", "Codex finished"]
             assert_eq!(
                 parsed
                     .get("features")
-                    .and_then(|v| v.get("codex_hooks"))
+                    .and_then(|v| v.get(CODEX_HOOKS_FEATURE))
                     .and_then(|v| v.as_bool()),
                 Some(true),
-                "install should still enable codex_hooks"
+                "install should still enable Codex hooks"
+            );
+            assert!(
+                parsed
+                    .get("features")
+                    .and_then(|v| v.get(LEGACY_CODEX_HOOKS_FEATURE))
+                    .is_none(),
+                "install should not write deprecated codex_hooks"
             );
 
             let hooks_content = fs::read_to_string(&hooks_path).unwrap();
@@ -1172,6 +1228,7 @@ model = "gpt-5"
                 r#"
 model = "gpt-5"
 [features]
+hooks = true
 codex_hooks = true
 "#,
             )
@@ -1204,7 +1261,7 @@ codex_hooks = true
                     .unwrap();
             assert!(
                 parsed.get("features").is_none(),
-                "codex_hooks feature flag should be removed when no hooks remain"
+                "Codex hooks feature flags should be removed when no hooks remain"
             );
             let hooks_json: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();

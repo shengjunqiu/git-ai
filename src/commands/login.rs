@@ -88,7 +88,10 @@ pub fn handle_login(args: &[String]) {
             if let Some(ref url) = server_url {
                 if let Err(e) = save_server_to_config(url) {
                     eprintln!("\nWarning: Failed to save server URL to config: {}", e);
-                    eprintln!("You may need to set GIT_AI_API_BASE_URL={} in your environment.", url);
+                    eprintln!(
+                        "You may need to set GIT_AI_API_BASE_URL={} in your environment.",
+                        url
+                    );
                 } else {
                     eprintln!("\nServer URL saved to config: {}", url);
                 }

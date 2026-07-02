@@ -1,8 +1,8 @@
 use crate::authorship::stats::ToolModelHeadlineStats;
 use crate::error::GitAiError;
 use crate::report::model::{
-    DEVELOPER_SUMMARY_SCHEMA_VERSION, REPORT_SCHEMA_VERSION, DeveloperSummary, ProjectRatios,
-    ProjectSummaryReport, ReportDocument, ReportSummary,
+    DEVELOPER_SUMMARY_SCHEMA_VERSION, DeveloperSummary, ProjectRatios, ProjectSummaryReport,
+    REPORT_SCHEMA_VERSION, ReportDocument, ReportSummary,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -503,7 +503,11 @@ impl ReportStore {
         let reporter_email = summary.reporter_email.clone().unwrap_or_default();
         let reporter_name = summary.reporter_name.clone().unwrap_or_default();
 
-        let reporter_name_sql: Option<&str> = if reporter_name.is_empty() { None } else { Some(reporter_name.as_str()) };
+        let reporter_name_sql: Option<&str> = if reporter_name.is_empty() {
+            None
+        } else {
+            Some(reporter_name.as_str())
+        };
 
         // --- 3. 查找同一上报人的同项目同周期已有记录 ---
         let existing_id: Option<i64> = tx
@@ -514,7 +518,13 @@ impl ReportStore {
                      AND git_url        = ?3
                      AND branch         = ?4
                      AND report_period  = ?5"#,
-                params![reporter_email, summary.project_name, git_url, branch, report_period],
+                params![
+                    reporter_email,
+                    summary.project_name,
+                    git_url,
+                    branch,
+                    report_period
+                ],
                 |row| row.get(0),
             )
             .optional()?
@@ -672,13 +682,25 @@ impl ReportStore {
                 let reporter_email: String = row.get(9)?;
                 Ok((
                     row.get::<_, String>(0)?,
-                    if git_url.is_empty() { None } else { Some(git_url) },
-                    if branch.is_empty() { None } else { Some(branch) },
+                    if git_url.is_empty() {
+                        None
+                    } else {
+                        Some(git_url)
+                    },
+                    if branch.is_empty() {
+                        None
+                    } else {
+                        Some(branch)
+                    },
                     row.get::<_, i64>(3)? as usize,
                     row.get::<_, f64>(4)?,
                     row.get::<_, f64>(5)?,
-                    row.get::<_, Option<String>>(8)?,  // reporter_name
-                    if reporter_email.is_empty() { None } else { Some(reporter_email) },
+                    row.get::<_, Option<String>>(8)?, // reporter_name
+                    if reporter_email.is_empty() {
+                        None
+                    } else {
+                        Some(reporter_email)
+                    },
                     row.get::<_, Option<String>>(10)?, // report_period
                     row.get::<_, Option<String>>(11)?, // organization
                     row.get::<_, Option<String>>(12)?, // department
@@ -686,8 +708,19 @@ impl ReportStore {
             },
         )?;
 
-        let (project_name, git_url, branch, total_commits, ai_ratio, human_ratio,
-             reporter_name, reporter_email, report_period, organization, department) = row;
+        let (
+            project_name,
+            git_url,
+            branch,
+            total_commits,
+            ai_ratio,
+            human_ratio,
+            reporter_name,
+            reporter_email,
+            report_period,
+            organization,
+            department,
+        ) = row;
 
         let mut stmt = self.conn.prepare(
             r#"
@@ -719,7 +752,10 @@ impl ReportStore {
             branch,
             total_commits,
             developers,
-            project_ratios: ProjectRatios { ai: ai_ratio, human: human_ratio },
+            project_ratios: ProjectRatios {
+                ai: ai_ratio,
+                human: human_ratio,
+            },
             organization,
             department,
             reporter_name,
@@ -734,9 +770,14 @@ impl ReportStore {
 
     /// 全局汇总：总报告数、项目数、开发者数、组织数、加权 AI 比率
     pub fn aggregate_global(&self) -> Result<GlobalAggregateSummary, GitAiError> {
-        let (total_reports, total_projects, total_commits, w_ai, w_human): (i64, i64, i64, f64, f64) =
-            self.conn.query_row(
-                r#"
+        let (total_reports, total_projects, total_commits, w_ai, w_human): (
+            i64,
+            i64,
+            i64,
+            f64,
+            f64,
+        ) = self.conn.query_row(
+            r#"
                 SELECT
                     COUNT(*),
                     COUNT(DISTINCT project_name || COALESCE(git_url, '') || COALESCE(branch, '')),
@@ -745,9 +786,17 @@ impl ReportStore {
                     COALESCE(SUM(human_ratio * total_commits), 0.0)
                 FROM project_summaries
                 "#,
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )?;
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
 
         let total_developers: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT email) FROM developer_summaries",
@@ -755,17 +804,13 @@ impl ReportStore {
             |row| row.get(0),
         )?;
 
-        let total_organizations: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM organizations",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_organizations: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM organizations", [], |row| row.get(0))?;
 
-        let total_departments: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM departments",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_departments: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM departments", [], |row| row.get(0))?;
 
         let (weighted_ai_ratio, weighted_human_ratio) = if total_commits > 0 {
             (w_ai / total_commits as f64, w_human / total_commits as f64)
@@ -820,11 +865,15 @@ impl ReportStore {
                 weighted_human_ratio: human_ratio,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(GitAiError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(GitAiError::from)
     }
 
     /// 按部门聚合，可按 org 名称过滤
-    pub fn aggregate_by_dept(&self, org_filter: Option<&str>) -> Result<Vec<DeptAggregateSummary>, GitAiError> {
+    pub fn aggregate_by_dept(
+        &self,
+        org_filter: Option<&str>,
+    ) -> Result<Vec<DeptAggregateSummary>, GitAiError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT
@@ -863,7 +912,8 @@ impl ReportStore {
                 weighted_human_ratio: human_ratio,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(GitAiError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(GitAiError::from)
     }
 
     /// 按项目聚合（跨多个上报人），可按 org/dept 过滤
@@ -907,8 +957,16 @@ impl ReportStore {
             let branch: String = row.get(2)?;
             Ok(ProjectAggregateSummary {
                 project_name: row.get(0)?,
-                git_url: if git_url.is_empty() { None } else { Some(git_url) },
-                branch: if branch.is_empty() { None } else { Some(branch) },
+                git_url: if git_url.is_empty() {
+                    None
+                } else {
+                    Some(git_url)
+                },
+                branch: if branch.is_empty() {
+                    None
+                } else {
+                    Some(branch)
+                },
                 organization: row.get(3)?,
                 department: row.get(4)?,
                 report_count: row.get::<_, i64>(5)? as usize,
@@ -917,7 +975,8 @@ impl ReportStore {
                 weighted_human_ratio: human_ratio,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(GitAiError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(GitAiError::from)
     }
 
     /// 按开发者跨项目聚合，可按 org/dept 过滤
@@ -953,7 +1012,10 @@ impl ReportStore {
             let total_human: i64 = row.get(8)?;
             let total = total_ai + total_human;
             let (ai_ratio, human_ratio) = if total > 0 {
-                (total_ai as f64 / total as f64, total_human as f64 / total as f64)
+                (
+                    total_ai as f64 / total as f64,
+                    total_human as f64 / total as f64,
+                )
             } else {
                 (0.0, 0.0)
             };
@@ -971,7 +1033,8 @@ impl ReportStore {
                 weighted_human_ratio: human_ratio,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(GitAiError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(GitAiError::from)
     }
 }
 
@@ -1124,13 +1187,15 @@ fn handle_http_request(request: &[u8], db_path: &Path) -> Vec<u8> {
             ("GET", path) if path.starts_with("/api/v1/aggregate/projects") => {
                 let org_filter = parse_query_param(path, "org");
                 let dept_filter = parse_query_param(path, "dept");
-                let list = store.aggregate_by_project(org_filter.as_deref(), dept_filter.as_deref())?;
+                let list =
+                    store.aggregate_by_project(org_filter.as_deref(), dept_filter.as_deref())?;
                 Ok(json_response(200, &list))
             }
             ("GET", path) if path.starts_with("/api/v1/aggregate/developers") => {
                 let org_filter = parse_query_param(path, "org");
                 let dept_filter = parse_query_param(path, "dept");
-                let list = store.aggregate_by_developer(org_filter.as_deref(), dept_filter.as_deref())?;
+                let list =
+                    store.aggregate_by_developer(org_filter.as_deref(), dept_filter.as_deref())?;
                 Ok(json_response(200, &list))
             }
             ("GET", path)
@@ -1149,7 +1214,8 @@ fn handle_http_request(request: &[u8], db_path: &Path) -> Vec<u8> {
             }
             ("GET", path)
                 if path.starts_with("/api/v1/summaries/")
-                    && path.trim_start_matches("/api/v1/summaries/")
+                    && path
+                        .trim_start_matches("/api/v1/summaries/")
                         .trim_end_matches('/')
                         .parse::<i64>()
                         .is_ok() =>
@@ -1205,13 +1271,14 @@ fn parse_http_request(request: &[u8]) -> Result<(String, String, &[u8]), GitAiEr
 }
 
 fn parse_query_param(path: &str, key: &str) -> Option<String> {
-    let query = path.splitn(2, '?').nth(1)?;
+    let query = path.split_once('?')?.1;
     for pair in query.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            if k == key && !v.is_empty() {
-                // 简单 URL decode：将 + 替换为空格，%XX 保持原样（足够用于组织/部门名称）
-                return Some(v.replace('+', " "));
-            }
+        if let Some((k, v)) = pair.split_once('=')
+            && k == key
+            && !v.is_empty()
+        {
+            // 简单 URL decode：将 + 替换为空格，%XX 保持原样（足够用于组织/部门名称）
+            return Some(v.replace('+', " "));
         }
     }
     None
@@ -1984,7 +2051,9 @@ mod tests {
         assert_eq!(response.organization, None);
 
         // Retrieve detail
-        let detail = store.get_project_summary_detail(response.summary_id).unwrap();
+        let detail = store
+            .get_project_summary_detail(response.summary_id)
+            .unwrap();
         assert_eq!(detail.project_name, "my-project");
         assert_eq!(detail.total_commits, 10);
         assert_eq!(detail.developers.len(), 2);
@@ -2050,7 +2119,9 @@ mod tests {
         assert_eq!(response.organization.as_deref(), Some("ACME Corp"));
         assert_eq!(response.department.as_deref(), Some("研发部"));
 
-        let detail = store.get_project_summary_detail(response.summary_id).unwrap();
+        let detail = store
+            .get_project_summary_detail(response.summary_id)
+            .unwrap();
         assert_eq!(detail.organization.as_deref(), Some("ACME Corp"));
         assert_eq!(detail.department.as_deref(), Some("研发部"));
     }
@@ -2147,11 +2218,18 @@ mod tests {
             report_period: None,
         };
 
-        store.ingest_summary(&make_summary("proj-1", "alice@example.com", 100, 100)).unwrap();
-        store.ingest_summary(&make_summary("proj-2", "alice@example.com", 300, 100)).unwrap();
+        store
+            .ingest_summary(&make_summary("proj-1", "alice@example.com", 100, 100))
+            .unwrap();
+        store
+            .ingest_summary(&make_summary("proj-2", "alice@example.com", 300, 100))
+            .unwrap();
 
         let devs = store.aggregate_by_developer(None, None).unwrap();
-        let alice = devs.iter().find(|d| d.email == "alice@example.com").unwrap();
+        let alice = devs
+            .iter()
+            .find(|d| d.email == "alice@example.com")
+            .unwrap();
         assert_eq!(alice.project_count, 2);
         assert_eq!(alice.total_ai_additions, 400);
         assert_eq!(alice.total_human_additions, 200);
@@ -2227,7 +2305,8 @@ mod tests {
             let body = serde_json::to_string(&s).unwrap();
             let req = format!(
                 "POST /api/v1/summaries HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             handle_http_request(req.as_bytes(), &db_path);
         }
@@ -2241,9 +2320,21 @@ mod tests {
 
     #[test]
     fn parse_query_param_extracts_value() {
-        assert_eq!(parse_query_param("/api/v1/aggregate/departments?org=ACME", "org").as_deref(), Some("ACME"));
-        assert_eq!(parse_query_param("/api/v1/aggregate/departments?org=ACME+Corp&x=1", "org").as_deref(), Some("ACME Corp"));
-        assert_eq!(parse_query_param("/api/v1/aggregate/departments", "org"), None);
-        assert_eq!(parse_query_param("/api/v1/aggregate/departments?dept=rd", "org"), None);
+        assert_eq!(
+            parse_query_param("/api/v1/aggregate/departments?org=ACME", "org").as_deref(),
+            Some("ACME")
+        );
+        assert_eq!(
+            parse_query_param("/api/v1/aggregate/departments?org=ACME+Corp&x=1", "org").as_deref(),
+            Some("ACME Corp")
+        );
+        assert_eq!(
+            parse_query_param("/api/v1/aggregate/departments", "org"),
+            None
+        );
+        assert_eq!(
+            parse_query_param("/api/v1/aggregate/departments?dept=rd", "org"),
+            None
+        );
     }
 }

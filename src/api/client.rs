@@ -449,7 +449,10 @@ mod tests {
     fn test_cas_read_url() {
         let ctx = ApiContext::without_auth(Some("https://enterprise.example.com".to_string()));
         let url = ctx.build_url("/worker/cas/?hashes=abc123,def456").unwrap();
-        assert_eq!(url, "https://enterprise.example.com/worker/cas/?hashes=abc123,def456");
+        assert_eq!(
+            url,
+            "https://enterprise.example.com/worker/cas/?hashes=abc123,def456"
+        );
     }
 
     /// Test that an ApiContext with Bearer token includes auth header fields
@@ -497,11 +500,19 @@ mod tests {
         for url in urls {
             let ctx = ApiContext::without_auth(Some(url.to_string()));
             let metrics_url = ctx.build_url("/worker/metrics/upload").unwrap();
-            assert!(metrics_url.starts_with(url), "Metrics URL should start with base: {}", url);
+            assert!(
+                metrics_url.starts_with(url),
+                "Metrics URL should start with base: {}",
+                url
+            );
             assert!(metrics_url.ends_with("/worker/metrics/upload"));
 
             let cas_url = ctx.build_url("/worker/cas/upload").unwrap();
-            assert!(cas_url.starts_with(url), "CAS URL should start with base: {}", url);
+            assert!(
+                cas_url.starts_with(url),
+                "CAS URL should start with base: {}",
+                url
+            );
             assert!(cas_url.ends_with("/worker/cas/upload"));
         }
     }

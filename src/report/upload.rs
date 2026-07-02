@@ -173,9 +173,8 @@ mod tests {
     use super::*;
     use crate::authorship::stats::CommitStats;
     use crate::report::model::{
-        DeveloperSummary, ProjectRatios, ProjectSummaryReport,
-        REPORT_SCHEMA_VERSION, ReportCommit, ReportRangeInfo, ReportRangeMode, ReportRatios,
-        ReportRepoInfo, ReportSummary,
+        DeveloperSummary, ProjectRatios, ProjectSummaryReport, REPORT_SCHEMA_VERSION, ReportCommit,
+        ReportRangeInfo, ReportRangeMode, ReportRatios, ReportRepoInfo, ReportSummary,
     };
     use std::collections::BTreeMap;
     use std::io::{Read, Write};

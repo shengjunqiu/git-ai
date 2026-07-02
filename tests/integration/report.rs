@@ -289,7 +289,11 @@ fn report_scan_all_human_commit_shows_zero_ai_ratio() {
     let repo = TestRepo::new();
 
     let mut file = repo.filename("all-human.txt");
-    file.set_contents(crate::lines!["line 1".human(), "line 2".human(), "line 3".human()]);
+    file.set_contents(crate::lines![
+        "line 1".human(),
+        "line 2".human(),
+        "line 3".human()
+    ]);
     repo.stage_all_and_commit("all human commit").unwrap();
 
     let report = report_json(&repo, &["report", "scan", "--json"]);
@@ -298,7 +302,11 @@ fn report_scan_all_human_commit_shows_zero_ai_ratio() {
     assert_eq!(report["summary"]["human_additions"], 3);
     assert_eq!(report["ratios"]["ai"], 0.0);
     assert_eq!(report["ratios"]["human"], 1.0);
-    file.assert_lines_and_blame(crate::lines!["line 1".human(), "line 2".human(), "line 3".human()]);
+    file.assert_lines_and_blame(crate::lines![
+        "line 1".human(),
+        "line 2".human(),
+        "line 3".human()
+    ]);
 }
 
 #[test]
@@ -328,7 +336,13 @@ fn report_scan_multiple_commits_aggregates_stats_correctly() {
     let first = repo.stage_all_and_commit("first commit").unwrap();
 
     // Commit 2: 1 more human, 1 more ai
-    file.set_contents(crate::lines!["h1".human(), "h2".human(), "a1".ai(), "h3".human(), "a2".ai()]);
+    file.set_contents(crate::lines![
+        "h1".human(),
+        "h2".human(),
+        "a1".ai(),
+        "h3".human(),
+        "a2".ai()
+    ]);
     let _second = repo.stage_all_and_commit("second commit").unwrap();
 
     let range = format!("{}..{}", first.commit_sha, _second.commit_sha);
@@ -559,10 +573,9 @@ fn report_upload_from_json_file_removes_workdir() {
     .expect("json export should succeed");
 
     // Verify the exported JSON contains workdir
-    let exported: Value = serde_json::from_str(
-        &fs::read_to_string(&json_path).expect("json should exist"),
-    )
-    .expect("exported json should parse");
+    let exported: Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).expect("json should exist"))
+            .expect("exported json should parse");
     assert!(exported["repo"]["workdir"].is_string());
 
     // Upload dry-run from the JSON file — payload should be sanitized
@@ -775,7 +788,12 @@ fn report_full_pipeline_scan_export_upload_roundtrip() {
     let repo = TestRepo::new();
 
     let mut file = repo.filename("pipeline.txt");
-    file.set_contents(crate::lines!["human 1".human(), "ai 1".ai(), "human 2".human(), "ai 2".ai()]);
+    file.set_contents(crate::lines![
+        "human 1".human(),
+        "ai 1".ai(),
+        "human 2".human(),
+        "ai 2".ai()
+    ]);
     repo.stage_all_and_commit("pipeline commit").unwrap();
 
     // Step 1: Scan
@@ -796,10 +814,9 @@ fn report_full_pipeline_scan_export_upload_roundtrip() {
     ])
     .expect("json export should succeed");
 
-    let exported: Value = serde_json::from_str(
-        &fs::read_to_string(&json_path).expect("json should exist"),
-    )
-    .expect("exported json should parse");
+    let exported: Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).expect("json should exist"))
+            .expect("exported json should parse");
     assert_eq!(exported["summary"]["ai_additions"], 2);
     assert_eq!(exported["summary"]["human_additions"], 2);
 
@@ -908,10 +925,9 @@ fn report_server_api_upload_and_read_back() {
     assert_eq!(upload["commit_count"], 1);
 
     // Verify the exported JSON has the right structure for server ingestion
-    let exported: Value = serde_json::from_str(
-        &fs::read_to_string(&json_path).expect("json should exist"),
-    )
-    .expect("exported json should parse");
+    let exported: Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).expect("json should exist"))
+            .expect("exported json should parse");
 
     assert_eq!(exported["schema_version"], "git-ai-report/1.0.0");
     assert!(exported["commits"].is_array());
@@ -961,8 +977,16 @@ fn report_scan_with_custom_checkpoints_tracks_attribution() {
     ]);
 
     // Scan report for the full history using a range
-    let _first_sha = repo.git_og(&["rev-parse", "--short", "HEAD~2"]).expect("should get first sha").trim().to_string();
-    let _head_sha = repo.git_og(&["rev-parse", "HEAD"]).expect("should get head sha").trim().to_string();
+    let _first_sha = repo
+        .git_og(&["rev-parse", "--short", "HEAD~2"])
+        .expect("should get first sha")
+        .trim()
+        .to_string();
+    let _head_sha = repo
+        .git_og(&["rev-parse", "HEAD"])
+        .expect("should get head sha")
+        .trim()
+        .to_string();
 
     // Note: use short sha for first commit since rev-list works with partial SHAs
     // Actually just scan all commits from initial
@@ -971,7 +995,10 @@ fn report_scan_with_custom_checkpoints_tracks_attribution() {
     // HEAD only shows the latest commit
     assert_eq!(report["range"]["commit_count"], 1);
     // The last commit added the AI line, so we should have at least 1 AI addition
-    assert!(report["summary"]["ai_additions"].as_u64().unwrap() >= 1, "should have AI additions");
+    assert!(
+        report["summary"]["ai_additions"].as_u64().unwrap() >= 1,
+        "should have AI additions"
+    );
 }
 
 // =============================================================================
@@ -989,7 +1016,11 @@ fn report_range_three_commits_with_different_attributions() {
     file.set_contents(crate::lines!["base".human(), "ai addition".ai()]);
     let _second = repo.stage_all_and_commit("ai commit").unwrap();
 
-    file.set_contents(crate::lines!["base".human(), "ai addition".ai(), "human addition".human()]);
+    file.set_contents(crate::lines![
+        "base".human(),
+        "ai addition".ai(),
+        "human addition".human()
+    ]);
     let third = repo.stage_all_and_commit("human commit").unwrap();
 
     // Full range
@@ -998,8 +1029,14 @@ fn report_range_three_commits_with_different_attributions() {
 
     assert_eq!(report["range"]["commit_count"], 2); // second + third
     // Verify both AI and human contributions exist
-    assert!(report["summary"]["ai_additions"].as_u64().unwrap() >= 1, "should have AI additions");
-    assert!(report["summary"]["human_additions"].as_u64().unwrap() >= 1, "should have human additions");
+    assert!(
+        report["summary"]["ai_additions"].as_u64().unwrap() >= 1,
+        "should have AI additions"
+    );
+    assert!(
+        report["summary"]["human_additions"].as_u64().unwrap() >= 1,
+        "should have human additions"
+    );
 }
 
 #[test]
@@ -1090,8 +1127,7 @@ fn summary_json(repo: &TestRepo, args: &[&str]) -> Value {
     let raw = repo
         .git_ai(&full_args)
         .unwrap_or_else(|error| panic!("git-ai summary {:?} should succeed: {}", args, error));
-    serde_json::from_str(&extract_json_object(&raw))
-        .expect("summary output should be valid JSON")
+    serde_json::from_str(&extract_json_object(&raw)).expect("summary output should be valid JSON")
 }
 
 #[test]
@@ -1121,7 +1157,7 @@ fn summary_single_commit_has_project_name_and_ratios() {
     assert_eq!(summary["total_commits"], 1);
     // developers array
     assert!(summary["developers"].is_array());
-    assert!(summary["developers"].as_array().unwrap().len() >= 1);
+    assert!(!summary["developers"].as_array().unwrap().is_empty());
     // project_ratios
     assert!(summary["project_ratios"]["ai"].is_f64());
     assert!(summary["project_ratios"]["human"].is_f64());
@@ -1189,7 +1225,9 @@ fn summary_developer_has_name_and_ratios() {
     repo.stage_all_and_commit("dev ratio test").unwrap();
 
     let summary = summary_json(&repo, &[]);
-    let devs = summary["developers"].as_array().expect("developers should be array");
+    let devs = summary["developers"]
+        .as_array()
+        .expect("developers should be array");
     let dev = &devs[0];
 
     // Developer should have name, email, commits, and ratios

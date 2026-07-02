@@ -74,18 +74,6 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::csv_escape;
-
-    #[test]
-    fn csv_escape_quotes_commas_and_quotes() {
-        assert_eq!(csv_escape("hello"), "hello");
-        assert_eq!(csv_escape("hello, world"), "\"hello, world\"");
-        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Simplified project summary export
 // ---------------------------------------------------------------------------
@@ -138,4 +126,16 @@ pub fn export_summary_csv(
 
     write_or_print(&content, output)?;
     Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::csv_escape;
+
+    #[test]
+    fn csv_escape_quotes_commas_and_quotes() {
+        assert_eq!(csv_escape("hello"), "hello");
+        assert_eq!(csv_escape("hello, world"), "\"hello, world\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
 }

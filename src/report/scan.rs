@@ -4,11 +4,11 @@ use crate::error::GitAiError;
 use crate::git::refs::commits_with_authorship_notes;
 use crate::git::repository::{Repository, exec_git};
 use crate::git::{find_repository, find_repository_in_path};
+use crate::report::model::{DeveloperSummary, ProjectRatios, ProjectSummaryReport};
 use crate::report::model::{
     REPORT_SCHEMA_VERSION, ReportCommit, ReportDocument, ReportOptions, ReportRangeInfo,
     ReportRangeMode, ReportRepoInfo, ReportSummary, calculate_ratios,
 };
-use crate::report::model::{DeveloperSummary, ProjectRatios, ProjectSummaryReport};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -304,8 +304,8 @@ pub fn build_project_summary(
 
     // Build developer summaries sorted by added_lines descending
     let mut developers: Vec<DeveloperSummary> = dev_map
-        .into_iter()
-        .map(|(_key, acc)| {
+        .into_values()
+        .map(|acc| {
             let total = acc.ai_additions + acc.human_additions;
             let ai_ratio = if total > 0 {
                 acc.ai_additions as f64 / total as f64
@@ -329,13 +329,21 @@ pub fn build_project_summary(
             }
         })
         .collect();
-    developers.sort_by(|a, b| b.added_lines.cmp(&a.added_lines));
+    developers.sort_by_key(|developer| std::cmp::Reverse(developer.added_lines));
 
     // Project-level ratios
     let total = total_ai + total_human;
     let project_ratios = ProjectRatios {
-        ai: if total > 0 { total_ai as f64 / total as f64 } else { 0.0 },
-        human: if total > 0 { total_human as f64 / total as f64 } else { 0.0 },
+        ai: if total > 0 {
+            total_ai as f64 / total as f64
+        } else {
+            0.0
+        },
+        human: if total > 0 {
+            total_human as f64 / total as f64
+        } else {
+            0.0
+        },
     };
 
     // Project name & git URL
@@ -357,6 +365,7 @@ pub fn build_project_summary(
     })
 }
 
+#[derive(Default)]
 struct DeveloperAccum {
     name: String,
     email: String,
@@ -364,19 +373,6 @@ struct DeveloperAccum {
     added_lines: u32,
     ai_additions: u32,
     human_additions: u32,
-}
-
-impl Default for DeveloperAccum {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            email: String::new(),
-            commits: 0,
-            added_lines: 0,
-            ai_additions: 0,
-            human_additions: 0,
-        }
-    }
 }
 
 fn all_history_commits(repo: &Repository) -> Result<Vec<String>, GitAiError> {
