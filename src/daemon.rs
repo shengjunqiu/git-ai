@@ -33,12 +33,7 @@ use crate::{
     commands::hooks::{push_hooks, stash_hooks},
 };
 #[cfg(not(windows))]
-use interprocess::local_socket::ConnectOptions;
-#[cfg(not(windows))]
-use interprocess::{
-    ConnectWaitMode,
-    local_socket::{GenericFilePath, ListenerOptions, Name, prelude::*},
-};
+use interprocess::local_socket::{ListenerOptions, prelude::*};
 #[cfg(windows)]
 use named_pipe::{
     ConnectingServer as WindowsConnectingServer, OpenMode as WindowsPipeOpenMode,
@@ -49,17 +44,16 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
-#[cfg(windows)]
-use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot};
 use tokio::time::Duration;
+
+mod client;
+mod runtime;
 
 pub mod analyzers;
 pub mod config;
@@ -77,14 +71,24 @@ pub mod telemetry_worker;
 pub mod test_sync;
 pub mod trace_normalizer;
 
+use client::set_daemon_client_stream_timeouts;
+pub use client::{
+    DaemonClientStream, local_socket_connects_with_timeout, open_local_socket_stream_with_timeout,
+    send_control_request, send_control_request_with_timeout,
+};
+#[cfg(test)]
+use client::{
+    checkpoint_control_response_timeout, checkpoint_control_timeout_uses_ci_or_test_budget,
+};
 pub use config::DaemonConfig;
 pub use control_api::{
     CapturedCheckpointRunRequest, CheckpointRunRequest, ControlRequest, ControlResponse,
     FamilyStatus, LiveCheckpointRunRequest, TelemetryEnvelope,
 };
 pub use lock::DaemonLock;
+pub(crate) use runtime::daemon_run_pending_self_update;
+pub use runtime::{GIT_ENV_VARS_TO_SANITIZE, daemon_log_file_path, read_daemon_pid};
 
-const PID_META_FILE: &str = "daemon.pid.json";
 const TRACE_INGEST_SEQ_FIELD: &str = "git_ai_ingest_seq";
 const DAEMON_CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const DAEMON_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -94,48 +98,7 @@ const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const WINDOWS_TRACE_PIPE_WORKERS: usize = 16;
 #[cfg(windows)]
 const WINDOWS_CONTROL_PIPE_WORKERS: usize = 8;
-#[cfg(windows)]
-const WINDOWS_STDOUT_HANDLE: u32 = (-11i32) as u32;
-#[cfg(windows)]
-const WINDOWS_STDERR_HANDLE: u32 = (-12i32) as u32;
 static DAEMON_PROCESS_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(windows)]
-unsafe extern "system" {
-    fn SetStdHandle(nstdhandle: u32, hhandle: *mut std::ffi::c_void) -> i32;
-}
-
-#[cfg(not(windows))]
-pub type DaemonClientStream = LocalSocketStream;
-
-#[cfg(windows)]
-pub enum DaemonClientStream {
-    WindowsPipe(WindowsPipeClient),
-}
-
-#[cfg(windows)]
-impl Read for DaemonClientStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::WindowsPipe(stream) => stream.read(buf),
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Write for DaemonClientStream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::WindowsPipe(stream) => stream.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::WindowsPipe(stream) => stream.flush(),
-        }
-    }
-}
 
 pub fn daemon_process_active() -> bool {
     DAEMON_PROCESS_ACTIVE.load(Ordering::SeqCst)
@@ -154,12 +117,6 @@ impl Drop for DaemonProcessActiveGuard {
     fn drop(&mut self) {
         DAEMON_PROCESS_ACTIVE.store(false, Ordering::SeqCst);
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DaemonPidMeta {
-    pid: u32,
-    started_at_ns: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3195,290 +3152,6 @@ fn apply_reset_working_log_side_effect(
     Ok(())
 }
 
-fn now_unix_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
-fn remove_socket_if_exists(path: &Path) -> Result<(), GitAiError> {
-    #[cfg(unix)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn set_socket_owner_only(path: &Path) -> Result<(), GitAiError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-    Ok(())
-}
-
-fn pid_metadata_path(config: &DaemonConfig) -> PathBuf {
-    config
-        .lock_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(PID_META_FILE)
-}
-
-/// Returns the log file path for the currently running daemon, if any.
-/// Reads the PID from daemon.pid.json and constructs the log path.
-pub fn daemon_log_file_path(config: &DaemonConfig) -> Result<PathBuf, GitAiError> {
-    let meta_path = pid_metadata_path(config);
-    let contents = fs::read_to_string(&meta_path).map_err(|e| {
-        GitAiError::Generic(format!(
-            "failed to read daemon pid metadata at {}: {}",
-            meta_path.display(),
-            e
-        ))
-    })?;
-    let meta: DaemonPidMeta = serde_json::from_str(&contents)?;
-    let log_dir = config.internal_dir.join("daemon").join("logs");
-    Ok(log_dir.join(format!("{}.log", meta.pid)))
-}
-
-fn write_pid_metadata(config: &DaemonConfig) -> Result<(), GitAiError> {
-    let meta = DaemonPidMeta {
-        pid: std::process::id(),
-        started_at_ns: now_unix_nanos(),
-    };
-    let path = pid_metadata_path(config);
-    fs::write(path, serde_json::to_string_pretty(&meta)?)?;
-    Ok(())
-}
-
-/// Read the PID of the currently running daemon from the pid metadata file.
-pub fn read_daemon_pid(config: &DaemonConfig) -> Result<u32, GitAiError> {
-    let meta_path = pid_metadata_path(config);
-    let contents = fs::read_to_string(&meta_path).map_err(|e| {
-        GitAiError::Generic(format!(
-            "failed to read daemon pid metadata at {}: {}",
-            meta_path.display(),
-            e
-        ))
-    })?;
-    let meta: DaemonPidMeta = serde_json::from_str(&contents)?;
-    Ok(meta.pid)
-}
-
-fn remove_pid_metadata(config: &DaemonConfig) -> Result<(), GitAiError> {
-    let path = pid_metadata_path(config);
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn daemon_is_test_mode() -> bool {
-    std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
-        || std::env::var_os("GITAI_TEST_DB_PATH").is_some()
-}
-
-fn daemon_log_dir(config: &DaemonConfig) -> PathBuf {
-    config.internal_dir.join("daemon").join("logs")
-}
-
-/// Redirect stdout and stderr to a per-PID log file inside the daemon logs
-/// directory. Skipped in test mode to keep test output on the console.
-/// Returns a guard that keeps the log file open for the lifetime of the daemon.
-#[cfg(unix)]
-fn maybe_setup_daemon_log_file(config: &DaemonConfig) -> Option<DaemonLogGuard> {
-    if daemon_is_test_mode() {
-        return None;
-    }
-    match setup_daemon_log_file(config) {
-        Ok(guard) => Some(guard),
-        Err(e) => {
-            tracing::error!(%e, "log file setup failed");
-            None
-        }
-    }
-}
-
-#[cfg(windows)]
-fn maybe_setup_daemon_log_file(config: &DaemonConfig) -> Option<DaemonLogGuard> {
-    match setup_daemon_log_file(config) {
-        Ok(guard) => Some(guard),
-        Err(e) => {
-            tracing::error!(%e, "log file setup failed");
-            None
-        }
-    }
-}
-
-struct DaemonLogGuard {
-    _file: File,
-}
-
-#[cfg(unix)]
-fn setup_daemon_log_file(config: &DaemonConfig) -> Result<DaemonLogGuard, GitAiError> {
-    use std::os::unix::io::AsRawFd;
-
-    let log_dir = daemon_log_dir(config);
-    fs::create_dir_all(&log_dir)?;
-
-    let prune_dir = log_dir.clone();
-    std::thread::spawn(move || prune_stale_daemon_logs(&prune_dir));
-
-    let log_path = log_dir.join(format!("{}.log", std::process::id()));
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-
-    let fd = file.as_raw_fd();
-    // SAFETY: dup2 is a standard POSIX call; we redirect stdout/stderr to our
-    // open log file descriptor. The file is kept alive by the returned guard.
-    unsafe {
-        if libc::dup2(fd, libc::STDOUT_FILENO) == -1 {
-            return Err(GitAiError::Generic("dup2 stdout failed".to_string()));
-        }
-        if libc::dup2(fd, libc::STDERR_FILENO) == -1 {
-            return Err(GitAiError::Generic("dup2 stderr failed".to_string()));
-        }
-    }
-
-    Ok(DaemonLogGuard { _file: file })
-}
-
-#[cfg(windows)]
-fn setup_daemon_log_file(config: &DaemonConfig) -> Result<DaemonLogGuard, GitAiError> {
-    let log_dir = daemon_log_dir(config);
-    fs::create_dir_all(&log_dir)?;
-
-    let prune_dir = log_dir.clone();
-    std::thread::spawn(move || prune_stale_daemon_logs(&prune_dir));
-
-    let log_path = log_dir.join(format!("{}.log", std::process::id()));
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    redirect_windows_stdio_to_log_file(&file)?;
-    eprintln!("[git-ai] daemon log initialized at {}", log_path.display());
-
-    Ok(DaemonLogGuard { _file: file })
-}
-
-#[cfg(windows)]
-fn redirect_windows_stdio_to_log_file(file: &File) -> Result<(), GitAiError> {
-    redirect_windows_stdio_stream(file, 1, WINDOWS_STDOUT_HANDLE)?;
-    redirect_windows_stdio_stream(file, 2, WINDOWS_STDERR_HANDLE)?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn redirect_windows_stdio_stream(
-    file: &File,
-    std_fd: libc::c_int,
-    std_handle: u32,
-) -> Result<(), GitAiError> {
-    let clone = file.try_clone()?;
-    let raw_handle = clone.into_raw_handle();
-    let fd = unsafe {
-        libc::open_osfhandle(
-            raw_handle as libc::intptr_t,
-            libc::O_APPEND | libc::O_BINARY,
-        )
-    };
-    if fd == -1 {
-        unsafe {
-            drop(File::from_raw_handle(raw_handle));
-        }
-        return Err(GitAiError::Generic(format!(
-            "open_osfhandle failed for daemon log stream {}: {}",
-            std_fd,
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    let dup_result = unsafe { libc::dup2(fd, std_fd) };
-    if dup_result == -1 {
-        let err = std::io::Error::last_os_error();
-        let _ = unsafe { libc::close(fd) };
-        return Err(GitAiError::Generic(format!(
-            "dup2 failed for daemon log stream {}: {}",
-            std_fd, err
-        )));
-    }
-    if unsafe { libc::close(fd) } == -1 {
-        tracing::debug!(
-            std_fd,
-            error = %std::io::Error::last_os_error(),
-            "close failed for log stream after successful redirect"
-        );
-    }
-
-    let set_handle_result = unsafe { SetStdHandle(std_handle, file.as_raw_handle()) };
-    if set_handle_result == 0 {
-        return Err(GitAiError::Generic(format!(
-            "SetStdHandle failed for daemon log stream {}: {}",
-            std_fd,
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    Ok(())
-}
-
-/// Remove log files from previous daemon runs that are older than one week and
-/// whose PID is no longer alive, to avoid unbounded growth while keeping recent
-/// logs available for debugging.
-fn prune_stale_daemon_logs(log_dir: &Path) {
-    let one_week = std::time::Duration::from_secs(7 * 24 * 60 * 60);
-    let entries = match fs::read_dir(log_dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        let _pid: u32 = match stem.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let dominated = path
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age > one_week);
-        if !dominated {
-            continue;
-        }
-        #[cfg(unix)]
-        {
-            if process_alive(_pid) {
-                continue;
-            }
-        }
-        let _ = fs::remove_file(&path);
-    }
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    // kill(pid, 0) checks existence without sending a signal.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
 fn read_json_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, GitAiError> {
     let mut line = String::new();
     let read = reader.read_line(&mut line)?;
@@ -3914,7 +3587,7 @@ impl ActorDaemonCoordinator {
         let Some(common_dir) = common_dir_for_worktree(&worktree) else {
             return Ok(());
         };
-        let started_at_ns = trace_payload_time_ns(payload).unwrap_or_else(now_unix_nanos);
+        let started_at_ns = trace_payload_time_ns(payload).unwrap_or_else(runtime::now_unix_nanos);
         let family = common_dir
             .canonicalize()
             .unwrap_or(common_dir)
@@ -4146,7 +3819,7 @@ impl ActorDaemonCoordinator {
             .map_err(|_| GitAiError::Generic("trace ingress state lock poisoned".to_string()))?;
         ingress
             .root_last_activity_ns
-            .insert(root_sid.to_string(), now_unix_nanos() as u64);
+            .insert(root_sid.to_string(), runtime::now_unix_nanos() as u64);
         ingress.root_close_fallback_enqueued.remove(root_sid);
         Ok(())
     }
@@ -4259,7 +3932,7 @@ impl ActorDaemonCoordinator {
                 "event": "atexit",
                 "sid": root_sid,
                 "code": 0,
-                "time_ns": now_unix_nanos() as u64,
+                "time_ns": runtime::now_unix_nanos() as u64,
                 "git_ai_connection_close_fallback": true,
             });
             if let Some(object) = payload.as_object_mut() {
@@ -4335,7 +4008,7 @@ impl ActorDaemonCoordinator {
 
         let snapshot_id = format!(
             "{}-{}",
-            now_unix_nanos(),
+            runtime::now_unix_nanos(),
             // Relaxed: just a monotone counter for unique IDs; no cross-atomic ordering needed.
             self.next_carryover_snapshot_id
                 .fetch_add(1, Ordering::Relaxed)
@@ -4806,7 +4479,7 @@ impl ActorDaemonCoordinator {
                 // Activity tracking (folded here to avoid a separate lock acquisition)
                 ingress
                     .root_last_activity_ns
-                    .insert(root.clone(), now_unix_nanos() as u64);
+                    .insert(root.clone(), runtime::now_unix_nanos() as u64);
                 ingress.root_close_fallback_enqueued.remove(&root);
                 // Minimal state tracking for connection lifecycle
                 if let Some(worktree) = trace_payload_worktree_hint(payload) {
@@ -5253,7 +4926,7 @@ impl ActorDaemonCoordinator {
                                 }
                             })
                     })
-                    .unwrap_or_else(now_unix_nanos);
+                    .unwrap_or_else(runtime::now_unix_nanos);
                 match self.capture_carryover_snapshot_for_command(CarryoverCaptureInput {
                     root_sid: &root,
                     worktree: &worktree,
@@ -5333,7 +5006,7 @@ impl ActorDaemonCoordinator {
                         entries: BTreeMap::new(),
                     });
             let order = FamilySequencerOrder {
-                started_at_ns: now_unix_nanos(),
+                started_at_ns: runtime::now_unix_nanos(),
                 ordinal: state.next_ordinal,
             };
             state.next_ordinal = state.next_ordinal.saturating_add(1);
@@ -7123,7 +6796,7 @@ impl ActorDaemonCoordinator {
             .or_insert_with(|| WrapperStateEntry {
                 pre_repo: None,
                 post_repo: None,
-                received_at_ns: now_unix_nanos(),
+                received_at_ns: runtime::now_unix_nanos(),
             });
         if let Some(pre) = pre_repo {
             entry.pre_repo = Some(pre);
@@ -7131,7 +6804,7 @@ impl ActorDaemonCoordinator {
         if let Some(post) = post_repo {
             entry.post_repo = Some(post);
         }
-        entry.received_at_ns = now_unix_nanos();
+        entry.received_at_ns = runtime::now_unix_nanos();
         drop(states);
         self.wrapper_state_notify.notify_waiters();
     }
@@ -7216,12 +6889,12 @@ fn control_listener_loop_actor(
 ) -> Result<(), GitAiError> {
     #[cfg(not(windows))]
     {
-        remove_socket_if_exists(&control_socket_path)?;
+        runtime::remove_socket_if_exists(&control_socket_path)?;
         let listener = ListenerOptions::new()
-            .name(local_socket_name(&control_socket_path)?)
+            .name(client::local_socket_name(&control_socket_path)?)
             .create_sync()
             .map_err(|e| GitAiError::Generic(format!("failed binding control socket: {}", e)))?;
-        set_socket_owner_only(&control_socket_path)?;
+        runtime::set_socket_owner_only(&control_socket_path)?;
         for stream in listener.incoming() {
             if coordinator.is_shutting_down() {
                 break;
@@ -7412,12 +7085,12 @@ fn trace_listener_loop_actor(
 ) -> Result<(), GitAiError> {
     #[cfg(not(windows))]
     {
-        remove_socket_if_exists(&trace_socket_path)?;
+        runtime::remove_socket_if_exists(&trace_socket_path)?;
         let listener = ListenerOptions::new()
-            .name(local_socket_name(&trace_socket_path)?)
+            .name(client::local_socket_name(&trace_socket_path)?)
             .create_sync()
             .map_err(|e| GitAiError::Generic(format!("failed binding trace socket: {}", e)))?;
-        set_socket_owner_only(&trace_socket_path)?;
+        runtime::set_socket_owner_only(&trace_socket_path)?;
         for stream in listener.incoming() {
             if coordinator.is_shutting_down() {
                 break;
@@ -7593,285 +7266,9 @@ fn handle_trace_connection_actor_reader<R: Read>(
     Ok(())
 }
 
-/// Git environment variables that must not leak into the daemon process.
-///
-/// The daemon is a long-lived, repository-agnostic process that serves requests
-/// for many different repositories. Environment variables like `GIT_DIR` and
-/// `GIT_WORK_TREE` pin git operations to a single repository and override the
-/// `-C <path>` flag that the daemon uses to target each repository individually.
-///
-/// When a daemon is spawned by a git wrapper invocation (e.g. `git add`), the
-/// parent process may have these variables set by git itself (hook context) or
-/// by test harnesses. Clearing them at daemon startup prevents incorrect
-/// repository resolution that manifests as `fatal: not a git repository: '/dev/null'`.
-///
-/// This list is used in two places:
-/// - `spawn_daemon_run_detached` strips them from the child process via `env_remove`.
-/// - `sanitize_git_env_for_daemon` clears them from the current process at daemon startup
-///   as a belt-and-suspenders defence (the daemon may be launched by another mechanism).
-pub const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_QUARANTINE_PATH",
-    "GIT_NAMESPACE",
-];
-
-fn sanitize_git_env_for_daemon() {
-    for var in GIT_ENV_VARS_TO_SANITIZE {
-        // SAFETY: daemon startup is single-threaded at this point -- the tokio
-        // runtime is not yet running and no other threads exist.
-        unsafe {
-            std::env::remove_var(var);
-        }
-    }
-}
-
-fn disable_trace2_for_daemon_process() {
-    // The daemon executes internal git commands while processing events and control requests.
-    // If trace2.eventTarget points at this daemon socket globally, those internal git
-    // commands can recursively feed trace2 events back into the daemon and starve progress.
-    // Force-disable trace2 emission for the daemon process and all of its child git commands.
-    unsafe {
-        std::env::set_var("GIT_TRACE2_EVENT", "0");
-    }
-}
-
-/// How often the daemon wakes up to evaluate whether an update check is due.
-const DAEMON_UPDATE_CHECK_INTERVAL_SECS: u64 = 3600;
-
-/// Maximum daemon uptime before a proactive restart (24.5 hours).
-/// Deliberately offset from the 24h update-check cadence so the uptime restart
-/// never races with an update-triggered shutdown.
-const DAEMON_MAX_UPTIME_SECS: u64 = 24 * 3600 + 30 * 60;
-
-/// Returns the update check interval, respecting an env var override for testing.
-fn daemon_update_check_interval() -> u64 {
-    std::env::var("GIT_AI_DAEMON_UPDATE_CHECK_INTERVAL")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DAEMON_UPDATE_CHECK_INTERVAL_SECS)
-}
-
-/// Returns the maximum uptime in nanoseconds, respecting an env var override for testing.
-fn daemon_max_uptime_ns() -> u128 {
-    let secs = std::env::var("GIT_AI_DAEMON_MAX_UPTIME_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DAEMON_MAX_UPTIME_SECS);
-    secs as u128 * 1_000_000_000
-}
-
-const DAEMON_SOCKET_HEALTH_CHECK_SECS: u64 = 30;
-
-fn daemon_socket_health_check_interval() -> u64 {
-    std::env::var("GIT_AI_DAEMON_SOCKET_HEALTH_CHECK_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DAEMON_SOCKET_HEALTH_CHECK_SECS)
-}
-
-/// Spawn a detached `git-ai bg restart --hard` process that will reap the
-/// current (zombie) daemon and start a fresh one.  The child inherits the
-/// daemon env vars (GIT_AI_DAEMON_HOME, etc.) so it targets the same
-/// instance.  Returns Ok if the process was spawned; the caller should
-/// still request_shutdown so the current daemon exits promptly.
-fn spawn_self_restart() -> Result<(), String> {
-    let exe = crate::utils::current_git_ai_exe().map_err(|e| e.to_string())?;
-    tracing::info!(?exe, "spawning detached restart process");
-
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.args(["bg", "restart", "--hard"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    for var in GIT_ENV_VARS_TO_SANITIZE {
-        cmd.env_remove(var);
-    }
-    cmd.env_remove("GIT_AI");
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    }
-
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("failed to spawn restart process: {}", e))
-}
-
-const DAEMON_MIN_UPTIME_FOR_SELF_RESTART_SECS: u64 = 60;
-
-fn daemon_min_uptime_for_self_restart() -> u64 {
-    std::env::var("GIT_AI_DAEMON_MIN_UPTIME_FOR_RESTART_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DAEMON_MIN_UPTIME_FOR_SELF_RESTART_SECS)
-}
-
-/// Background loop that verifies the daemon's sockets are reachable by
-/// actually connecting to them.  A successful connect proves the socket file
-/// exists, points to this daemon's listener, and that the listener thread is
-/// alive and calling accept().  If either probe fails (deleted file, stale
-/// socket, hung listener), the daemon spawns a detached restart process and
-/// shuts down.
-///
-/// To prevent restart loops when the underlying issue is systemic (e.g.
-/// filesystem permissions, broken paths), the daemon only self-restarts if
-/// it has been up for at least 60 seconds.  If sockets fail before that,
-/// it shuts down without restart — the next wrapper invocation will attempt
-/// to start a fresh daemon.
-fn daemon_socket_health_check_loop(
-    coordinator: Arc<ActorDaemonCoordinator>,
-    control_socket_path: PathBuf,
-    trace_socket_path: PathBuf,
-) {
-    let started = std::time::Instant::now();
-    let interval = daemon_socket_health_check_interval().max(1);
-    tracing::info!(
-        interval,
-        control = %control_socket_path.display(),
-        trace = %trace_socket_path.display(),
-        "socket health check started"
-    );
-
-    loop {
-        {
-            let guard = coordinator
-                .shutdown_condvar_mutex
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if coordinator.is_shutting_down() {
-                return;
-            }
-            let _ = coordinator
-                .shutdown_condvar
-                .wait_timeout(guard, std::time::Duration::from_secs(interval));
-        }
-
-        if coordinator.is_shutting_down() {
-            return;
-        }
-
-        let control_ok =
-            local_socket_connects_with_timeout(&control_socket_path, DAEMON_SOCKET_PROBE_TIMEOUT);
-        let trace_ok =
-            local_socket_connects_with_timeout(&trace_socket_path, DAEMON_SOCKET_PROBE_TIMEOUT);
-
-        if control_ok.is_err() || trace_ok.is_err() {
-            let uptime = started.elapsed();
-            let min_uptime = std::time::Duration::from_secs(daemon_min_uptime_for_self_restart());
-
-            if uptime >= min_uptime {
-                tracing::warn!(
-                    control = %control_ok.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into()),
-                    trace = %trace_ok.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into()),
-                    "socket health check failed, spawning restart and shutting down"
-                );
-                if let Err(e) = spawn_self_restart() {
-                    tracing::error!("failed to spawn self-restart: {}", e);
-                }
-            } else {
-                tracing::warn!(
-                    control = %control_ok.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into()),
-                    trace = %trace_ok.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into()),
-                    uptime_secs = uptime.as_secs(),
-                    "socket health check failed within minimum uptime, shutting down without restart"
-                );
-            }
-            coordinator.request_shutdown();
-            return;
-        }
-    }
-}
-
-/// Background loop that periodically checks for available updates.
-///
-/// Sleeps in short increments so it can exit promptly when the coordinator
-/// signals shutdown.  When an update is detected, it requests a graceful
-/// shutdown so the daemon can self-update after draining in-flight work.
-fn daemon_update_check_loop(coordinator: Arc<ActorDaemonCoordinator>, started_at_ns: u128) {
-    use crate::commands::upgrade::{DaemonUpdateCheckResult, check_for_update_available};
-
-    let interval = daemon_update_check_interval().max(1);
-
-    loop {
-        {
-            let guard = coordinator
-                .shutdown_condvar_mutex
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if coordinator.is_shutting_down() {
-                return;
-            }
-            let _ = coordinator
-                .shutdown_condvar
-                .wait_timeout(guard, std::time::Duration::from_secs(interval));
-        }
-
-        if coordinator.is_shutting_down() {
-            return;
-        }
-
-        coordinator.gc_stale_family_state();
-
-        match check_for_update_available() {
-            Ok(DaemonUpdateCheckResult::UpdateReady) => {
-                tracing::info!("update check: newer version available, requesting shutdown");
-                coordinator.request_shutdown();
-                return;
-            }
-            Ok(DaemonUpdateCheckResult::NoUpdate) => {
-                tracing::info!("update check: no update needed");
-            }
-            Err(err) => {
-                tracing::warn!(%err, "update check failed");
-            }
-        }
-
-        let uptime_ns = now_unix_nanos().saturating_sub(started_at_ns);
-        if uptime_ns >= daemon_max_uptime_ns() {
-            tracing::info!("uptime exceeded max, requesting restart");
-            coordinator.request_shutdown();
-            return;
-        }
-    }
-}
-
-/// After the daemon has fully shut down, attempt to install any pending update.
-///
-/// On Unix the installer atomically replaces the binary via `mv`; on Windows
-/// the installer is spawned as a detached process that polls until the exe is
-/// unlocked.
-pub(crate) fn daemon_run_pending_self_update() {
-    use crate::commands::upgrade::{
-        DaemonUpdateCheckResult, check_and_install_update_if_available,
-    };
-
-    match check_and_install_update_if_available() {
-        Ok(DaemonUpdateCheckResult::UpdateReady) => {
-            tracing::info!("self-update: installation completed successfully");
-        }
-        Ok(DaemonUpdateCheckResult::NoUpdate) => {
-            tracing::info!("self-update: no update to install");
-        }
-        Err(err) => {
-            tracing::warn!(%err, "self-update: installation failed");
-        }
-    }
-}
-
 pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
-    sanitize_git_env_for_daemon();
-    disable_trace2_for_daemon_process();
+    runtime::sanitize_git_env_for_daemon();
+    runtime::disable_trace2_for_daemon_process();
     config.ensure_parent_dirs()?;
     if let Err(error) = crate::commands::checkpoint::prune_stale_captured_checkpoints(
         Duration::from_secs(60 * 60 * 24),
@@ -7883,7 +7280,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
     }
     let _lock = DaemonLock::acquire(&config.lock_path)?;
     let _active_guard = DaemonProcessActiveGuard::enter();
-    write_pid_metadata(&config)?;
+    runtime::write_pid_metadata(&config)?;
 
     // Initialize tracing subscriber before log file redirect so the fmt layer
     // captures stderr (fd 2). After dup2, writes go to the daemon log file.
@@ -7908,7 +7305,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
             .init();
     }
 
-    let _log_guard = maybe_setup_daemon_log_file(&config);
+    let _log_guard = runtime::maybe_setup_daemon_log_file(&config);
 
     tracing::info!(
         pid = std::process::id(),
@@ -7918,8 +7315,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
         "daemon started"
     );
 
-    remove_socket_if_exists(&config.trace_socket_path)?;
-    remove_socket_if_exists(&config.control_socket_path)?;
+    runtime::remove_socket_if_exists(&config.trace_socket_path)?;
+    runtime::remove_socket_if_exists(&config.control_socket_path)?;
 
     let mut coordinator_inner = ActorDaemonCoordinator::new();
     // Spawn the telemetry worker inside the daemon's tokio runtime.
@@ -7971,17 +7368,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
         trace_shutdown_coord.request_shutdown();
     });
 
-    let started_at_ns = now_unix_nanos();
+    let started_at_ns = runtime::now_unix_nanos();
     let update_coord = coordinator.clone();
     let update_thread = std::thread::spawn(move || {
-        daemon_update_check_loop(update_coord, started_at_ns);
+        runtime::daemon_update_check_loop(update_coord, started_at_ns);
     });
 
     let health_coord = coordinator.clone();
     let health_control = config.control_socket_path.clone();
     let health_trace = config.trace_socket_path.clone();
     let health_thread = std::thread::spawn(move || {
-        daemon_socket_health_check_loop(health_coord, health_control, health_trace);
+        runtime::daemon_socket_health_check_loop(health_coord, health_control, health_trace);
     });
 
     coordinator.wait_for_shutdown().await;
@@ -8028,938 +7425,14 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
         }
     }
 
-    remove_socket_if_exists(&config.trace_socket_path)?;
-    remove_socket_if_exists(&config.control_socket_path)?;
-    remove_pid_metadata(&config)?;
+    runtime::remove_socket_if_exists(&config.trace_socket_path)?;
+    runtime::remove_socket_if_exists(&config.control_socket_path)?;
+    runtime::remove_pid_metadata(&config)?;
 
     tracing::info!("daemon shutdown complete");
 
     Ok(())
 }
 
-fn checkpoint_control_timeout_uses_ci_or_test_budget() -> bool {
-    std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
-        || std::env::var_os("GITAI_TEST_DB_PATH").is_some()
-        || std::env::var_os("CI").is_some()
-}
-
-fn checkpoint_control_response_timeout(
-    request: &ControlRequest,
-    use_ci_or_test_budget: bool,
-) -> Duration {
-    match request {
-        // If the caller explicitly asked to wait for checkpoint completion, use
-        // the longer budget even in product mode because the request is
-        // intentionally synchronous.
-        ControlRequest::CheckpointRun { wait, .. } if wait.unwrap_or(false) => {
-            DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
-        }
-        // Queued checkpoint requests can block behind trace-ingest ordering. In
-        // CI/test we allow the longer budget so replay-heavy daemon tests don't
-        // tear down captured state mid-request. Product mode keeps the short
-        // control timeout for fire-and-forget checkpoint requests to preserve
-        // responsiveness.
-        ControlRequest::CheckpointRun { .. } if use_ci_or_test_budget => {
-            DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
-        }
-        ControlRequest::CheckpointRun { .. } => DAEMON_CONTROL_RESPONSE_TIMEOUT,
-        ControlRequest::SnapshotWatermarks { .. } => Duration::from_millis(500),
-        _ => DAEMON_CONTROL_RESPONSE_TIMEOUT,
-    }
-}
-
-fn control_request_response_timeout(request: &ControlRequest) -> Duration {
-    checkpoint_control_response_timeout(
-        request,
-        checkpoint_control_timeout_uses_ci_or_test_budget(),
-    )
-}
-
-#[cfg(not(windows))]
-fn local_socket_name<'a>(socket_path: &'a Path) -> Result<Name<'a>, GitAiError> {
-    socket_path
-        .to_fs_name::<GenericFilePath>()
-        .map_err(|e| GitAiError::Generic(format!("invalid daemon socket path: {}", e)))
-}
-
-pub fn open_local_socket_stream_with_timeout(
-    socket_path: &Path,
-    timeout: Duration,
-) -> Result<DaemonClientStream, GitAiError> {
-    #[cfg(windows)]
-    {
-        let stream = open_windows_named_pipe_client_with_timeout(socket_path, timeout)?;
-        Ok(DaemonClientStream::WindowsPipe(stream))
-    }
-
-    #[cfg(not(windows))]
-    {
-        ConnectOptions::new()
-            .name(local_socket_name(socket_path)?)
-            .wait_mode(ConnectWaitMode::Timeout(timeout))
-            .connect_sync()
-            .map_err(|e| {
-                GitAiError::Generic(format!(
-                    "timed out after {:?} connecting daemon socket {}: {}",
-                    timeout,
-                    socket_path.display(),
-                    e
-                ))
-            })
-    }
-}
-
-#[cfg(windows)]
-fn open_windows_named_pipe_client_with_timeout(
-    socket_path: &Path,
-    timeout: Duration,
-) -> Result<WindowsPipeClient, GitAiError> {
-    let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-    WindowsPipeClient::connect_ms(socket_path.as_os_str(), timeout_ms).map_err(|e| {
-        GitAiError::Generic(format!(
-            "timed out after {:?} connecting daemon socket {}: {}",
-            timeout,
-            socket_path.display(),
-            e
-        ))
-    })
-}
-
-fn set_daemon_client_stream_timeouts(
-    stream: &mut DaemonClientStream,
-    socket_path: &Path,
-    timeout: Duration,
-) -> Result<(), GitAiError> {
-    #[cfg(windows)]
-    {
-        let _ = socket_path;
-        match stream {
-            DaemonClientStream::WindowsPipe(pipe) => {
-                pipe.set_read_timeout(Some(timeout));
-                pipe.set_write_timeout(Some(timeout));
-                Ok(())
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        stream.set_recv_timeout(Some(timeout)).map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed to set daemon socket {} recv timeout: {}",
-                socket_path.display(),
-                e
-            ))
-        })?;
-        stream.set_send_timeout(Some(timeout)).map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed to set daemon socket {} send timeout: {}",
-                socket_path.display(),
-                e
-            ))
-        })
-    }
-}
-
-fn write_all_daemon_client_stream(
-    stream: &mut DaemonClientStream,
-    socket_path: &Path,
-    payload: &[u8],
-) -> Result<(), GitAiError> {
-    stream.write_all(payload).map_err(|e| {
-        GitAiError::Generic(format!(
-            "failed writing daemon request to {}: {}",
-            socket_path.display(),
-            e
-        ))
-    })?;
-    stream.flush().map_err(|e| {
-        GitAiError::Generic(format!(
-            "failed flushing daemon request to {}: {}",
-            socket_path.display(),
-            e
-        ))
-    })?;
-    Ok(())
-}
-
-fn read_daemon_client_line(
-    reader: &mut BufReader<DaemonClientStream>,
-    socket_path: &Path,
-) -> Result<String, GitAiError> {
-    let mut line = String::new();
-    let read = reader.read_line(&mut line).map_err(|e| {
-        GitAiError::Generic(format!(
-            "failed reading daemon response from {}: {}",
-            socket_path.display(),
-            e
-        ))
-    })?;
-    if read == 0 {
-        return Err(GitAiError::Generic(format!(
-            "daemon socket {} closed without a response",
-            socket_path.display()
-        )));
-    }
-    Ok(line)
-}
-
-#[cfg(windows)]
-fn send_control_request_with_timeouts_windows(
-    socket_path: &Path,
-    request: &ControlRequest,
-    connect_timeout: Duration,
-    response_timeout: Duration,
-) -> Result<ControlResponse, GitAiError> {
-    let mut stream = open_local_socket_stream_with_timeout(socket_path, connect_timeout)?;
-    set_daemon_client_stream_timeouts(&mut stream, socket_path, response_timeout)?;
-    let mut body = serde_json::to_vec(request)?;
-    body.push(b'\n');
-    write_all_daemon_client_stream(&mut stream, socket_path, &body)?;
-
-    let mut response_reader = BufReader::new(stream);
-    let line = read_daemon_client_line(&mut response_reader, socket_path)?;
-    if line.trim().is_empty() {
-        return Err(GitAiError::Generic(
-            "empty daemon control response".to_string(),
-        ));
-    }
-    serde_json::from_str(line.trim()).map_err(GitAiError::from)
-}
-
-#[cfg(not(windows))]
-fn send_control_request_with_timeouts_unix(
-    socket_path: &Path,
-    request: &ControlRequest,
-    connect_timeout: Duration,
-    response_timeout: Duration,
-) -> Result<ControlResponse, GitAiError> {
-    let mut stream = open_local_socket_stream_with_timeout(socket_path, connect_timeout)?;
-    set_daemon_client_stream_timeouts(&mut stream, socket_path, response_timeout)?;
-    let mut body = serde_json::to_vec(request)?;
-    body.push(b'\n');
-    write_all_daemon_client_stream(&mut stream, socket_path, &body)?;
-
-    let mut response_reader = BufReader::new(stream);
-    let line = read_daemon_client_line(&mut response_reader, socket_path)?;
-    if line.trim().is_empty() {
-        return Err(GitAiError::Generic(
-            "empty daemon control response".to_string(),
-        ));
-    }
-    serde_json::from_str(line.trim()).map_err(GitAiError::from)
-}
-
-pub fn local_socket_connects_with_timeout(
-    socket_path: &Path,
-    timeout: Duration,
-) -> Result<(), GitAiError> {
-    let _stream = open_local_socket_stream_with_timeout(socket_path, timeout)?;
-    Ok(())
-}
-
-pub fn send_control_request_with_timeout(
-    socket_path: &Path,
-    request: &ControlRequest,
-    timeout: Duration,
-) -> Result<ControlResponse, GitAiError> {
-    send_control_request_with_timeouts(socket_path, request, timeout, timeout)
-}
-
-fn send_control_request_with_timeouts(
-    socket_path: &Path,
-    request: &ControlRequest,
-    connect_timeout: Duration,
-    response_timeout: Duration,
-) -> Result<ControlResponse, GitAiError> {
-    #[cfg(windows)]
-    {
-        send_control_request_with_timeouts_windows(
-            socket_path,
-            request,
-            connect_timeout,
-            response_timeout,
-        )
-    }
-
-    #[cfg(not(windows))]
-    {
-        send_control_request_with_timeouts_unix(
-            socket_path,
-            request,
-            connect_timeout,
-            response_timeout,
-        )
-    }
-}
-
-pub fn send_control_request(
-    socket_path: &Path,
-    request: &ControlRequest,
-) -> Result<ControlResponse, GitAiError> {
-    send_control_request_with_timeouts(
-        socket_path,
-        request,
-        DAEMON_CONTROL_CONNECT_TIMEOUT,
-        control_request_response_timeout(request),
-    )
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serial_test::serial;
-    use std::ffi::OsString;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var_os(key);
-            // SAFETY: these tests are serialized via #[serial], so mutating the
-            // process environment is isolated for the duration of each test.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let original = std::env::var_os(key);
-            // SAFETY: these tests are serialized via #[serial], so mutating the
-            // process environment is isolated for the duration of each test.
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => {
-                    // SAFETY: these tests are serialized via #[serial], so restoring
-                    // process environment state is isolated for the duration of each test.
-                    unsafe {
-                        std::env::set_var(self.key, value);
-                    }
-                }
-                None => {
-                    // SAFETY: these tests are serialized via #[serial], so restoring
-                    // process environment state is isolated for the duration of each test.
-                    unsafe {
-                        std::env::remove_var(self.key);
-                    }
-                }
-            }
-        }
-    }
-
-    fn queued_checkpoint_request() -> ControlRequest {
-        ControlRequest::CheckpointRun {
-            request: Box::new(CheckpointRunRequest::Captured(
-                CapturedCheckpointRunRequest {
-                    repo_working_dir: "/tmp/repo".to_string(),
-                    capture_id: "capture".to_string(),
-                },
-            )),
-            wait: Some(false),
-        }
-    }
-
-    fn waited_checkpoint_request() -> ControlRequest {
-        ControlRequest::CheckpointRun {
-            request: Box::new(CheckpointRunRequest::Live(Box::new(
-                LiveCheckpointRunRequest {
-                    repo_working_dir: "/tmp/repo".to_string(),
-                    kind: Some("human".to_string()),
-                    author: Some("test".to_string()),
-                    quiet: Some(true),
-                    is_pre_commit: Some(false),
-                    agent_run_result: None,
-                },
-            ))),
-            wait: Some(true),
-        }
-    }
-
-    #[test]
-    fn checkpoint_requests_use_long_timeout_in_ci_or_test_env() {
-        assert_eq!(
-            checkpoint_control_response_timeout(&queued_checkpoint_request(), true),
-            DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
-        );
-        assert_eq!(
-            checkpoint_control_response_timeout(&waited_checkpoint_request(), true),
-            DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
-        );
-    }
-
-    #[test]
-    fn queued_checkpoint_requests_use_short_timeout_in_product_env() {
-        assert_eq!(
-            checkpoint_control_response_timeout(&queued_checkpoint_request(), false),
-            DAEMON_CONTROL_RESPONSE_TIMEOUT
-        );
-    }
-
-    #[test]
-    fn waited_checkpoint_requests_use_long_timeout_in_product_env() {
-        assert_eq!(
-            checkpoint_control_response_timeout(&waited_checkpoint_request(), false),
-            DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn checkpoint_control_timeout_uses_ci_env_var() {
-        let _unset_test = EnvVarGuard::unset("GIT_AI_TEST_DB_PATH");
-        let _unset_legacy_test = EnvVarGuard::unset("GITAI_TEST_DB_PATH");
-        let _set_ci = EnvVarGuard::set("CI", "true");
-
-        assert!(checkpoint_control_timeout_uses_ci_or_test_budget());
-    }
-
-    #[test]
-    #[serial]
-    fn checkpoint_control_timeout_uses_test_db_env_var() {
-        let _unset_ci = EnvVarGuard::unset("CI");
-        let _unset_legacy_test = EnvVarGuard::unset("GITAI_TEST_DB_PATH");
-        let _set_test = EnvVarGuard::set("GIT_AI_TEST_DB_PATH", "/tmp/git-ai-test.db");
-
-        assert!(checkpoint_control_timeout_uses_ci_or_test_budget());
-    }
-
-    #[test]
-    #[serial]
-    fn checkpoint_control_timeout_false_when_no_ci_or_test_vars() {
-        let _unset_ci = EnvVarGuard::unset("CI");
-        let _unset_test = EnvVarGuard::unset("GIT_AI_TEST_DB_PATH");
-        let _unset_legacy_test = EnvVarGuard::unset("GITAI_TEST_DB_PATH");
-
-        assert!(!checkpoint_control_timeout_uses_ci_or_test_budget());
-    }
-
-    #[test]
-    fn normalize_commit_carryover_snapshot_reuses_committed_blob_for_crlf_only_diff() {
-        let carryover = HashMap::from([(
-            "example.txt".to_string(),
-            "line 1\r\nline 2\r\n".to_string(),
-        )]);
-        let committed =
-            HashMap::from([("example.txt".to_string(), "line 1\nline 2\n".to_string())]);
-
-        let normalized =
-            normalize_commit_carryover_snapshot(Some(&carryover), Some(&committed)).unwrap();
-
-        assert_eq!(normalized.get("example.txt"), committed.get("example.txt"));
-    }
-
-    #[test]
-    fn compute_watermarks_uses_symlink_metadata_not_target_mtime() {
-        // Verify that compute_watermarks_from_stat uses lstat (symlink's own mtime)
-        // not stat (target file's mtime), consistent with snapshot's symlink_metadata.
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create a target file
-        let target = dir.join("target.txt");
-        std::fs::write(&target, b"hello").unwrap();
-
-        // Create a symlink pointing to the target
-        let link = dir.join("link.txt");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&target, &link).unwrap();
-
-        // Watermark the symlink
-        let wm = compute_watermarks_from_stat(dir.to_str().unwrap(), &["link.txt".to_string()]);
-
-        // The watermark should match symlink_metadata mtime, not target metadata mtime.
-        let symlink_meta = std::fs::symlink_metadata(&link).unwrap();
-        let target_meta = std::fs::metadata(&link).unwrap(); // follows symlink
-
-        let symlink_mtime = symlink_meta
-            .modified()
-            .unwrap()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let target_mtime = target_meta
-            .modified()
-            .unwrap()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-
-        let recorded = *wm.get("link.txt").unwrap();
-
-        assert_eq!(
-            recorded, symlink_mtime,
-            "watermark should match lstat mtime of the symlink itself"
-        );
-        // This assertion documents the intent: if symlink and target mtimes differ,
-        // the watermark must track the symlink, not the target.
-        let _ = target_mtime; // used only as documentation; may equal symlink_mtime on some FS
-    }
-
-    #[test]
-    fn normalize_commit_carryover_snapshot_preserves_real_post_commit_edits() {
-        let carryover = HashMap::from([(
-            "example.txt".to_string(),
-            "line 1\r\nline 2\r\nextra line\r\n".to_string(),
-        )]);
-        let committed =
-            HashMap::from([("example.txt".to_string(), "line 1\nline 2\n".to_string())]);
-
-        let normalized =
-            normalize_commit_carryover_snapshot(Some(&carryover), Some(&committed)).unwrap();
-
-        assert_eq!(normalized.get("example.txt"), carryover.get("example.txt"));
-    }
-
-    #[test]
-    fn recent_working_log_snapshot_preserves_humans_on_restore() {
-        use crate::authorship::attribution_tracker::LineAttribution;
-        use crate::authorship::authorship_log::HumanRecord;
-        use crate::git::test_utils::TmpRepo;
-        use std::collections::BTreeMap;
-
-        let test_repo = TmpRepo::new().expect("Failed to create test repo");
-        let repo = test_repo.gitai_repo();
-
-        // Create a snapshot with KnownHuman attributions
-        let h_hash = "h_abc123";
-        let human_record = HumanRecord {
-            author: "Test User <test@example.com>".to_string(),
-        };
-
-        let file_path = "test.txt";
-        let line_attributions = vec![LineAttribution {
-            start_line: 1,
-            end_line: 1,
-            author_id: h_hash.to_string(),
-            overrode: None,
-        }];
-
-        let mut humans = BTreeMap::new();
-        humans.insert(h_hash.to_string(), human_record.clone());
-
-        let snapshot = RecentWorkingLogSnapshot {
-            files: HashMap::from([(file_path.to_string(), line_attributions.clone())]),
-            prompts: HashMap::new(),
-            file_contents: HashMap::from([(file_path.to_string(), "test line\n".to_string())]),
-            humans: humans.clone(),
-        };
-
-        // Restore the snapshot
-        let base_commit = "HEAD";
-        let restored = restore_recent_working_log_snapshot(repo, base_commit, &snapshot).unwrap();
-        assert!(restored, "Snapshot should be restored");
-
-        // Read back the INITIAL file and verify humans are present
-        let working_log = repo
-            .storage
-            .working_log_for_base_commit(base_commit)
-            .unwrap();
-        let initial = working_log.read_initial_attributions();
-
-        // Verify humans were restored
-        assert_eq!(
-            initial.humans.len(),
-            1,
-            "Should have one human record after restore"
-        );
-        assert_eq!(
-            initial.humans.get(h_hash),
-            Some(&human_record),
-            "Human record should match"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Readonly command ingress fast-path tests
-    //
-    // These tests verify that prepare_trace_payload_for_ingest returns false
-    // (do-not-enqueue) for read-only commands and true for mutating ones, and
-    // that the queued_trace_payloads counter is not incremented for read-only
-    // events.
-    //
-    // ActorDaemonCoordinator::new() spawns Tokio tasks internally, so all
-    // tests that construct one must run inside a Tokio runtime.
-    // -----------------------------------------------------------------------
-
-    fn make_start_payload(argv: &[&str]) -> Value {
-        serde_json::json!({
-            "event": "start",
-            "sid": "20260411T120000.000000-Psid1",
-            "argv": argv,
-        })
-    }
-
-    fn make_atexit_payload(sid: &str) -> Value {
-        serde_json::json!({
-            "event": "atexit",
-            "sid": sid,
-            "code": 0,
-        })
-    }
-
-    #[tokio::test]
-    async fn readonly_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&["git", "status", "--short"]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "status start event should not be enqueued (readonly)"
-        );
-        assert_eq!(
-            coord.queued_trace_payloads.load(Ordering::Relaxed),
-            0,
-            "queued_trace_payloads should stay 0 for readonly start event"
-        );
-        // Readonly events must NOT receive an ingest sequence number
-        assert!(
-            payload.get(TRACE_INGEST_SEQ_FIELD).is_none(),
-            "readonly start event must not receive an ingest sequence number"
-        );
-    }
-
-    #[tokio::test]
-    async fn stash_list_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "-c",
-            "core.fsmonitor=false",
-            "--no-pager",
-            "stash",
-            "list",
-            "--pretty=format:%gd%x00%H%x00%ct%x00%s",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "stash list start event should not be enqueued (readonly invocation)"
-        );
-        assert!(
-            payload.get(TRACE_INGEST_SEQ_FIELD).is_none(),
-            "stash list start event must not receive an ingest sequence number"
-        );
-    }
-
-    #[tokio::test]
-    async fn worktree_list_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "--no-pager",
-            "--no-optional-locks",
-            "worktree",
-            "list",
-            "--porcelain",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "worktree list start event should not be enqueued (readonly invocation)"
-        );
-        assert!(
-            payload.get(TRACE_INGEST_SEQ_FIELD).is_none(),
-            "worktree list start event must not receive an ingest sequence number"
-        );
-    }
-
-    #[tokio::test]
-    async fn diff_numstat_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "-c",
-            "core.fsmonitor=false",
-            "--no-pager",
-            "diff",
-            "--numstat",
-            "--no-renames",
-            "HEAD",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "diff --numstat start event should not be enqueued"
-        );
-    }
-
-    #[tokio::test]
-    async fn for_each_ref_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "--no-pager",
-            "for-each-ref",
-            "refs/heads/**/*",
-            "refs/remotes/**/*",
-            "--format",
-            "%(HEAD)%00%(objectname)",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "for-each-ref start event should not be enqueued"
-        );
-    }
-
-    #[tokio::test]
-    async fn cat_file_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "--no-optional-locks",
-            "cat-file",
-            "--batch-check=%(objectname)",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            !should_enqueue,
-            "cat-file start event should not be enqueued"
-        );
-    }
-
-    #[tokio::test]
-    async fn show_commit_start_event_is_not_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&[
-            "git",
-            "--no-optional-locks",
-            "show",
-            "--no-patch",
-            "--format=%H%x00%B%x00%at",
-            "07270e1489439d6b36fcb2a4198d2fb68e37727c",
-        ]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(!should_enqueue, "show start event should not be enqueued");
-    }
-
-    #[tokio::test]
-    async fn mutating_commit_start_event_is_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&["git", "commit", "-m", "test commit"]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            should_enqueue,
-            "commit start event should be enqueued (mutating)"
-        );
-        assert!(
-            payload.get(TRACE_INGEST_SEQ_FIELD).is_some(),
-            "mutating event must receive an ingest sequence number"
-        );
-    }
-
-    #[tokio::test]
-    async fn mutating_stash_pop_start_event_is_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&["git", "stash", "pop"]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            should_enqueue,
-            "stash pop start event should be enqueued (mutating)"
-        );
-    }
-
-    #[tokio::test]
-    async fn mutating_worktree_add_start_event_is_enqueued() {
-        let coord = ActorDaemonCoordinator::new();
-        let mut payload = make_start_payload(&["git", "worktree", "add", "/tmp/branch", "branch"]);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-        assert!(
-            should_enqueue,
-            "worktree add start event should be enqueued (mutating)"
-        );
-    }
-
-    #[tokio::test]
-    async fn readonly_atexit_event_is_not_enqueued_after_readonly_start() {
-        let coord = ActorDaemonCoordinator::new();
-        let sid = "20260411T120000.000000-Psid1";
-
-        // Process start event first — marks root as read-only
-        let mut start = make_start_payload(&["git", "status"]);
-        // Override sid to match
-        start["sid"] = serde_json::json!(sid);
-        coord.prepare_trace_payload_for_ingest(&mut start);
-
-        // atexit for same root should also be skipped
-        let mut atexit = make_atexit_payload(sid);
-        let should_enqueue = coord.prepare_trace_payload_for_ingest(&mut atexit);
-        assert!(
-            !should_enqueue,
-            "atexit for readonly root should not be enqueued"
-        );
-    }
-
-    /// Performance invariant: 10,000 readonly start events must be processed
-    /// (and discarded) in under 200ms.  This guards against regressions that
-    /// re-introduce the >1-minute backlog seen with Zed's ~40 invocations/sec.
-    #[tokio::test]
-    async fn readonly_flood_1000_events_processed_in_under_200ms() {
-        let coord = ActorDaemonCoordinator::new();
-        let start = std::time::Instant::now();
-        for i in 0..1000u64 {
-            let sid = format!("20260411T120000.000000-P{:016x}", i);
-            let mut payload = serde_json::json!({
-                "event": "start",
-                "sid": sid,
-                "argv": ["git", "-c", "core.fsmonitor=false", "--no-pager",
-                         "--no-optional-locks", "status", "--porcelain=v1",
-                         "--untracked-files=all", "--no-renames", "-z", "."],
-            });
-            let enqueue = coord.prepare_trace_payload_for_ingest(&mut payload);
-            assert!(!enqueue, "status must never be enqueued");
-        }
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed.as_millis() < 200,
-            "processing 1000 readonly events took {}ms (> 200ms budget)",
-            elapsed.as_millis()
-        );
-        assert_eq!(
-            coord.queued_trace_payloads.load(Ordering::Relaxed),
-            0,
-            "no readonly events should reach the ingest queue"
-        );
-    }
-
-    /// Ensure a stash-list flood (3208 real-world invocations from Zed)
-    /// leaves the ingest queue empty.
-    #[tokio::test]
-    async fn stash_list_flood_leaves_queue_empty() {
-        let coord = ActorDaemonCoordinator::new();
-        for i in 0..1000u64 {
-            let sid = format!("20260411T120000.000000-P{:016x}", i);
-            let mut payload = serde_json::json!({
-                "event": "start",
-                "sid": sid,
-                "argv": ["git", "-c", "core.fsmonitor=false", "--no-pager",
-                         "stash", "list", "--pretty=format:%gd%x00%H%x00%ct%x00%s"],
-            });
-            let _ = coord.prepare_trace_payload_for_ingest(&mut payload);
-        }
-        assert_eq!(
-            coord.queued_trace_payloads.load(Ordering::Relaxed),
-            0,
-            "stash list flood must not fill the ingest queue"
-        );
-    }
-
-    /// Ensure a worktree-list flood leaves the ingest queue empty.
-    #[tokio::test]
-    async fn worktree_list_flood_leaves_queue_empty() {
-        let coord = ActorDaemonCoordinator::new();
-        for i in 0..1000u64 {
-            let sid = format!("20260411T120000.000000-P{:016x}", i);
-            let mut payload = serde_json::json!({
-                "event": "start",
-                "sid": sid,
-                "argv": ["git", "--no-pager", "--no-optional-locks",
-                         "worktree", "list", "--porcelain"],
-            });
-            let _ = coord.prepare_trace_payload_for_ingest(&mut payload);
-        }
-        assert_eq!(
-            coord.queued_trace_payloads.load(Ordering::Relaxed),
-            0,
-            "worktree list flood must not fill the ingest queue"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // OnceLock / shutdown / atomic-ordering tests
-    // -----------------------------------------------------------------------
-
-    /// `enqueue_trace_payload` must return an error when the ingest worker has
-    /// not been started yet.  This is the "no-sender" fast-fail path and is
-    /// unchanged by the OnceLock refactor.
-    #[tokio::test]
-    async fn enqueue_before_worker_start_returns_error() {
-        let coord = ActorDaemonCoordinator::new();
-        // Worker never started → OnceLock is empty → enqueue must fail
-        let payload = serde_json::json!({
-            "event": "start",
-            "sid": "20260411T120000.000000-Ptest0001",
-            "__git_ai_ingest_seq": 1_u64,
-            "argv": ["git", "commit", "-m", "test"],
-        });
-        assert!(
-            coord.enqueue_trace_payload(payload).is_err(),
-            "enqueue before worker start must return an error"
-        );
-    }
-
-    /// After `request_shutdown()`, `is_shutting_down()` returns true and the
-    /// coordinator stays in a consistent state.  The ingest worker (started
-    /// via `start_trace_ingest_worker`) must exit cleanly even when the sender
-    /// is no longer dropped by `request_shutdown` (OnceLock never drops it).
-    #[tokio::test]
-    async fn request_shutdown_is_idempotent_and_consistent() {
-        let coord = Arc::new(ActorDaemonCoordinator::new());
-        coord.start_trace_ingest_worker().unwrap();
-        assert!(!coord.is_shutting_down());
-        coord.request_shutdown();
-        assert!(coord.is_shutting_down());
-        // Second call must not panic.
-        coord.request_shutdown();
-        assert!(coord.is_shutting_down());
-        // Allow tokio to run the ingest worker's shutdown select arm.
-        tokio::task::yield_now().await;
-    }
-
-    /// Concurrent enqueues from multiple threads must never deadlock or
-    /// corrupt the accounting counter.
-    #[tokio::test]
-    async fn concurrent_mutating_enqueues_do_not_deadlock() {
-        use std::sync::Arc;
-        let coord = Arc::new(ActorDaemonCoordinator::new());
-        coord.start_trace_ingest_worker().unwrap();
-
-        const TASKS: usize = 8;
-        const PER_TASK: usize = 20;
-
-        // Use prepare_trace_payload_for_ingest (which allocates seq numbers
-        // and enqueues) from multiple tasks concurrently.
-        let mut handles = Vec::with_capacity(TASKS);
-        for task_id in 0..TASKS {
-            let c = coord.clone();
-            handles.push(tokio::spawn(async move {
-                for i in 0..PER_TASK {
-                    let sid = format!("20260411T120000.000000-P{:08x}", task_id * 1000 + i);
-                    let mut payload = serde_json::json!({
-                        "event": "start",
-                        "sid": sid,
-                        "argv": ["git", "commit", "-m", "msg"],
-                    });
-                    // This calls enqueue_trace_payload internally for mutating cmds.
-                    let _ = c.prepare_trace_payload_for_ingest(&mut payload);
-                }
-            }));
-        }
-        for h in handles {
-            h.await.expect("task must not panic");
-        }
-        // Give the ingest worker time to drain the queue.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        while coord.queued_trace_payloads.load(Ordering::Acquire) > 0 {
-            if tokio::time::Instant::now() >= deadline {
-                break; // don't fail the test on CI slowness; just stop waiting
-            }
-            tokio::task::yield_now().await;
-        }
-        coord.request_shutdown();
-    }
-}
+mod tests;
