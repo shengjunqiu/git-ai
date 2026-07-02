@@ -1,0 +1,48 @@
+src/commands/checkpoint_agent/agent_presets/droid.rs
+  5fe9d8bd77f1631d 1-408
+src/commands/checkpoint_agent/agent_presets/windsurf.rs
+  5fe9d8bd77f1631d 1-316
+src/commands/checkpoint_agent/agent_presets/claude.rs
+  5fe9d8bd77f1631d 1-430
+src/commands/checkpoint_agent/agent_presets/continue_cli.rs
+  5fe9d8bd77f1631d 1-280
+src/commands/checkpoint_agent/agent_presets.rs
+  5fe9d8bd77f1631d 159-179
+src/mdm/ensure_git_symlinks.rs
+  5fe9d8bd77f1631d 3-5,20-137,212-332
+src/commands/checkpoint_agent/agent_presets/codex.rs
+  5fe9d8bd77f1631d 1-439
+src/commands/checkpoint_agent/agent_presets/cursor.rs
+  5fe9d8bd77f1631d 1-404
+src/commands/checkpoint_agent/agent_presets/firebender.rs
+  5fe9d8bd77f1631d 1-256
+src/commands/checkpoint_agent/agent_presets/github_copilot.rs
+  5fe9d8bd77f1631d 1-1477
+src/mdm/utils.rs
+  5fe9d8bd77f1631d 12-14
+src/commands/checkpoint_agent/agent_presets/gemini.rs
+  5fe9d8bd77f1631d 1-267
+src/commands/checkpoint_agent/agent_presets/ai_tab.rs
+  5fe9d8bd77f1631d 1-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "d9e813b32405f3c2726f864f8507cac42cce79b4",
+  "prompts": {
+    "5fe9d8bd77f1631d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f21c3-a5c1-7a50-ac31-b6daabfe19da",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 4649,
+      "total_deletions": 4370,
+      "accepted_lines": 4641,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/7abbefb118369b4741946d5a7590ebfcf4222351402b05c3146c4f7f7fb8d35d"
+    }
+  }
+}
