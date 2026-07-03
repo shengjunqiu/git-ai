@@ -295,6 +295,32 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise \
 
 生产环境建议不要让用户直接访问 `http://server-ip:8080`，而是使用 HTTPS 域名。
 
+如果暂时没有域名，可以先使用 HTTP 地址跑通：
+
+```env
+BASE_URL=http://117.147.213.234:38080
+```
+
+客户端也使用同一个外部地址：
+
+```bash
+git-ai config set api_base_url http://117.147.213.234:38080
+git-ai login --server http://117.147.213.234:38080
+```
+
+没有域名也可以做 HTTPS，但有两个限制：
+
+1. **公网可信 IP 证书**：需要证书机构支持 IP address certificate，并且通常要通过标准 ACME challenge 验证。实际部署一般要求公网 `80` 或 `443` 能到达你的反向代理；只有 `38080 -> 8080` 映射时通常不够方便。
+2. **自签证书**：可以给 IP 签自签证书，但浏览器和 `git-ai` 客户端默认不会信任它。每台客户端都要安装你的自签 CA 到系统信任库，否则登录和上传容易失败。
+
+因此生产建议仍然是让运维分配一个域名或子域名，例如：
+
+```text
+git-ai.company.com -> 117.147.213.234
+```
+
+然后开放 `443`，由 Caddy/Nginx 终止 HTTPS，再反向代理到本机 `8080`。
+
 ### Caddy 示例
 
 安装 Caddy 后，写入 `/etc/caddy/Caddyfile`：
