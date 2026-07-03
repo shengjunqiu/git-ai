@@ -57,6 +57,8 @@ docker --version
 docker compose version
 ```
 
+如果第二条命令失败，或执行 `docker compose up -d --build` 时出现 `unknown shorthand flag: 'd' in -d`，说明服务器当前只有 Docker Engine/CLI，没有可用的 Docker Compose v2 插件。先安装 Compose v2，或临时使用旧命令 `docker-compose`。
+
 防火墙建议：
 
 | 端口 | 是否公网开放 | 说明 |
@@ -98,6 +100,14 @@ BASE_URL=https://git-ai.example.com
 ```env
 BASE_URL=http://<server-ip>:8080
 ```
+
+如果没有域名，并且运维把服务器的 `8080` 映射成公网端口 `38080`，客户端实际访问地址应写公网地址：
+
+```env
+BASE_URL=http://117.147.213.234:38080
+```
+
+这里的 `BASE_URL` 必须是开发者浏览器和 CLI 能访问到的外部地址，因为 `git-ai login` 会用它生成 `/verify` 授权页面 URL。
 
 当前 `enterprise-server/docker-compose.yml` 是偏开发配置，Postgres 和 MinIO 默认密码写在 compose 文件里。正式生产建议改成部署包方式，或单独维护生产 compose 文件。
 
@@ -214,6 +224,20 @@ docker compose up -d api
 ```bash
 docker compose ps
 curl http://127.0.0.1:${API_PORT:-8080}/health
+```
+
+如果没有域名，但公网访问端口是 `38080`，`.env` 应设置：
+
+```env
+BASE_URL=http://117.147.213.234:38080
+API_PORT=8080
+```
+
+`API_PORT=8080` 表示服务在服务器本机监听 `8080`；运维层把外部 `38080` 转发到服务器 `8080`。如果没有运维层转发，而是希望 Docker 直接监听宿主机 `38080`，则改成：
+
+```env
+BASE_URL=http://117.147.213.234:38080
+API_PORT=38080
 ```
 
 ## 四、首次初始化用户和组织
@@ -562,11 +586,80 @@ sudo lsof -i :8080
 - 或修改 compose 里的宿主机端口映射，例如 Redis 改成 `6380:6379`。
 - 如果已有外部 Redis/Postgres，可以改 API 的 `REDIS_URL` / `DATABASE_URL` 指向外部服务。
 
-### 2. `No users found`
+如果报错是：
+
+```text
+Bind for 0.0.0.0:6379 failed: port is already allocated
+```
+
+优先推荐把 `enterprise-server/docker-compose.yml` 里的 Redis 宿主机端口映射删掉或注释掉：
+
+```yaml
+redis:
+  image: redis:7-alpine
+  # ports:
+  #   - "6379:6379"
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+```
+
+API 容器连接 Redis 用的是 Docker 内部服务名 `redis://redis:6379`，不依赖宿主机暴露 `6379`。删掉 `ports` 后，容器内通信仍然正常，也避免和服务器已有 Redis 冲突。
+
+修改后执行：
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+如果你确实需要从宿主机访问这个 compose 里的 Redis，则改成不冲突的宿主机端口：
+
+```yaml
+ports:
+  - "6380:6379"
+```
+
+### 2. `unknown shorthand flag: 'd' in -d`
+
+说明服务器没有可用的 Docker Compose v2 插件，`docker compose ...` 没有被正确识别。
+
+先检查：
+
+```bash
+docker compose version
+docker-compose version
+```
+
+如果 `docker-compose version` 可用，可以临时把命令改成：
+
+```bash
+docker-compose up -d --build
+docker-compose ps
+docker-compose logs -f api
+```
+
+更推荐安装 Compose v2。Ubuntu/Debian 常见命令：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y docker-compose-plugin
+docker compose version
+```
+
+CentOS/RHEL 系常见做法：
+
+```bash
+sudo yum install -y docker-compose-plugin
+docker compose version
+```
+
+如果系统源没有 `docker-compose-plugin`，需要按 Docker 官方仓库方式安装 Docker Engine 和 Compose plugin。
+
+### 3. `No users found`
 
 说明还没有初始化用户。执行“首次初始化用户和组织”里的 SQL。
 
-### 3. Dashboard 空白或没有新提交数据
+### 4. Dashboard 空白或没有新提交数据
 
 先确认本地 commit 有 note：
 
@@ -586,7 +679,7 @@ git-ai report upload . --range HEAD^..HEAD --server https://git-ai.example.com
 docker compose logs -f api
 ```
 
-### 4. CAS 上传报 `NoSuchBucket`
+### 5. CAS 上传报 `NoSuchBucket`
 
 说明 MinIO bucket 没初始化：
 
@@ -601,11 +694,11 @@ docker compose restart api
 docker compose run --rm minio-init
 ```
 
-### 5. 登录后浏览器仍显示登录页
+### 6. 登录后浏览器仍显示登录页
 
 CLI 的 `git-ai login` 只保证本机 CLI 有 token。浏览器 dashboard 需要浏览器 cookie，或者在登录页输入 API key / Bearer token。
 
-### 6. `git-ai config set api_base_url` 报 unknown key
+### 7. `git-ai config set api_base_url` 报 unknown key
 
 说明本机 `git-ai` 版本太旧。先更新本地客户端：
 
@@ -641,4 +734,3 @@ git-ai --version
 - dashboard 中能看到对应项目、开发者和 AI 行数。
 - Postgres 和 MinIO 有备份策略。
 - 公网只开放 80/443，内部组件端口不暴露公网。
-
