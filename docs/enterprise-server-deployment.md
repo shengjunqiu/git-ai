@@ -291,6 +291,22 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise \
   -c "SELECT email, name FROM users ORDER BY created_at;"
 ```
 
+如果执行上面的多行 SQL 时终端一直显示 `>`，说明 shell 还在等待 heredoc 结束。处理方式：
+
+1. 按 `Ctrl+C` 取消当前输入。
+2. 重新执行时，确保最后一行是单独的 `SQL`，前面没有空格，也不要复制提示符里的 `>`。
+3. 如果仍然容易贴错，可以改用交互式 `psql`：
+
+   ```bash
+   docker compose exec postgres psql -U gitai -d gitai_enterprise
+   ```
+
+   进入 `psql` 后粘贴 SQL 内容，确认最后有分号 `;`，执行完成后输入：
+
+   ```sql
+   \q
+   ```
+
 ## 五、配置 HTTPS 反向代理
 
 生产环境建议不要让用户直接访问 `http://server-ip:8080`，而是使用 HTTPS 域名。
