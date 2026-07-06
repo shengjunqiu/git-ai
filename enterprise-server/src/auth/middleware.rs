@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
 use crate::routes::AppState;
+use crate::services::sessions;
 
 /// Extract auth identity from request (Bearer token or X-API-Key)
 #[derive(Debug, Clone)]
@@ -261,6 +262,33 @@ async fn extract_auth_identity(
     }
 
     Err(AppError::Unauthorized("Authentication required".into()))
+}
+
+/// Extract the browser web session user without changing API Bearer/API key auth semantics.
+pub async fn extract_web_session_user(
+    parts: &Parts,
+    pool: &sqlx::PgPool,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(session_token) = cookie_value(parts, sessions::WEB_SESSION_COOKIE) else {
+        return Ok(None);
+    };
+
+    sessions::load_web_session_user(pool, &session_token).await
+}
+
+fn cookie_value(parts: &Parts, name: &str) -> Option<String> {
+    let cookie_header = parts.headers.get("Cookie")?;
+    let cookie_str = cookie_header.to_str().ok()?;
+
+    cookie_str.split(';').find_map(|cookie| {
+        let cookie = cookie.trim();
+        let (cookie_name, cookie_value) = cookie.split_once('=')?;
+        if cookie_name == name {
+            Some(cookie_value.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// Middleware to add request ID for tracing

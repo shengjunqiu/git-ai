@@ -239,6 +239,8 @@ pub fn handle_git(args: &[String]) {
             parsed_args = resolved;
         }
 
+        init_daemon_telemetry_for_hook_command(parsed_args.command.as_deref());
+
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
         let pre_command_duration = pre_command_start.elapsed();
@@ -286,6 +288,38 @@ pub fn handle_git(args: &[String]) {
         )
     };
     exit_with_status(exit_status);
+}
+
+fn init_daemon_telemetry_for_hook_command(command: Option<&str>) {
+    if !hook_command_may_emit_telemetry(command) || crate::daemon::daemon_process_active() {
+        return;
+    }
+
+    // Plain wrapper hooks emit metrics through observability; without this handle they are dropped.
+    if let crate::daemon::telemetry_handle::DaemonTelemetryInitResult::Failed(e) =
+        crate::daemon::telemetry_handle::init_daemon_telemetry_handle()
+    {
+        tracing::debug!("wrapper: daemon telemetry init failed: {}", e);
+    }
+}
+
+fn hook_command_may_emit_telemetry(command: Option<&str>) -> bool {
+    matches!(
+        command,
+        Some(
+            "commit"
+                | "merge"
+                | "rebase"
+                | "cherry-pick"
+                | "push"
+                | "pull"
+                | "stash"
+                | "checkout"
+                | "switch"
+                | "reset"
+                | "update-ref"
+        )
+    )
 }
 
 /// Handle alias invocations
@@ -1023,10 +1057,47 @@ fn in_shell_completion_context() -> bool {
 #[cfg(test)]
 mod tests {
     use super::parse_alias_tokens;
-    use super::{parse_git_cli_args, resolve_child_git_hooks_path_override};
+    use super::{
+        hook_command_may_emit_telemetry, parse_git_cli_args, resolve_child_git_hooks_path_override,
+    };
     use crate::git::find_repository_in_path;
     use std::process::Command;
     use tempfile::tempdir;
+
+    #[test]
+    fn hook_telemetry_initializes_for_commit_and_other_write_hooks() {
+        for command in [
+            "commit",
+            "merge",
+            "rebase",
+            "cherry-pick",
+            "push",
+            "pull",
+            "stash",
+            "checkout",
+            "switch",
+            "reset",
+            "update-ref",
+        ] {
+            assert!(
+                hook_command_may_emit_telemetry(Some(command)),
+                "{command} should initialize daemon telemetry before hooks"
+            );
+        }
+    }
+
+    #[test]
+    fn hook_telemetry_skips_read_only_commands() {
+        for command in [
+            None,
+            Some("status"),
+            Some("log"),
+            Some("diff"),
+            Some("branch"),
+        ] {
+            assert!(!hook_command_may_emit_telemetry(command));
+        }
+    }
 
     #[test]
     fn parse_alias_tokens_empty_string() {

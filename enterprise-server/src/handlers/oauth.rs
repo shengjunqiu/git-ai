@@ -5,7 +5,7 @@ use chrono::{Duration, Utc};
 
 use crate::auth::jwt;
 use crate::error::AppError;
-use crate::models::user::{DeviceCodeResponse, OAuthError, TokenResponse};
+use crate::models::user::{DeviceCodeResponse, OAuthError};
 use crate::models::auth::TokenRequest;
 use crate::routes::AppState;
 
@@ -67,77 +67,9 @@ pub async fn token(
     }
 }
 
-/// Helper: get user info and generate token response
-async fn generate_token_response(state: &AppState, user_id: uuid::Uuid) -> Result<axum::response::Response, AppError> {
-    let user_row: (String, String, Option<uuid::Uuid>) = sqlx::query_as(
-        "SELECT email, name, personal_org_id FROM users WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-
-    // Get org memberships
-    let org_rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT org_id, role FROM org_members WHERE user_id = $1"
-    )
-    .bind(user_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-
-    let mut orgs = Vec::new();
-    for (org_id, role) in org_rows {
-        let org_name_row: Option<(String, String)> = sqlx::query_as(
-            "SELECT name, slug FROM organizations WHERE id = $1"
-        )
-        .bind(org_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
-
-        if let Some((org_name, org_slug)) = org_name_row {
-            orgs.push(crate::models::user::JwtOrg {
-                org_id: org_id.to_string(),
-                org_name,
-                org_slug,
-                role,
-            });
-        }
-    }
-
-    let access_token = jwt::create_access_token(
-        &user_id,
-        &user_row.0,
-        &user_row.1,
-        user_row.2.as_ref(),
-        orgs,
-        &state.config,
-    )?;
-
-    let refresh_token_str = jwt::generate_refresh_token();
-    let refresh_token_hash = jwt::hash_token(&refresh_token_str);
-    let refresh_expires_at = Utc::now() + Duration::seconds(7776000);
-
-    sqlx::query(
-        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)"
-    )
-    .bind(user_id)
-    .bind(&refresh_token_hash)
-    .bind(refresh_expires_at)
-    .execute(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-
-    let response = TokenResponse {
-        access_token,
-        token_type: "Bearer".into(),
-        expires_in: 3600,
-        refresh_token: refresh_token_str,
-        refresh_expires_in: 7776000,
-    };
-
-    Ok(Json(serde_json::to_value(response).unwrap()).into_response())
+async fn token_response(state: &AppState, user_id: uuid::Uuid) -> Result<axum::response::Response, AppError> {
+    let response = crate::services::tokens::generate_token_response(state, user_id).await?;
+    Ok(Json(response).into_response())
 }
 
 async fn handle_device_code_grant(
@@ -182,7 +114,7 @@ async fn handle_device_code_grant(
         .await
         .ok();
 
-    generate_token_response(state, user_id).await
+    token_response(state, user_id).await
 }
 
 async fn handle_refresh_token_grant(
@@ -220,7 +152,7 @@ async fn handle_refresh_token_grant(
         .await
         .map_err(|e| AppError::Database(e))?;
 
-    generate_token_response(state, user_id).await
+    token_response(state, user_id).await
 }
 
 async fn handle_install_nonce_grant(
@@ -257,5 +189,5 @@ async fn handle_install_nonce_grant(
         .await
         .map_err(|e| AppError::Database(e))?;
 
-    generate_token_response(state, user_id).await
+    token_response(state, user_id).await
 }

@@ -8,6 +8,10 @@ pub struct User {
     pub email: String,
     pub name: String,
     pub personal_org_id: Option<Uuid>,
+    pub password_hash: Option<String>,
+    pub email_verified_at: Option<DateTime<Utc>>,
+    pub default_org_id: Option<Uuid>,
+    pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -17,6 +21,15 @@ pub struct Organization {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationDomain {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub domain: String,
+    pub verified: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -50,6 +63,30 @@ pub struct ApiKey {
     pub expires_at: Option<DateTime<Utc>>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSession {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub session_token_hash: String,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationCode {
+    pub code_hash: String,
+    pub user_id: Uuid,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub expires_at: DateTime<Utc>,
+    pub consumed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
