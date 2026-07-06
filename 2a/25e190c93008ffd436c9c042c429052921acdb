@@ -1,0 +1,36 @@
+enterprise-server/src/handlers/report.rs
+  0a05c27b91612fe9 36
+enterprise-server/src/services/mod.rs
+  0a05c27b91612fe9 5
+enterprise-server/src/services/tokens.rs
+  0a05c27b91612fe9 32-36,40
+enterprise-server/src/services/metrics.rs
+  0a05c27b91612fe9 7,51-53
+enterprise-server/src/db/migrations.rs
+  0a05c27b91612fe9 28
+enterprise-server/src/auth/middleware.rs
+  0a05c27b91612fe9 10,130,136-138,161,167-169,227-228,230,234-238,244-245
+enterprise-server/src/handlers/dashboard.rs
+  0a05c27b91612fe9 1218-1219,1882-1883
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "2a25e190c93008ffd436c9c042c429052921acdb",
+  "prompts": {
+    "0a05c27b91612fe9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3625-017b-79d0-9493-215900868426",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 41,
+      "total_deletions": 67,
+      "accepted_lines": 336,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/936a18989eb0442c2a6720d04c0a9556e7241941e14b11edc12160b0fda8e85a"
+    }
+  }
+}
