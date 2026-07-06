@@ -1,0 +1,24 @@
+enterprise-server/src/handlers/dashboard.rs
+  0a05c27b91612fe9 1350-1351,1353-1398,1400,1437,1439-1494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "a1b150ce3e6462044fe7ba79f5835ce2a62c1499",
+  "prompts": {
+    "0a05c27b91612fe9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3625-017b-79d0-9493-215900868426",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 188,
+      "total_deletions": 26,
+      "accepted_lines": 106,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/68342aa68601a5a10f22befe2e8d2bd50eab3cecd646d75bd30e1b2ca5e63fba"
+    }
+  }
+}
