@@ -921,6 +921,46 @@ cargo test authorization_code
 - 旧客户端不会立即不可用。
 - 新版 CLI 的登录链路没有 `/worker/oauth/device/code` 请求。
 
+### 阶段 4 执行记录（2026-07-06）
+
+状态：已完成。
+
+已完成改动：
+
+- 更新 `enterprise-server/src/handlers/cli_authorize.rs`：
+  - `GET /auth/cli/authorize` 校验 `client_id`、`response_type`、PKCE method、state 和本地 redirect URI。
+  - 未登录浏览器会跳转 `/auth/login?return_to=...`，登录后回到原授权 URL。
+  - 已登录浏览器展示当前邮箱、组织、部门和授权/取消按钮。
+  - `POST /auth/cli/authorize` 重新校验 authorize 参数，生成一次性 authorization code。
+  - authorization code 只以 hash 写入 `authorization_codes`，明文只通过本地 callback 返回。
+  - 用户取消时回调返回 `error=access_denied` 和原始 state。
+  - 授权成功记录 `cli.authorize` 审计事件。
+- 更新 `enterprise-server/src/models/auth.rs`：
+  - `TokenRequest` 增加 `code`、`code_verifier`、`redirect_uri`。
+  - 注释更新为 `/worker/oauth/token` 支持 4 种 grant type。
+- 更新 `enterprise-server/src/handlers/oauth.rs`：
+  - `/worker/oauth/token` 新增 `authorization_code` grant 分支。
+  - 校验 code、code verifier、redirect URI、client ID 和 PKCE S256 challenge。
+  - 使用条件更新消费 authorization code，避免同一个 code 被重复兑换。
+  - 兑换成功后复用现有 token 签发逻辑并记录 `token.exchange` 审计事件。
+  - 增加 PKCE challenge 和 base64url no padding 单元测试。
+- 更新 `enterprise-server/src/handlers/verify.rs`：
+  - 保留旧 `/verify` device flow 页面。
+  - 在代码注释中标记旧 device flow 只作为兼容路径保留。
+
+实现说明：
+
+- redirect URI 仅允许 `http://127.0.0.1:<port>/callback` 和 `http://localhost:<port>/callback`，不允许 query、fragment 或非本地 host。
+- authorization code 过期时间为 5 分钟，token 交换阶段要求 redirect URI 与授权阶段完全一致。
+- 旧 `/worker/oauth/device/code` 和 device code grant 未删除；阶段 4 只新增浏览器 session + authorization code 链路。
+- 本阶段没有改动 CLI 调用链路；新版 `git-ai login` 切换到 authorization code flow 留到阶段 5。
+
+验证结果：
+
+- `cd enterprise-server && cargo test` 通过。
+- 测试结果：27 passed, 0 failed。
+- 测试输出仍包含仓库既有 warning。
+
 ## 8. 阶段 5：CLI 登录改造
 
 ### Task 5.1：实现 PKCE 和 state 工具

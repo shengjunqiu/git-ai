@@ -6,7 +6,7 @@ pub struct DeviceCodeRequest {
     // Client sends empty JSON `{}`
 }
 
-/// POST /worker/oauth/token request body (3 grant types)
+/// POST /worker/oauth/token request body (4 grant types)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRequest {
     pub grant_type: String,
@@ -18,6 +18,12 @@ pub struct TokenRequest {
     pub install_nonce: Option<String>,
     #[serde(default)]
     pub client_id: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub code_verifier: Option<String>,
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 }
 
 /// Request to create an API key

@@ -2,6 +2,8 @@
 //!
 //! Provides the web page where users enter their user_code to authorize
 //! the device flow. This is the verification_uri shown in the terminal.
+//! Deprecated for new CLI login: browser session + authorization code is the
+//! primary flow. This handler remains for old client compatibility.
 
 use axum::extract::{Form, Query, State};
 use axum::response::{Html, IntoResponse};
