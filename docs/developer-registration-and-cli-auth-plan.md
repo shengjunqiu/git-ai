@@ -1411,6 +1411,42 @@ git-ai whoami
 - `git-ai whoami` 显示 Alice。
 - Alice 和 Bob 的 dashboard 数据分开。
 
+### 阶段 7 执行记录（2026-07-06）
+
+状态：服务端和 CLI 的无数据库单元/handler 覆盖已补齐；真实 Postgres、浏览器、Alice/Bob 上传和 dashboard 聚合验收留到手工 E2E。
+
+已完成改动：
+
+- 更新 `enterprise-server/src/services/registration.rs`：
+  - `email_domain()` 增加空 local part 和多 `@` 拒绝。
+  - 增加邮箱域名 lowercase、非法邮箱、首尾空白裁剪测试。
+- 更新 `enterprise-server/src/handlers/auth_api.rs`：
+  - 将 session cookie 拼装拆成可单测 helper。
+  - 增加注册 JSON/form 解析、登录 form 解析、必填字段拒绝、`safe_return_to()` 本地路径限制、cookie `Secure`/`HttpOnly`/`SameSite` 和 cookie 提取测试。
+- 更新 `enterprise-server/src/models/auth.rs`：
+  - 增加 `authorization_code` token request 反序列化测试。
+  - 增加旧 device grant 字段保持 optional 的兼容性测试。
+- 更新 `enterprise-server/src/handlers/oauth.rs`：
+  - 增加 PKCE 错误 verifier 不匹配测试。
+- 更新 `src/commands/login.rs`：
+  - 增加 `--help`、未知参数拒绝、OAuth 错误描述保留测试。
+  - 既有测试继续覆盖 `--server`、`--server=...`、`--no-browser`、state mismatch 和授权 URL 参数。
+
+验证结果：
+
+- `cd enterprise-server && cargo test` 通过：39 passed, 0 failed。
+- `cargo test login` 通过：10 passed, 0 failed。
+- `cargo test pkce` 通过：4 passed, 0 failed。
+- `cargo test auth::client` 通过：16 passed, 0 failed。
+- `cargo test callback` 首次在沙箱内因本地 listener 绑定 `127.0.0.1` 被拒绝；放开 loopback 后通过：4 passed, 0 failed。
+- `cargo test auth` 放开 loopback 后通过，包括 lib、integration 和 notes sync 匹配用例。
+- `task build` 通过。
+
+未自动化项：
+
+- Web session 创建/读取/过期/撤销、authorization code 一次性消费、部门归属校验依赖真实 Postgres 数据和 migration 后 schema，当前阶段记录为数据库集成/手工 E2E 验收项。
+- Alice/Bob 注册、CLI 浏览器授权、`git-ai whoami`、metrics/report 上传和 dashboard 聚合分离需要启动数据库、enterprise server 和浏览器后手工执行。
+
 ## 11. 阶段 8：文档和运维
 
 ### Task 8.1：更新开发者文档

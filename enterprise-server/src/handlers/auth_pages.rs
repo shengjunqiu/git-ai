@@ -74,6 +74,12 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
     };
 
     let submit = if is_register { "注册" } else { "登录" };
+    let alternate_href = auth_alternate_href(is_register, return_to);
+    let alternate_text = if is_register {
+        "已有账号？登录"
+    } else {
+        "没有账号？注册"
+    };
 
     format!(
         r#"<!DOCTYPE html>
@@ -97,6 +103,7 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
 {register_fields}
       <button type="submit">{submit}</button>
     </form>
+    <p class="alternate"><a href="{alternate_href}">{alternate_text}</a></p>
   </main>
 </body>
 </html>"#,
@@ -106,8 +113,23 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         password_autocomplete = password_autocomplete,
         register_fields = register_fields,
         submit = submit,
+        alternate_href = html_escape(&alternate_href),
+        alternate_text = alternate_text,
         styles = BASE_STYLES,
     )
+}
+
+fn auth_alternate_href(is_register: bool, return_to: &Option<String>) -> String {
+    let path = if is_register {
+        "/auth/login"
+    } else {
+        "/auth/register"
+    };
+    let Some(return_to) = return_to else {
+        return path.to_string();
+    };
+    let encoded: String = url::form_urlencoded::byte_serialize(return_to.as_bytes()).collect();
+    format!("{}?return_to={}", path, encoded)
 }
 
 fn html_escape(s: &str) -> String {
@@ -158,4 +180,46 @@ button {
   font-size: 15px;
 }
 p { margin: 0; line-height: 1.5; color: #475569; }
+.alternate {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 14px;
+}
+.alternate a { color: #2563eb; text-decoration: none; }
+.alternate a:hover { text-decoration: underline; }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_page_links_to_register_with_return_to() {
+        let html = auth_page(
+            "登录",
+            "/auth/login",
+            &Some("/auth/cli/authorize?client_id=git-ai-cli&state=abc".to_string()),
+            false,
+        );
+
+        assert!(html.contains("没有账号？注册"));
+        assert!(html.contains(
+            r#"href="/auth/register?return_to=%2Fauth%2Fcli%2Fauthorize%3Fclient_id%3Dgit-ai-cli%26state%3Dabc""#
+        ));
+    }
+
+    #[test]
+    fn register_page_links_back_to_login_with_return_to() {
+        let html = auth_page(
+            "注册",
+            "/auth/register",
+            &Some("/auth/cli/authorize?client_id=git-ai-cli&state=abc".to_string()),
+            true,
+        );
+
+        assert!(html.contains("已有账号？登录"));
+        assert!(html.contains(
+            r#"href="/auth/login?return_to=%2Fauth%2Fcli%2Fauthorize%3Fclient_id%3Dgit-ai-cli%26state%3Dabc""#
+        ));
+    }
+}

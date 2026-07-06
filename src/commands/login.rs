@@ -73,14 +73,25 @@ pub fn handle_login(args: &[String]) {
             std::process::exit(1);
         }
     };
+    let registration_url = match build_registration_url(effective_url, &authorization_url) {
+        Ok(url) => url,
+        Err(e) => {
+            eprintln!("Failed to build registration URL: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     eprintln!("Starting browser authorization...\n");
     eprintln!("Authorize git-ai in your browser:");
     eprintln!("  {}", authorization_url);
+    eprintln!("No account yet? Register first:");
+    eprintln!("  {}", registration_url);
     eprintln!();
 
     if options.no_browser {
-        eprintln!("Open the URL above to continue.");
+        eprintln!(
+            "Open the authorization URL above to continue, or open the registration URL first."
+        );
     } else if open_browser(&authorization_url).is_err() {
         eprintln!("Could not open browser automatically. Open the URL above to continue.");
         eprintln!();
@@ -255,6 +266,21 @@ fn build_authorization_url(
     Ok(url.to_string())
 }
 
+fn build_registration_url(base_url: &str, authorization_url: &str) -> Result<String, String> {
+    let authorization_url = Url::parse(authorization_url).map_err(|e| e.to_string())?;
+    let mut return_to = authorization_url.path().to_string();
+    if let Some(query) = authorization_url.query() {
+        return_to.push('?');
+        return_to.push_str(query);
+    }
+
+    let mut url = Url::parse(&format!("{}/auth/register", base_url.trim_end_matches('/')))
+        .map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("return_to", &return_to);
+
+    Ok(url.to_string())
+}
+
 fn validate_callback_state(callback_state: &str, expected_state: &str) -> Result<(), String> {
     if callback_state == expected_state {
         Ok(())
@@ -361,6 +387,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_login_options_supports_help() {
+        let options = parse_login_options(&strings(&["--help"])).unwrap();
+        assert!(options.help);
+    }
+
+    #[test]
+    fn parse_login_options_rejects_unknown_argument() {
+        let error = parse_login_options(&strings(&["--device-flow"])).unwrap_err();
+        assert!(error.contains("unknown login argument"));
+    }
+
+    #[test]
     fn authorization_url_contains_expected_parameters() {
         let url = build_authorization_url(
             "https://git-ai.example.com/",
@@ -397,6 +435,32 @@ mod tests {
     }
 
     #[test]
+    fn registration_url_preserves_authorization_return_to() {
+        let authorization_url = build_authorization_url(
+            "https://git-ai.example.com/",
+            "http://127.0.0.1:12345/callback",
+            "challenge",
+            "state",
+        )
+        .unwrap();
+        let url =
+            build_registration_url("https://git-ai.example.com/", &authorization_url).unwrap();
+        let parsed = Url::parse(&url).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(
+            parsed.as_str().split('?').next().unwrap(),
+            "https://git-ai.example.com/auth/register"
+        );
+        assert_eq!(
+            pairs.get("return_to").map(String::as_str),
+            Some(
+                "/auth/cli/authorize?client_id=git-ai-cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A12345%2Fcallback&response_type=code&code_challenge=challenge&code_challenge_method=S256&state=state"
+            )
+        );
+    }
+
+    #[test]
     fn callback_state_mismatch_fails() {
         let error = validate_callback_state("actual", "expected").unwrap_err();
         assert!(error.contains("state"));
@@ -407,6 +471,14 @@ mod tests {
         assert_eq!(
             authorization_error_message("access_denied", None),
             "authorization was cancelled"
+        );
+    }
+
+    #[test]
+    fn authorization_error_preserves_description() {
+        assert_eq!(
+            authorization_error_message("invalid_grant", Some("bad verifier")),
+            "invalid_grant (bad verifier)"
         );
     }
 }

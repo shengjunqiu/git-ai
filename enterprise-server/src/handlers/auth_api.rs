@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,10 @@ pub async fn register(
         Some(response_user.default_org_id),
         "org_member.create",
         Some("org_member"),
-        Some(&format!("{}:{}", response_user.id, response_user.default_org_id)),
+        Some(&format!(
+            "{}:{}",
+            response_user.id, response_user.default_org_id
+        )),
         Some(json!({"role": "member"})),
         None,
         None,
@@ -185,9 +188,11 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    if let Some(session_token) = cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE)
+    if let Some(session_token) =
+        cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE)
     {
-        let user_id = crate::services::sessions::load_web_session_user(&state.db, &session_token).await?;
+        let user_id =
+            crate::services::sessions::load_web_session_user(&state.db, &session_token).await?;
         crate::services::sessions::revoke_web_session(&state.db, &session_token).await?;
 
         if let Some(user_id) = user_id {
@@ -224,7 +229,9 @@ async fn register_user(
 
     if let Some(confirm_password) = &req.confirm_password {
         if confirm_password != &req.password {
-            return Err(AppError::BadRequest("Password confirmation does not match".into()));
+            return Err(AppError::BadRequest(
+                "Password confirmation does not match".into(),
+            ));
         }
     }
 
@@ -382,36 +389,42 @@ fn safe_return_to(return_to: Option<&str>) -> Option<String> {
 }
 
 fn set_session_cookie(response: &mut Response, state: &AppState, session_token: &str) {
-    let secure = if state.config.base_url.starts_with("https://") {
-        "; Secure"
-    } else {
-        ""
-    };
-    let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}",
-        crate::services::sessions::WEB_SESSION_COOKIE,
-        session_token,
-        secure
-    );
+    let cookie = session_cookie_header(&state.config.base_url, session_token);
     response
         .headers_mut()
         .insert(header::SET_COOKIE, cookie.parse().unwrap());
 }
 
 fn clear_session_cookie(response: &mut Response, state: &AppState) {
-    let secure = if state.config.base_url.starts_with("https://") {
-        "; Secure"
-    } else {
-        ""
-    };
-    let cookie = format!(
-        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
-        crate::services::sessions::WEB_SESSION_COOKIE,
-        secure
-    );
+    let cookie = clear_session_cookie_header(&state.config.base_url);
     response
         .headers_mut()
         .insert(header::SET_COOKIE, cookie.parse().unwrap());
+}
+
+fn session_cookie_header(base_url: &str, session_token: &str) -> String {
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}",
+        crate::services::sessions::WEB_SESSION_COOKIE,
+        session_token,
+        secure_cookie_suffix(base_url)
+    )
+}
+
+fn clear_session_cookie_header(base_url: &str) -> String {
+    format!(
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        crate::services::sessions::WEB_SESSION_COOKIE,
+        secure_cookie_suffix(base_url)
+    )
+}
+
+fn secure_cookie_suffix(base_url: &str) -> &'static str {
+    if base_url.starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    }
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -426,4 +439,125 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn parse_register_json_request() {
+        let org_id = Uuid::new_v4();
+        let department_id = Uuid::new_v4();
+        let body = Bytes::from(
+            serde_json::json!({
+                "email": "Alice@Linewell.COM",
+                "name": "Alice",
+                "password": "correct-horse-battery",
+                "confirm_password": "correct-horse-battery",
+                "org_id": org_id,
+                "department_id": department_id,
+                "return_to": "/auth/cli/authorize"
+            })
+            .to_string(),
+        );
+
+        let req = parse_register_request(&json_headers(), &body).unwrap();
+        assert_eq!(req.email, "Alice@Linewell.COM");
+        assert_eq!(req.name, "Alice");
+        assert_eq!(req.org_id, org_id);
+        assert_eq!(req.department_id, department_id);
+        assert_eq!(req.return_to.as_deref(), Some("/auth/cli/authorize"));
+    }
+
+    #[test]
+    fn parse_register_form_request_trims_required_fields() {
+        let org_id = Uuid::new_v4();
+        let department_id = Uuid::new_v4();
+        let body = Bytes::from(format!(
+            "email=%20alice%40linewell.com%20&name=%20Alice%20&password=secret-password&confirm_password=secret-password&org_id={}&department_id={}",
+            org_id, department_id
+        ));
+
+        let req = parse_register_request(&HeaderMap::new(), &body).unwrap();
+        assert_eq!(req.email, "alice@linewell.com");
+        assert_eq!(req.name, "Alice");
+        assert_eq!(req.org_id, org_id);
+        assert_eq!(req.department_id, department_id);
+    }
+
+    #[test]
+    fn parse_register_form_rejects_missing_required_field() {
+        let org_id = Uuid::new_v4();
+        let body = Bytes::from(format!(
+            "email=alice%40linewell.com&name=Alice&password=secret-password&org_id={}",
+            org_id
+        ));
+
+        assert!(parse_register_request(&HeaderMap::new(), &body).is_err());
+    }
+
+    #[test]
+    fn parse_login_form_request() {
+        let body = Bytes::from(
+            "email=%20alice%40linewell.com%20&password=secret-password&return_to=/dashboard",
+        );
+
+        let req = parse_login_request(&HeaderMap::new(), &body).unwrap();
+        assert_eq!(req.email, "alice@linewell.com");
+        assert_eq!(req.password, "secret-password");
+        assert_eq!(req.return_to.as_deref(), Some("/dashboard"));
+    }
+
+    #[test]
+    fn safe_return_to_only_allows_local_paths() {
+        assert_eq!(
+            safe_return_to(Some("/auth/cli/authorize")).as_deref(),
+            Some("/auth/cli/authorize")
+        );
+        assert!(safe_return_to(Some("https://example.com")).is_none());
+        assert!(safe_return_to(Some("//example.com/path")).is_none());
+        assert!(safe_return_to(Some("")).is_none());
+    }
+
+    #[test]
+    fn session_cookie_uses_secure_only_for_https_base_url() {
+        let https_cookie = session_cookie_header("https://git-ai.example.com", "token");
+        assert!(https_cookie.contains("Secure"));
+        assert!(https_cookie.contains("HttpOnly"));
+        assert!(https_cookie.contains("SameSite=Lax"));
+
+        let http_cookie = session_cookie_header("http://localhost:8080", "token");
+        assert!(!http_cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn clear_session_cookie_expires_cookie() {
+        let cookie = clear_session_cookie_header("https://git-ai.example.com");
+        assert!(cookie.contains("web_session="));
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn cookie_value_reads_named_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "theme=dark; web_session=session-token; other=value"
+                .parse()
+                .unwrap(),
+        );
+
+        assert_eq!(
+            cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE).as_deref(),
+            Some("session-token")
+        );
+    }
 }

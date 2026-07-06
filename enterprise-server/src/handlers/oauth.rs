@@ -48,35 +48,43 @@ pub async fn token(
 ) -> Result<axum::response::Response, AppError> {
     if req.client_id.as_deref() != Some("git-ai-cli") {
         let err = OAuthError::invalid_grant("Invalid client_id");
-        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(err).unwrap()),
+        )
+            .into_response());
     }
 
     match req.grant_type.as_str() {
         "urn:ietf:params:oauth:grant-type:device_code" => {
             handle_device_code_grant(&state, req.device_code.as_deref()).await
         }
-        "refresh_token" => {
-            handle_refresh_token_grant(&state, req.refresh_token.as_deref()).await
-        }
-        "install_nonce" => {
-            handle_install_nonce_grant(&state, req.install_nonce.as_deref()).await
-        }
+        "refresh_token" => handle_refresh_token_grant(&state, req.refresh_token.as_deref()).await,
+        "install_nonce" => handle_install_nonce_grant(&state, req.install_nonce.as_deref()).await,
         "authorization_code" => {
             handle_authorization_code_grant(
                 &state,
                 req.code.as_deref(),
                 req.code_verifier.as_deref(),
                 req.redirect_uri.as_deref(),
-            ).await
+            )
+            .await
         }
         _ => {
             let err = OAuthError::invalid_grant("Unsupported grant_type");
-            Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response())
+            Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(err).unwrap()),
+            )
+                .into_response())
         }
     }
 }
 
-async fn token_response(state: &AppState, user_id: uuid::Uuid) -> Result<axum::response::Response, AppError> {
+async fn token_response(
+    state: &AppState,
+    user_id: uuid::Uuid,
+) -> Result<axum::response::Response, AppError> {
     let response = crate::services::tokens::generate_token_response(state, user_id).await?;
     Ok(Json(response).into_response())
 }
@@ -85,34 +93,46 @@ async fn handle_device_code_grant(
     state: &AppState,
     device_code: Option<&str>,
 ) -> Result<axum::response::Response, AppError> {
-    let device_code = device_code.ok_or_else(|| AppError::BadRequest("device_code is required".into()))?;
+    let device_code =
+        device_code.ok_or_else(|| AppError::BadRequest("device_code is required".into()))?;
 
-    let row: Option<(chrono::DateTime<Utc>, Option<uuid::Uuid>)> = sqlx::query_as(
-        "SELECT expires_at, user_id FROM oauth_devices WHERE device_code = $1"
-    )
-    .bind(device_code)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    let row: Option<(chrono::DateTime<Utc>, Option<uuid::Uuid>)> =
+        sqlx::query_as("SELECT expires_at, user_id FROM oauth_devices WHERE device_code = $1")
+            .bind(device_code)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let (expires_at, user_id) = match row {
         Some(r) => r,
         None => {
             let err = OAuthError::expired_token();
-            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(err).unwrap()),
+            )
+                .into_response());
         }
     };
 
     if expires_at < Utc::now() {
         let err = OAuthError::expired_token();
-        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(err).unwrap()),
+        )
+            .into_response());
     }
 
     let user_id = match user_id {
         Some(uid) => uid,
         None => {
             let err = OAuthError::authorization_pending();
-            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(err).unwrap()),
+            )
+                .into_response());
         }
     };
 
@@ -130,7 +150,8 @@ async fn handle_refresh_token_grant(
     state: &AppState,
     refresh_token: Option<&str>,
 ) -> Result<axum::response::Response, AppError> {
-    let refresh_token = refresh_token.ok_or_else(|| AppError::BadRequest("refresh_token is required".into()))?;
+    let refresh_token =
+        refresh_token.ok_or_else(|| AppError::BadRequest("refresh_token is required".into()))?;
     let token_hash = jwt::hash_token(refresh_token);
 
     let row: Option<(uuid::Uuid, chrono::DateTime<Utc>)> = sqlx::query_as(
@@ -145,13 +166,21 @@ async fn handle_refresh_token_grant(
         Some(r) => r,
         None => {
             let err = OAuthError::invalid_grant("Invalid or revoked refresh token");
-            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(err).unwrap()),
+            )
+                .into_response());
         }
     };
 
     if expires_at < Utc::now() {
         let err = OAuthError::invalid_grant("Refresh token expired");
-        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(err).unwrap()),
+        )
+            .into_response());
     }
 
     // Revoke old refresh token
@@ -168,27 +197,35 @@ async fn handle_install_nonce_grant(
     state: &AppState,
     install_nonce: Option<&str>,
 ) -> Result<axum::response::Response, AppError> {
-    let nonce = install_nonce.ok_or_else(|| AppError::BadRequest("install_nonce is required".into()))?;
+    let nonce =
+        install_nonce.ok_or_else(|| AppError::BadRequest("install_nonce is required".into()))?;
 
-    let row: Option<(uuid::Uuid, bool)> = sqlx::query_as(
-        "SELECT user_id, used FROM install_nonces WHERE nonce = $1"
-    )
-    .bind(nonce)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    let row: Option<(uuid::Uuid, bool)> =
+        sqlx::query_as("SELECT user_id, used FROM install_nonces WHERE nonce = $1")
+            .bind(nonce)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let (user_id, used) = match row {
         Some(r) => r,
         None => {
             let err = OAuthError::invalid_grant("Invalid install nonce");
-            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(err).unwrap()),
+            )
+                .into_response());
         }
     };
 
     if used {
         let err = OAuthError::invalid_grant("Install nonce already used");
-        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response());
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(err).unwrap()),
+        )
+            .into_response());
     }
 
     // Mark nonce as used
@@ -208,10 +245,10 @@ async fn handle_authorization_code_grant(
     redirect_uri: Option<&str>,
 ) -> Result<axum::response::Response, AppError> {
     let code = code.ok_or_else(|| AppError::BadRequest("code is required".into()))?;
-    let code_verifier = code_verifier
-        .ok_or_else(|| AppError::BadRequest("code_verifier is required".into()))?;
-    let redirect_uri = redirect_uri
-        .ok_or_else(|| AppError::BadRequest("redirect_uri is required".into()))?;
+    let code_verifier =
+        code_verifier.ok_or_else(|| AppError::BadRequest("code_verifier is required".into()))?;
+    let redirect_uri =
+        redirect_uri.ok_or_else(|| AppError::BadRequest("redirect_uri is required".into()))?;
     let code_hash = jwt::hash_token(code);
 
     let row: Option<(
@@ -232,7 +269,16 @@ async fn handle_authorization_code_grant(
     .await
     .map_err(AppError::Database)?;
 
-    let Some((user_id, client_id, stored_redirect_uri, code_challenge, method, expires_at, consumed_at)) = row else {
+    let Some((
+        user_id,
+        client_id,
+        stored_redirect_uri,
+        code_challenge,
+        method,
+        expires_at,
+        consumed_at,
+    )) = row
+    else {
         return oauth_error("Invalid authorization code");
     };
 
@@ -291,7 +337,11 @@ async fn handle_authorization_code_grant(
 
 fn oauth_error(message: &str) -> Result<axum::response::Response, AppError> {
     let err = OAuthError::invalid_grant(message);
-    Ok((StatusCode::BAD_REQUEST, Json(serde_json::to_value(err).unwrap())).into_response())
+    Ok((
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::to_value(err).unwrap()),
+    )
+        .into_response())
 }
 
 fn pkce_challenge(code_verifier: &str) -> String {
@@ -300,15 +350,13 @@ fn pkce_challenge(code_verifier: &str) -> String {
 }
 
 fn base64url_no_pad(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut output = String::with_capacity((bytes.len() * 4 + 2) / 3);
     let mut i = 0;
 
     while i + 3 <= bytes.len() {
-        let chunk = ((bytes[i] as u32) << 16)
-            | ((bytes[i + 1] as u32) << 8)
-            | (bytes[i + 2] as u32);
+        let chunk =
+            ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
         output.push(ALPHABET[((chunk >> 18) & 0x3f) as usize] as char);
         output.push(ALPHABET[((chunk >> 12) & 0x3f) as usize] as char);
         output.push(ALPHABET[((chunk >> 6) & 0x3f) as usize] as char);
@@ -344,6 +392,12 @@ mod tests {
         let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
         assert_eq!(pkce_challenge(verifier), challenge);
+    }
+
+    #[test]
+    fn pkce_challenge_rejects_wrong_verifier() {
+        let expected_challenge = pkce_challenge("correct-verifier");
+        assert_ne!(pkce_challenge("wrong-verifier"), expected_challenge);
     }
 
     #[test]

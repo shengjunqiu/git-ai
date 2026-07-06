@@ -22,12 +22,13 @@ pub struct RegisterableDepartment {
 
 pub fn email_domain(email: &str) -> Result<String, AppError> {
     let trimmed = email.trim();
-    let (_, domain) = trimmed
+    let (local, domain) = trimmed
         .rsplit_once('@')
         .ok_or_else(|| AppError::BadRequest("Invalid email address".into()))?;
 
+    let local = local.trim();
     let domain = domain.trim().to_ascii_lowercase();
-    if domain.is_empty() || !domain.contains('.') {
+    if local.is_empty() || local.contains('@') || domain.is_empty() || !domain.contains('.') {
         return Err(AppError::BadRequest("Invalid email address".into()));
     }
 
@@ -79,11 +80,7 @@ pub async fn list_departments_for_org(
         .collect())
 }
 
-pub async fn validate_org_domain(
-    pool: &PgPool,
-    email: &str,
-    org_id: Uuid,
-) -> Result<(), AppError> {
+pub async fn validate_org_domain(pool: &PgPool, email: &str, org_id: Uuid) -> Result<(), AppError> {
     let domain = email_domain(email)?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS( \
@@ -149,5 +146,15 @@ mod tests {
     fn email_domain_rejects_invalid_email() {
         assert!(email_domain("not-an-email").is_err());
         assert!(email_domain("alice@localhost").is_err());
+        assert!(email_domain("@linewell.com").is_err());
+        assert!(email_domain("alice@linewell.com@example.com").is_err());
+    }
+
+    #[test]
+    fn email_domain_trims_whitespace() {
+        assert_eq!(
+            email_domain("  Alice@Linewell.COM  ").unwrap(),
+            "linewell.com"
+        );
     }
 }
