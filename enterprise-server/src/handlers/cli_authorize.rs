@@ -237,18 +237,39 @@ fn authorize_html(params: &AuthorizeParams, context: &UserAuthorizeContext) -> S
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>git-ai — CLI 授权</title>
+  <style>{styles}</style>
 </head>
 <body>
-  <main>
-    <h1>git-ai CLI 授权</h1>
-    <p>当前账号：{email}</p>
-    <p>组织：{org}</p>
-    <p>部门：{department}</p>
-    <form method="POST" action="/auth/cli/authorize">
-      {hidden}
-      <button type="submit" name="decision" value="authorize">授权</button>
-      <button type="submit" name="decision" value="cancel">取消</button>
-    </form>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <div class="brand-lockup">
+        <div class="brand-title"><span>git-ai</span> Enterprise</div>
+        <div class="brand-subtitle">AI 代码归属分析平台</div>
+      </div>
+      <div class="page-kicker">CLI 授权</div>
+      <h1>允许 git-ai CLI 访问</h1>
+      <div class="identity-list">
+        <div class="identity-row">
+          <span class="identity-label">当前账号</span>
+          <span class="identity-value">{email}</span>
+        </div>
+        <div class="identity-row">
+          <span class="identity-label">组织</span>
+          <span class="identity-value">{org}</span>
+        </div>
+        <div class="identity-row">
+          <span class="identity-label">部门</span>
+          <span class="identity-value">{department}</span>
+        </div>
+      </div>
+      <form method="POST" action="/auth/cli/authorize">
+        {hidden}
+        <div class="auth-actions">
+          <button class="btn btn-primary" type="submit" name="decision" value="authorize">授权</button>
+          <button class="btn btn-secondary" type="submit" name="decision" value="cancel">取消</button>
+        </div>
+      </form>
+    </section>
   </main>
 </body>
 </html>"#,
@@ -256,6 +277,7 @@ fn authorize_html(params: &AuthorizeParams, context: &UserAuthorizeContext) -> S
         org = html_escape(context.org_name.as_deref().unwrap_or("未设置")),
         department = html_escape(context.department_name.as_deref().unwrap_or("未设置")),
         hidden = hidden_fields(params),
+        styles = crate::handlers::auth_pages::AUTH_PAGE_STYLES,
     )
 }
 
