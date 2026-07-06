@@ -212,6 +212,19 @@ impl OAuthClient {
         Err("Device code expired. Please try again.".to_string())
     }
 
+    /// Exchange an OAuth authorization code for stored credentials.
+    pub fn exchange_authorization_code(
+        &self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<StoredCredentials, String> {
+        let body = authorization_code_grant_body(code, code_verifier, redirect_uri);
+
+        self.exchange_token(body)
+            .map_err(|e| format!("Authorization code exchange failed: {}", e))
+    }
+
     /// Refresh the access token using a refresh token
     pub fn refresh_access_token(&self, refresh_token: &str) -> Result<StoredCredentials, String> {
         let body = serde_json::json!({
@@ -235,6 +248,20 @@ impl OAuthClient {
         self.exchange_token(body)
             .map_err(|e| format!("Nonce exchange failed: {}", e))
     }
+}
+
+fn authorization_code_grant_body(
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "grant_type": "authorization_code",
+        "client_id": "git-ai-cli",
+        "code": code,
+        "code_verifier": code_verifier,
+        "redirect_uri": redirect_uri
+    })
 }
 
 impl Default for OAuthClient {
@@ -464,5 +491,21 @@ mod tests {
         // Refresh token should expire in about 90 days
         assert!(creds.refresh_token_expires_at > now + 86400 * 89);
         assert!(creds.refresh_token_expires_at <= now + 86400 * 91);
+    }
+
+    #[test]
+    fn test_authorization_code_grant_body() {
+        let body = authorization_code_grant_body(
+            "auth-code",
+            "verifier",
+            "http://127.0.0.1:12345/callback",
+        );
+
+        assert_eq!(body["grant_type"], "authorization_code");
+        assert_eq!(body["client_id"], "git-ai-cli");
+        assert_eq!(body["code"], "auth-code");
+        assert_eq!(body["code_verifier"], "verifier");
+        assert_eq!(body["redirect_uri"], "http://127.0.0.1:12345/callback");
+        assert!(body.get("device_code").is_none());
     }
 }

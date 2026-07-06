@@ -1,10 +1,23 @@
-use crate::auth::{CredentialStore, OAuthClient};
+use crate::auth::{CallbackListener, CallbackResponse, CredentialStore, OAuthClient, pkce};
 use crate::config;
+use std::time::Duration;
+use url::Url;
 
 /// Handle the `git-ai login` command
 pub fn handle_login(args: &[String]) {
-    // Parse --server <url> from args
-    let server_url = parse_server_arg(args);
+    let options = match parse_login_options(args) {
+        Ok(options) => options,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            print_help();
+            std::process::exit(1);
+        }
+    };
+
+    if options.help {
+        print_help();
+        std::process::exit(0);
+    }
 
     let store = CredentialStore::new();
 
@@ -16,7 +29,7 @@ pub fn handle_login(args: &[String]) {
         std::process::exit(0);
     }
 
-    let client = if let Some(ref url) = server_url {
+    let client = if let Some(ref url) = options.server_url {
         match OAuthClient::with_base_url(url) {
             Ok(c) => c,
             Err(e) => {
@@ -37,55 +50,96 @@ pub fn handle_login(args: &[String]) {
         eprintln!();
     }
 
-    // Start device flow
-    eprintln!("Starting device authorization...\n");
-
-    let auth_response = match client.start_device_flow() {
-        Ok(response) => response,
+    let listener = match CallbackListener::bind() {
+        Ok(listener) => listener,
         Err(e) => {
-            eprintln!("Failed to start authorization: {}", e);
+            eprintln!("Failed to start local callback listener: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let redirect_uri = listener.redirect_uri().to_string();
+    let state = pkce::generate_state();
+    let pkce_pair = pkce::generate_pkce_pair();
+
+    let authorization_url = match build_authorization_url(
+        effective_url,
+        &redirect_uri,
+        &pkce_pair.code_challenge,
+        &state,
+    ) {
+        Ok(url) => url,
+        Err(e) => {
+            eprintln!("Failed to build authorization URL: {}", e);
             std::process::exit(1);
         }
     };
 
-    // Build the display URL
-    let display_url = auth_response
-        .verification_uri_complete
-        .as_ref()
-        .unwrap_or(&auth_response.verification_uri);
-
-    // Display instructions
-    eprintln!("To authorize this device:");
-    eprintln!("  1. Open this URL in your browser:");
-    eprintln!("     {}", display_url);
-    eprintln!();
-    eprintln!("  2. Enter this code when prompted:");
-    eprintln!("     {}", auth_response.user_code);
+    eprintln!("Starting browser authorization...\n");
+    eprintln!("Authorize git-ai in your browser:");
+    eprintln!("  {}", authorization_url);
     eprintln!();
 
-    // Try to open browser automatically
-    if open_browser(display_url).is_err() {
-        eprintln!("  (Could not open browser automatically)");
+    if options.no_browser {
+        eprintln!("Open the URL above to continue.");
+    } else if open_browser(&authorization_url).is_err() {
+        eprintln!("Could not open browser automatically. Open the URL above to continue.");
         eprintln!();
     }
 
-    eprintln!("Waiting for authorization...");
+    eprintln!("Waiting for browser authorization...");
 
-    // Poll for token
-    match client.poll_for_token(
-        &auth_response.device_code,
-        auth_response.interval,
-        auth_response.expires_in,
-    ) {
+    let callback = match listener.wait_for_callback(Duration::from_secs(300)) {
+        Ok(callback) => callback,
+        Err(e) => {
+            eprintln!("\nAuthorization failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let code = match callback {
+        CallbackResponse::Authorized {
+            code,
+            state: callback_state,
+        } => {
+            if let Err(e) = validate_callback_state(&callback_state, &state) {
+                eprintln!("\nAuthorization failed: {}", e);
+                std::process::exit(1);
+            }
+            code
+        }
+        CallbackResponse::Error {
+            error,
+            state: callback_state,
+            error_description,
+        } => {
+            match callback_state {
+                Some(callback_state) => {
+                    if let Err(e) = validate_callback_state(&callback_state, &state) {
+                        eprintln!("\nAuthorization failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                None => {
+                    eprintln!("\nAuthorization failed: callback did not include a state");
+                    std::process::exit(1);
+                }
+            }
+
+            let message = authorization_error_message(&error, error_description.as_deref());
+            eprintln!("\nAuthorization failed: {}", message);
+            std::process::exit(1);
+        }
+    };
+
+    match client.exchange_authorization_code(&code, &pkce_pair.code_verifier, &redirect_uri) {
         Ok(creds) => {
-            // Store credentials
             if let Err(e) = store.store(&creds) {
                 eprintln!("\nWarning: Failed to store credentials: {}", e);
                 eprintln!("You may need to log in again next time.");
             }
 
             // Save the server URL to config if --server was provided
-            if let Some(ref url) = server_url {
+            if let Some(ref url) = options.server_url {
                 if let Err(e) = save_server_to_config(url) {
                     eprintln!("\nWarning: Failed to save server URL to config: {}", e);
                     eprintln!(
@@ -100,7 +154,7 @@ pub fn handle_login(args: &[String]) {
             eprintln!("\nSuccessfully logged in!");
         }
         Err(e) => {
-            eprintln!("\nAuthorization failed: {}", e);
+            eprintln!("\nToken exchange failed: {}", e);
             std::process::exit(1);
         }
     }
@@ -137,19 +191,98 @@ fn open_browser(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Parse --server <url> from args
-fn parse_server_arg(args: &[String]) -> Option<String> {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LoginOptions {
+    server_url: Option<String>,
+    no_browser: bool,
+    help: bool,
+}
+
+fn parse_login_options(args: &[String]) -> Result<LoginOptions, String> {
+    let mut options = LoginOptions::default();
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--server" && i + 1 < args.len() {
-            return Some(args[i + 1].clone());
-        }
-        if let Some(url) = args[i].strip_prefix("--server=") {
-            return Some(url.to_string());
+        match args[i].as_str() {
+            "--server" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--server requires a URL".to_string());
+                }
+                options.server_url = Some(args[i].clone());
+            }
+            "--no-browser" => {
+                options.no_browser = true;
+            }
+            "--help" | "-h" | "help" => {
+                options.help = true;
+            }
+            arg => {
+                if let Some(url) = arg.strip_prefix("--server=") {
+                    if url.is_empty() {
+                        return Err("--server requires a URL".to_string());
+                    }
+                    options.server_url = Some(url.to_string());
+                } else {
+                    return Err(format!("unknown login argument '{}'", arg));
+                }
+            }
         }
         i += 1;
     }
-    None
+    Ok(options)
+}
+
+fn build_authorization_url(
+    base_url: &str,
+    redirect_uri: &str,
+    code_challenge: &str,
+    state: &str,
+) -> Result<String, String> {
+    let mut url = Url::parse(&format!(
+        "{}/auth/cli/authorize",
+        base_url.trim_end_matches('/')
+    ))
+    .map_err(|e| e.to_string())?;
+
+    url.query_pairs_mut()
+        .append_pair("client_id", "git-ai-cli")
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", state);
+
+    Ok(url.to_string())
+}
+
+fn validate_callback_state(callback_state: &str, expected_state: &str) -> Result<(), String> {
+    if callback_state == expected_state {
+        Ok(())
+    } else {
+        Err("authorization state did not match".to_string())
+    }
+}
+
+fn authorization_error_message(error: &str, description: Option<&str>) -> String {
+    if error == "access_denied" {
+        return "authorization was cancelled".to_string();
+    }
+
+    description
+        .map(|description| format!("{} ({})", error, description))
+        .unwrap_or_else(|| error.to_string())
+}
+
+fn print_help() {
+    eprintln!("git-ai login - Authenticate with Git AI");
+    eprintln!();
+    eprintln!("Usage:");
+    eprintln!("  git-ai login [--server <url>] [--no-browser]");
+    eprintln!("  git-ai login --help");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --server <url>   Git AI server URL");
+    eprintln!("  --no-browser     Print the authorization URL without opening a browser");
 }
 
 /// Save the server URL to the git-ai config file so subsequent commands use it
@@ -186,4 +319,94 @@ fn save_server_to_config(url: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to write config: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_login_options_supports_server_space_form() {
+        let options = parse_login_options(&strings(&["--server", "https://example.com"])).unwrap();
+        assert_eq!(options.server_url.as_deref(), Some("https://example.com"));
+        assert!(!options.no_browser);
+    }
+
+    #[test]
+    fn parse_login_options_supports_server_equals_form() {
+        let options = parse_login_options(&strings(&["--server=https://example.com"])).unwrap();
+        assert_eq!(options.server_url.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn parse_login_options_supports_no_browser() {
+        let options = parse_login_options(&strings(&[
+            "--server",
+            "https://example.com",
+            "--no-browser",
+        ]))
+        .unwrap();
+        assert_eq!(options.server_url.as_deref(), Some("https://example.com"));
+        assert!(options.no_browser);
+    }
+
+    #[test]
+    fn parse_login_options_rejects_missing_server_value() {
+        let error = parse_login_options(&strings(&["--server"])).unwrap_err();
+        assert!(error.contains("requires a URL"));
+    }
+
+    #[test]
+    fn authorization_url_contains_expected_parameters() {
+        let url = build_authorization_url(
+            "https://git-ai.example.com/",
+            "http://127.0.0.1:12345/callback",
+            "challenge",
+            "state",
+        )
+        .unwrap();
+        let parsed = Url::parse(&url).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(
+            parsed.as_str().split('?').next().unwrap(),
+            "https://git-ai.example.com/auth/cli/authorize"
+        );
+        assert_eq!(
+            pairs.get("client_id").map(String::as_str),
+            Some("git-ai-cli")
+        );
+        assert_eq!(
+            pairs.get("redirect_uri").map(String::as_str),
+            Some("http://127.0.0.1:12345/callback")
+        );
+        assert_eq!(pairs.get("response_type").map(String::as_str), Some("code"));
+        assert_eq!(
+            pairs.get("code_challenge").map(String::as_str),
+            Some("challenge")
+        );
+        assert_eq!(
+            pairs.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
+        assert_eq!(pairs.get("state").map(String::as_str), Some("state"));
+    }
+
+    #[test]
+    fn callback_state_mismatch_fails() {
+        let error = validate_callback_state("actual", "expected").unwrap_err();
+        assert!(error.contains("state"));
+    }
+
+    #[test]
+    fn access_denied_gets_clear_message() {
+        assert_eq!(
+            authorization_error_message("access_denied", None),
+            "authorization was cancelled"
+        );
+    }
 }

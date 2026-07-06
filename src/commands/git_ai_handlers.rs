@@ -364,6 +364,8 @@ fn print_help() {
     eprintln!("    --remote <name>       Explicit remote name (default: upstream or origin)");
     eprintln!("    --json                Output result as JSON");
     eprintln!("  login              Authenticate with Git AI");
+    eprintln!("    --server <url>        Git AI server URL");
+    eprintln!("    --no-browser          Print authorization URL without opening browser");
     eprintln!("  logout             Clear stored credentials");
     eprintln!("  whoami             Show auth state and login identity");
     eprintln!("  version, -v, --version     Print the git-ai version");

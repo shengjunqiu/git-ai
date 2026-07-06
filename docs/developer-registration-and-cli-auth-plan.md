@@ -1154,6 +1154,62 @@ Organizations
 - `git-ai whoami` 显示当前开发者本人。
 - 公司组织不是误取的个人组织。
 
+### 阶段 5 执行记录（2026-07-06）
+
+状态：CLI 代码改造已完成；真实服务端登录后的 `git-ai whoami` 端到端验证留到阶段 7 手工验收。
+
+已完成改动：
+
+- 新增 `src/auth/pkce.rs`：
+  - 生成高熵 state。
+  - 生成 PKCE `code_verifier`。
+  - 计算 `BASE64URL(SHA256(code_verifier))` 形式的 `code_challenge`。
+  - 输出不带 `=` padding。
+  - 使用 RFC 7636 示例覆盖 challenge 计算。
+- 新增 `src/auth/cli_callback.rs`：
+  - 绑定 `127.0.0.1:0` 获取随机本地端口。
+  - 固定 callback 路径为 `/callback`。
+  - 解析 `code`、`state`、`error` 和 `error_description`。
+  - 对浏览器返回简单 HTML，提示用户回到终端。
+  - 支持超时退出并释放 listener。
+- 更新 `src/auth/client.rs`：
+  - 新增 `exchange_authorization_code()`。
+  - 请求 `/worker/oauth/token` 时使用 `grant_type = authorization_code`。
+  - 复用现有 `exchange_token()` 解析 token 并生成 `StoredCredentials`。
+  - 保留 `start_device_flow()`、`poll_for_token()`、`refresh_access_token()` 和 `exchange_install_nonce()`。
+- 更新 `src/commands/login.rs`：
+  - `git-ai login` 改为 browser authorization code + PKCE 主流程。
+  - 保留 `--server <url>` 和 `--server=<url>`。
+  - 新增 `--no-browser`，只打印可复制授权 URL。
+  - 已登录且 refresh token 未过期时继续保持原提示行为。
+  - 启动 callback listener 后拼接 `/auth/cli/authorize` URL。
+  - 默认尝试打开浏览器，失败时提示手动打开 URL。
+  - callback 返回后校验 state，再用 code 兑换 token。
+  - token 保存到现有 `CredentialStore`。
+  - 如果传入 `--server`，继续写入 `~/.git-ai/config.json` 的 `api_base_url`。
+  - 新流程不再调用 `/worker/oauth/device/code`。
+- 更新 `src/auth/mod.rs`：
+  - 导出 `cli_callback` 和 `pkce` 模块。
+- 更新 `src/commands/git_ai_handlers.rs`：
+  - 顶层 help 增加 `login --server` 和 `login --no-browser` 文案。
+
+实现说明：
+
+- 本地 callback listener 只监听 `127.0.0.1`，redirect URI 形如 `http://127.0.0.1:<port>/callback`。
+- 授权取消会显示 `authorization was cancelled`。
+- state 缺失或不匹配会直接失败，不会兑换 token。
+- device flow 客户端方法仍在 `OAuthClient` 中保留，供旧兼容路径使用；新版 `handle_login()` 不再调用。
+- `whoami` 依赖已保存 credentials 中的 access token claims，阶段 5 未修改 `src/commands/whoami.rs` 和 `src/auth/identity.rs`。
+
+验证结果：
+
+- `cargo test pkce` 通过。
+- `cargo test login` 通过。
+- `cargo test callback` 通过；该测试需要本地 loopback listener，沙箱内会因 `127.0.0.1:0` 绑定权限失败，提升权限后通过。
+- `cargo test auth::client` 通过。
+- `cargo test auth` 通过；同样需要提升权限覆盖 callback listener 测试。
+- `task build` 通过。
+
 ## 9. 阶段 6：Dashboard 和数据归属修正
 
 ### Task 6.1：让认证身份优先使用 default_org_id
