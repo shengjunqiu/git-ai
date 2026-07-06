@@ -23,8 +23,10 @@ struct RegisterRequest {
     pub name: String,
     pub password: String,
     pub confirm_password: Option<String>,
-    pub org_id: Uuid,
-    pub department_id: Uuid,
+    pub org_id: Option<Uuid>,
+    pub department_id: Option<Uuid>,
+    pub org_slug: Option<String>,
+    pub department_slug: Option<String>,
     pub return_to: Option<String>,
 }
 
@@ -236,9 +238,10 @@ async fn register_user(
     }
 
     crate::services::passwords::validate_password_strength(&req.password)?;
-    crate::services::registration::validate_org_domain(&state.db, &email, req.org_id).await?;
-    crate::services::registration::validate_department(&state.db, req.org_id, req.department_id)
-        .await?;
+    let (org_id, department_id) = resolve_register_scope(state, req).await?;
+
+    crate::services::registration::validate_org_domain(&state.db, &email, org_id).await?;
+    crate::services::registration::validate_department(&state.db, org_id, department_id).await?;
 
     let email_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE lower(email) = lower($1))")
@@ -276,7 +279,7 @@ async fn register_user(
     .bind(&name)
     .bind(personal_org_id)
     .bind(&password_hash)
-    .bind(req.org_id)
+    .bind(org_id)
     .execute(&mut *tx)
     .await
     .map_err(AppError::Database)?;
@@ -295,8 +298,8 @@ async fn register_user(
          DO UPDATE SET department_id = EXCLUDED.department_id",
     )
     .bind(user_id)
-    .bind(req.org_id)
-    .bind(req.department_id)
+    .bind(org_id)
+    .bind(department_id)
     .execute(&mut *tx)
     .await
     .map_err(AppError::Database)?;
@@ -308,8 +311,50 @@ async fn register_user(
         email,
         name,
         personal_org_id,
-        default_org_id: req.org_id,
+        default_org_id: org_id,
     })
+}
+
+async fn resolve_register_scope(
+    state: &AppState,
+    req: &RegisterRequest,
+) -> Result<(Uuid, Uuid), AppError> {
+    let org_id = match req.org_id {
+        Some(org_id) => org_id,
+        None => {
+            let org_slug = req
+                .org_slug
+                .as_deref()
+                .unwrap_or(crate::services::registration::DEFAULT_REGISTER_ORG_SLUG)
+                .trim();
+            if org_slug.is_empty() {
+                return Err(AppError::BadRequest("org_slug is required".into()));
+            }
+            crate::services::registration::find_org_id_by_slug(&state.db, org_slug).await?
+        }
+    };
+
+    let department_id = match req.department_id {
+        Some(department_id) => department_id,
+        None => {
+            let department_slug = req
+                .department_slug
+                .as_deref()
+                .unwrap_or(crate::services::registration::DEFAULT_REGISTER_DEPARTMENTS[0].0)
+                .trim();
+            if department_slug.is_empty() {
+                return Err(AppError::BadRequest("department_slug is required".into()));
+            }
+            crate::services::registration::find_department_id_by_slug(
+                &state.db,
+                org_id,
+                department_slug,
+            )
+            .await?
+        }
+    };
+
+    Ok((org_id, department_id))
 }
 
 fn parse_register_request(headers: &HeaderMap, body: &Bytes) -> Result<RegisterRequest, AppError> {
@@ -322,8 +367,11 @@ fn parse_register_request(headers: &HeaderMap, body: &Bytes) -> Result<RegisterR
             name: required_field(&fields, "name")?,
             password: required_field(&fields, "password")?,
             confirm_password: fields.get("confirm_password").cloned(),
-            org_id: parse_uuid_field(&fields, "org_id")?,
-            department_id: parse_uuid_field(&fields, "department_id")?,
+            org_id: parse_optional_uuid_field(&fields, "org_id")?,
+            department_id: parse_optional_uuid_field(&fields, "department_id")?,
+            org_slug: optional_field(&fields, "org_slug")
+                .or_else(|| Some(crate::services::registration::DEFAULT_REGISTER_ORG_SLUG.into())),
+            department_slug: optional_field(&fields, "department_slug"),
             return_to: fields.get("return_to").cloned(),
         })
     }
@@ -361,9 +409,25 @@ fn required_field(fields: &HashMap<String, String>, name: &str) -> Result<String
     }
 }
 
-fn parse_uuid_field(fields: &HashMap<String, String>, name: &str) -> Result<Uuid, AppError> {
-    let value = required_field(fields, name)?;
-    Uuid::parse_str(&value).map_err(|_| AppError::BadRequest(format!("Invalid {}", name)))
+fn parse_optional_uuid_field(
+    fields: &HashMap<String, String>,
+    name: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(value) = optional_field(fields, name) else {
+        return Ok(None);
+    };
+    Uuid::parse_str(&value)
+        .map(Some)
+        .map_err(|_| AppError::BadRequest(format!("Invalid {}", name)))
+}
+
+fn optional_field(fields: &HashMap<String, String>, name: &str) -> Option<String> {
+    let value = fields.get(name)?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn normalize_email(email: &str) -> Result<String, AppError> {
@@ -471,34 +535,54 @@ mod tests {
         let req = parse_register_request(&json_headers(), &body).unwrap();
         assert_eq!(req.email, "Alice@Linewell.COM");
         assert_eq!(req.name, "Alice");
-        assert_eq!(req.org_id, org_id);
-        assert_eq!(req.department_id, department_id);
+        assert_eq!(req.org_id, Some(org_id));
+        assert_eq!(req.department_id, Some(department_id));
         assert_eq!(req.return_to.as_deref(), Some("/auth/cli/authorize"));
     }
 
     #[test]
     fn parse_register_form_request_trims_required_fields() {
-        let org_id = Uuid::new_v4();
-        let department_id = Uuid::new_v4();
-        let body = Bytes::from(format!(
-            "email=%20alice%40linewell.com%20&name=%20Alice%20&password=secret-password&confirm_password=secret-password&org_id={}&department_id={}",
-            org_id, department_id
-        ));
+        let body = Bytes::from(
+            "email=%20alice%40linewell.com%20&name=%20Alice%20&password=secret-password&confirm_password=secret-password&org_slug=%20linewell.com%20&department_slug=%20technology-center%20",
+        );
 
         let req = parse_register_request(&HeaderMap::new(), &body).unwrap();
         assert_eq!(req.email, "alice@linewell.com");
         assert_eq!(req.name, "Alice");
-        assert_eq!(req.org_id, org_id);
-        assert_eq!(req.department_id, department_id);
+        assert_eq!(req.org_id, None);
+        assert_eq!(req.department_id, None);
+        assert_eq!(req.org_slug.as_deref(), Some("linewell.com"));
+        assert_eq!(req.department_slug.as_deref(), Some("technology-center"));
+    }
+
+    #[test]
+    fn parse_register_form_supports_legacy_uuid_fields() {
+        let org_id = Uuid::new_v4();
+        let department_id = Uuid::new_v4();
+        let body = Bytes::from(format!(
+            "email=alice%40linewell.com&name=Alice&password=secret-password&org_id={}&department_id={}",
+            org_id, department_id
+        ));
+
+        let req = parse_register_request(&HeaderMap::new(), &body).unwrap();
+        assert_eq!(req.org_id, Some(org_id));
+        assert_eq!(req.department_id, Some(department_id));
+    }
+
+    #[test]
+    fn parse_register_form_defaults_org_slug_to_linewell() {
+        let body = Bytes::from(
+            "email=alice%40linewell.com&name=Alice&password=secret-password&department_slug=rd-center",
+        );
+
+        let req = parse_register_request(&HeaderMap::new(), &body).unwrap();
+        assert_eq!(req.org_slug.as_deref(), Some("linewell.com"));
+        assert_eq!(req.department_slug.as_deref(), Some("rd-center"));
     }
 
     #[test]
     fn parse_register_form_rejects_missing_required_field() {
-        let org_id = Uuid::new_v4();
-        let body = Bytes::from(format!(
-            "email=alice%40linewell.com&name=Alice&password=secret-password&org_id={}",
-            org_id
-        ));
+        let body = Bytes::from("email=alice%40linewell.com&name=Alice");
 
         assert!(parse_register_request(&HeaderMap::new(), &body).is_err());
     }

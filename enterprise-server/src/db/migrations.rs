@@ -26,6 +26,7 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
         ("004_data_isolation", include_str!("../../migrations/004_data_isolation.sql")),
         ("006_developer_registration_cli_auth", include_str!("../../migrations/006_developer_registration_cli_auth.sql")),
         ("007_project_scope_by_user_org", include_str!("../../migrations/007_project_scope_by_user_org.sql")),
+        ("008_default_linewell_registration_options", include_str!("../../migrations/008_default_linewell_registration_options.sql")),
     ];
 
     for (name, sql) in migrations {

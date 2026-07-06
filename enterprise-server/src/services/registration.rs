@@ -6,6 +6,11 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+pub const DEFAULT_REGISTER_ORG_NAME: &str = "Linewell";
+pub const DEFAULT_REGISTER_ORG_SLUG: &str = "linewell.com";
+pub const DEFAULT_REGISTER_DEPARTMENTS: [(&str, &str); 2] =
+    [("technology-center", "技术中心"), ("rd-center", "研发中心")];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterableOrganization {
     pub id: Uuid,
@@ -78,6 +83,42 @@ pub async fn list_departments_for_org(
         .into_iter()
         .map(|(id, name, slug)| RegisterableDepartment { id, name, slug })
         .collect())
+}
+
+pub async fn find_org_id_by_slug(pool: &PgPool, slug: &str) -> Result<Uuid, AppError> {
+    let org_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM organizations WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    org_id.ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "Organization '{}' is not configured for registration",
+            slug
+        ))
+    })
+}
+
+pub async fn find_department_id_by_slug(
+    pool: &PgPool,
+    org_id: Uuid,
+    slug: &str,
+) -> Result<Uuid, AppError> {
+    let department_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM departments WHERE org_id = $1 AND slug = $2")
+            .bind(org_id)
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+            .map_err(AppError::Database)?;
+
+    department_id.ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "Department '{}' is not configured for registration",
+            slug
+        ))
+    })
 }
 
 pub async fn validate_org_domain(pool: &PgPool, email: &str, org_id: Uuid) -> Result<(), AppError> {
