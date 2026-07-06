@@ -1350,14 +1350,52 @@ pub async fn aggregate_organizations(
     let rows: Vec<(String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
             o.name, o.slug,
-            COUNT(m.id),
-            COALESCE(SUM(m.git_diff_added_lines), 0),
-            COALESCE(SUM(m.ai_additions), 0)
+            COALESCE(stats.commits, 0),
+            COALESCE(stats.total_lines, 0),
+            COALESCE(stats.ai_lines, 0)
         FROM organizations o
-        LEFT JOIN metrics_events m ON m.org_id = o.id AND m.event_type = 1
-          AND ($1::uuid IS NULL OR m.user_id = $1)
+        LEFT JOIN (
+            SELECT
+                org_id,
+                SUM(commits)::bigint AS commits,
+                SUM(total_lines)::bigint AS total_lines,
+                SUM(ai_lines)::bigint AS ai_lines
+            FROM (
+                SELECT
+                    org_id,
+                    COUNT(*)::bigint AS commits,
+                    COALESCE(SUM(git_diff_added_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines
+                FROM metrics_events
+                WHERE event_type = 1
+                  AND ($1::uuid IS NULL OR user_id = $1)
+                  AND ($2::uuid IS NULL OR org_id = $2)
+                GROUP BY org_id
+
+                UNION ALL
+
+                SELECT
+                    p.org_id,
+                    COUNT(cs.sha)::bigint AS commits,
+                    COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
+                FROM projects p
+                JOIN commit_stats cs ON cs.project_id = p.id
+                WHERE ($1::uuid IS NULL OR p.user_id = $1)
+                  AND ($2::uuid IS NULL OR p.org_id = $2)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM metrics_events m
+                      WHERE m.event_type = 1
+                        AND m.commit_sha = cs.sha
+                        AND ($1::uuid IS NULL OR m.user_id = $1)
+                        AND ($2::uuid IS NULL OR m.org_id = $2)
+                  )
+                GROUP BY p.org_id
+            ) combined
+            WHERE org_id IS NOT NULL
+            GROUP BY org_id
+        ) stats ON stats.org_id = o.id
         WHERE ($2::uuid IS NULL OR o.id = $2)
-        GROUP BY o.id, o.name, o.slug
         ORDER BY o.name"#,
     )
     .bind(user_filter)
@@ -1398,17 +1436,60 @@ pub async fn aggregate_departments(
     let rows: Vec<(String, String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
             d.name, d.slug, o.name as org_name,
-            COUNT(m.id),
-            COALESCE(SUM(m.git_diff_added_lines), 0),
-            COALESCE(SUM(m.ai_additions), 0)
+            COALESCE(stats.commits, 0),
+            COALESCE(stats.total_lines, 0),
+            COALESCE(stats.ai_lines, 0)
         FROM departments d
         JOIN organizations o ON d.org_id = o.id
-        LEFT JOIN org_members om ON om.department_id = d.id AND om.org_id = d.org_id
-        LEFT JOIN metrics_events m ON m.user_id = om.user_id AND m.org_id = om.org_id AND m.event_type = 1
-          AND ($1::uuid IS NULL OR m.user_id = $1)
+        LEFT JOIN (
+            SELECT
+                org_id,
+                department_id,
+                SUM(commits)::bigint AS commits,
+                SUM(total_lines)::bigint AS total_lines,
+                SUM(ai_lines)::bigint AS ai_lines
+            FROM (
+                SELECT
+                    m.org_id,
+                    om.department_id,
+                    COUNT(m.id)::bigint AS commits,
+                    COALESCE(SUM(m.git_diff_added_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(m.ai_additions), 0)::bigint AS ai_lines
+                FROM org_members om
+                JOIN metrics_events m ON m.user_id = om.user_id
+                  AND m.org_id = om.org_id
+                  AND m.event_type = 1
+                WHERE ($1::uuid IS NULL OR m.user_id = $1)
+                  AND ($3::uuid IS NULL OR m.org_id = $3)
+                GROUP BY m.org_id, om.department_id
+
+                UNION ALL
+
+                SELECT
+                    p.org_id,
+                    om.department_id,
+                    COUNT(cs.sha)::bigint AS commits,
+                    COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
+                FROM projects p
+                JOIN commit_stats cs ON cs.project_id = p.id
+                JOIN org_members om ON om.user_id = p.user_id AND om.org_id = p.org_id
+                WHERE ($1::uuid IS NULL OR p.user_id = $1)
+                  AND ($3::uuid IS NULL OR p.org_id = $3)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM metrics_events m
+                      WHERE m.event_type = 1
+                        AND m.commit_sha = cs.sha
+                        AND ($1::uuid IS NULL OR m.user_id = $1)
+                        AND ($3::uuid IS NULL OR m.org_id = $3)
+                  )
+                GROUP BY p.org_id, om.department_id
+            ) combined
+            WHERE org_id IS NOT NULL AND department_id IS NOT NULL
+            GROUP BY org_id, department_id
+        ) stats ON stats.org_id = d.org_id AND stats.department_id = d.id
         WHERE ($2::text IS NULL OR o.slug = $2)
           AND ($3::uuid IS NULL OR o.id = $3)
-        GROUP BY d.id, d.name, d.slug, o.name
         ORDER BY o.name, d.name"#
     )
     .bind(user_filter)
