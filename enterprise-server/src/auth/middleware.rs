@@ -43,6 +43,22 @@ impl FromRequestParts<AppState> for OptionalAuth {
     }
 }
 
+/// Browser web session user, separate from API auth.
+#[derive(Debug, Clone)]
+pub struct WebSessionUser(pub Option<Uuid>);
+
+impl FromRequestParts<AppState> for WebSessionUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user_id = extract_web_session_user(parts, &state.db).await?;
+        Ok(WebSessionUser(user_id))
+    }
+}
+
 /// Admin guard - requires authentication AND admin/owner role
 #[derive(Debug, Clone)]
 pub struct AdminGuard(pub AuthIdentity);

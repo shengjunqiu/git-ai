@@ -14,3 +14,6 @@ pub mod telemetry;
 pub mod lifecycle;
 pub mod ci_events;
 pub mod login;
+pub mod auth_pages;
+pub mod auth_api;
+pub mod cli_authorize;

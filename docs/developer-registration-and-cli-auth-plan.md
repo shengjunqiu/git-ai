@@ -699,6 +699,42 @@ web_session=<random>; HttpOnly; SameSite=Lax; Path=/
 - `/auth/cli/authorize` 能识别 web session。
 - API worker 路由不会因为 web session cookie 被错误认证。
 
+### 阶段 3 执行记录（2026-07-06）
+
+状态：已完成。
+
+已完成改动：
+
+- 新增 `enterprise-server/src/handlers/auth_pages.rs`：
+  - `GET /auth/register` 返回注册页面。
+  - `GET /auth/login` 返回账号密码登录页面。
+- 新增 `enterprise-server/src/handlers/auth_api.rs`：
+  - `GET /auth/organizations?email=...` 返回可注册组织。
+  - `GET /auth/organizations/{org_id}/departments` 返回部门列表。
+  - `POST /auth/register` 支持 JSON 和 HTML form，完成用户、个人组织、组织成员、web session 创建。
+  - `POST /auth/login` 支持 JSON 和 HTML form，校验 active 用户和 Argon2 密码后创建 web session。
+  - `POST /auth/logout` revoke 当前 web session 并清除 cookie。
+- 新增 `enterprise-server/src/handlers/cli_authorize.rs`：
+  - `GET /auth/cli/authorize` 先接入 web session 识别；未登录时跳转 `/auth/login?return_to=...`。
+  - `POST /auth/cli/authorize` 暂时返回未实现，完整授权码生成留到阶段 4。
+- 更新 `enterprise-server/src/auth/middleware.rs`，新增 `WebSessionUser` extractor。
+- 更新 `enterprise-server/src/handlers/mod.rs` 和 `enterprise-server/src/routes.rs`，挂载阶段 3 的 `/auth/*` 路由。
+
+实现说明：
+
+- 保留现有 `/login`、`/logout` dashboard token/API key 登录兼容路径。
+- `POST /auth/register` 不接收 role，请求方不能注册成 `admin` 或 `owner`。
+- 公司组织 membership 使用 `role = member`，`ON CONFLICT` 只更新 `department_id`，不覆盖已有 role。
+- 注册成功记录 `user.register` 和 `org_member.create` 审计事件。
+- 登录成功记录 `user.login`，登出记录 `user.logout`。
+- `web_session` cookie 使用 `HttpOnly; SameSite=Lax; Path=/`，当 `base_url` 是 HTTPS 时增加 `Secure`。
+
+验证结果：
+
+- `cd enterprise-server && cargo test` 通过。
+- 测试结果：23 passed, 0 failed。
+- 测试输出仍包含仓库既有 warning。
+
 ## 7. 阶段 4：服务端 CLI 授权码流程
 
 ### Task 4.1：实现授权页 GET

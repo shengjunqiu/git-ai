@@ -55,6 +55,34 @@ pub fn build_router(state: AppState) -> Router {
             "/logout",
             get(crate::handlers::login::logout),
         )
+        // Developer account auth / CLI browser authorization
+        .route(
+            "/auth/register",
+            get(crate::handlers::auth_pages::register_page)
+                .post(crate::handlers::auth_api::register),
+        )
+        .route(
+            "/auth/login",
+            get(crate::handlers::auth_pages::login_page)
+                .post(crate::handlers::auth_api::login),
+        )
+        .route(
+            "/auth/logout",
+            post(crate::handlers::auth_api::logout),
+        )
+        .route(
+            "/auth/organizations",
+            get(crate::handlers::auth_api::organizations),
+        )
+        .route(
+            "/auth/organizations/{org_id}/departments",
+            get(crate::handlers::auth_api::departments),
+        )
+        .route(
+            "/auth/cli/authorize",
+            get(crate::handlers::cli_authorize::authorize_page)
+                .post(crate::handlers::cli_authorize::authorize_submit),
+        )
         // Metrics
         .route(
             "/worker/metrics/upload",
