@@ -55,11 +55,10 @@ async fn store_event(
         None
     };
 
-    let ai_additions_total = event
-        .ai_additions
-        .as_ref()
-        .map(|v| v.iter().sum::<i32>())
-        .unwrap_or(0);
+    let ai_additions_total = aggregate_ai_additions(
+        event.ai_additions.as_deref(),
+        event.tool_model_pairs.as_deref(),
+    );
 
     let raw_values_json = serde_json::to_value(&event.raw_values)
         .map_err(|e| AppError::Internal(format!("Failed to serialize raw_values: {}", e)))?;
@@ -114,4 +113,64 @@ async fn store_event(
     .map_err(|e| AppError::Database(e))?;
 
     Ok(())
+}
+
+fn aggregate_ai_additions(
+    ai_additions: Option<&[i32]>,
+    tool_model_pairs: Option<&[String]>,
+) -> i32 {
+    let Some(ai_additions) = ai_additions else {
+        return 0;
+    };
+
+    if let Some(tool_model_pairs) = tool_model_pairs {
+        if let Some((idx, _)) = tool_model_pairs
+            .iter()
+            .enumerate()
+            .find(|(_, pair)| pair.as_str() == "all")
+        {
+            if let Some(total) = ai_additions.get(idx) {
+                return *total;
+            }
+        }
+    }
+
+    ai_additions.iter().sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_ai_additions;
+
+    #[test]
+    fn aggregate_ai_additions_prefers_all_rollup() {
+        let additions = [264, 264];
+        let pairs = vec!["all".to_string(), "codex::gpt-5.5".to_string()];
+
+        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 264);
+    }
+
+    #[test]
+    fn aggregate_ai_additions_sums_when_no_all_rollup_exists() {
+        let additions = [120, 80];
+        let pairs = vec![
+            "codex::gpt-5.5".to_string(),
+            "cursor::claude-sonnet".to_string(),
+        ];
+
+        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 200);
+    }
+
+    #[test]
+    fn aggregate_ai_additions_falls_back_to_sum_when_all_has_no_matching_value() {
+        let additions = [120];
+        let pairs = vec!["codex::gpt-5.5".to_string(), "all".to_string()];
+
+        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 120);
+    }
+
+    #[test]
+    fn aggregate_ai_additions_defaults_to_zero_without_ai_values() {
+        assert_eq!(aggregate_ai_additions(None, None), 0);
+    }
 }
