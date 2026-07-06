@@ -1,0 +1,30 @@
+enterprise-server/src/db/migrations.rs
+  0a05c27b91612fe9 30
+enterprise-server/deploy/migrations/009_fix_metrics_ai_additions_all_rollup.sql
+  0a05c27b91612fe9 1-26
+enterprise-server/src/services/metrics.rs
+  0a05c27b91612fe9 58-61,117-176
+enterprise-server/migrations/009_fix_metrics_ai_additions_all_rollup.sql
+  0a05c27b91612fe9 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "9499b2cea7efbd2246c70aa9ea63d0948dde311e",
+  "prompts": {
+    "0a05c27b91612fe9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3625-017b-79d0-9493-215900868426",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 117,
+      "total_deletions": 5,
+      "accepted_lines": 120,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/67599aaee95ec8751ffa6112a44e95e2bc7600221ee3775ba1a053526e169c73"
+    }
+  }
+}
