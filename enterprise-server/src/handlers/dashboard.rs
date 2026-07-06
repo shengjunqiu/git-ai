@@ -3,7 +3,7 @@ use axum::response::{Html, IntoResponse, Json, Redirect};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::middleware::{AuthExtractor, OptionalAuth};
+use crate::auth::middleware::{DashboardAuth, OptionalAuth};
 use crate::error::AppError;
 use crate::routes::AppState;
 
@@ -15,7 +15,7 @@ pub async fn dashboard_me(
     // If not authenticated, redirect to login page
     let auth = match auth.0 {
         Some(a) => a,
-        None => return Redirect::to("/login").into_response(),
+        None => return Redirect::to("/auth/login?return_to=/me").into_response(),
     };
     let is_admin = auth.is_admin();
     let user_id_str = auth.user_id.to_string();
@@ -1092,7 +1092,7 @@ pub struct AggregateQuery {
 /// GET /api/v1/aggregate/summary — Global aggregate summary
 pub async fn aggregate_summary(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1159,7 +1159,7 @@ pub async fn aggregate_summary(
 /// GET /api/v1/aggregate/organizations
 pub async fn aggregate_organizations(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1202,7 +1202,7 @@ pub async fn aggregate_organizations(
 /// GET /api/v1/aggregate/departments
 pub async fn aggregate_departments(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
     Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
@@ -1247,7 +1247,7 @@ pub async fn aggregate_departments(
 /// GET /api/v1/aggregate/projects
 pub async fn aggregate_projects(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1354,7 +1354,7 @@ pub async fn aggregate_projects(
 /// GET /api/v1/aggregate/developers
 pub async fn aggregate_developers(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1447,7 +1447,7 @@ pub async fn aggregate_developers(
 /// GET /api/v1/aggregate/tools — Tool/Model breakdown statistics
 pub async fn aggregate_tools(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1616,7 +1616,7 @@ pub struct TrendsQuery {
 /// GET /api/v1/aggregate/trends — AI code attribution trends over time
 pub async fn aggregate_trends(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
     Query(query): Query<TrendsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
@@ -1742,7 +1742,7 @@ pub struct AgentComparisonQuery {
 /// GET /api/v1/aggregate/agent-comparison — Compare AI tools/models
 pub async fn aggregate_agent_comparison(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
     Query(query): Query<AgentComparisonQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
@@ -1864,7 +1864,7 @@ pub struct TeamComparisonQuery {
 /// GET /api/v1/aggregate/team-comparison — Compare AI adoption across teams/departments
 pub async fn aggregate_team_comparison(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: DashboardAuth,
     Query(query): Query<TeamComparisonQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);

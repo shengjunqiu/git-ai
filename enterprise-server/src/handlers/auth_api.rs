@@ -179,7 +179,7 @@ pub async fn login(
     } else if let Some(return_to) = safe_return_to(req.return_to.as_deref()) {
         Redirect::to(&return_to).into_response()
     } else {
-        crate::handlers::auth_pages::success_page("登录成功", "账号已登录。").into_response()
+        Redirect::to("/me").into_response()
     };
 
     set_session_cookie(&mut response, &state, &session_token);

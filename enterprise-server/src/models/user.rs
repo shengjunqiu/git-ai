@@ -263,6 +263,7 @@ impl AuthIdentity {
 pub enum AuthMethod {
     BearerToken,
     ApiKey,
+    WebSession,
 }
 
 /// Request headers extracted by middleware

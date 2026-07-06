@@ -4,6 +4,7 @@
 //! to authenticate and access the dashboard. Sets an HttpOnly cookie.
 
 use axum::extract::{Form, State};
+use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Redirect};
 use serde::Deserialize;
 
@@ -147,13 +148,44 @@ pub async fn login_submit(
 }
 
 /// GET /logout — Clear auth cookies and redirect to login
-pub async fn logout() -> impl IntoResponse {
-    let mut response = Redirect::to("/login").into_response();
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(session_token) =
+        cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE)
+    {
+        crate::services::sessions::revoke_web_session(&state.db, &session_token)
+            .await
+            .ok();
+    }
+
+    let mut response = Redirect::to("/auth/login").into_response();
     let clear_access = "access_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap();
     let clear_api = "api_key=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap();
-    response.headers_mut().insert(axum::http::header::SET_COOKIE, clear_access);
-    response.headers_mut().append(axum::http::header::SET_COOKIE, clear_api);
+    let clear_web_session = "web_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        .parse()
+        .unwrap();
+    response.headers_mut().insert(header::SET_COOKIE, clear_access);
+    response.headers_mut().append(header::SET_COOKIE, clear_api);
     response
+        .headers_mut()
+        .append(header::SET_COOKIE, clear_web_session);
+    response
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?;
+    let cookie_str = cookie_header.to_str().ok()?;
+    cookie_str.split(';').find_map(|cookie| {
+        let cookie = cookie.trim();
+        let (cookie_name, cookie_value) = cookie.split_once('=')?;
+        if cookie_name == name {
+            Some(cookie_value.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn login_error_page(msg: &str) -> Html<String> {

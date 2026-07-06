@@ -36,10 +36,26 @@ impl FromRequestParts<AppState> for OptionalAuth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let identity = extract_auth_identity(parts, &state.config, &state.db)
+        let identity = extract_dashboard_auth_identity(parts, &state.config, &state.db)
             .await
             .ok();
         Ok(OptionalAuth(identity))
+    }
+}
+
+/// Dashboard auth accepts legacy dashboard token/API-key cookies and web sessions.
+#[derive(Debug, Clone)]
+pub struct DashboardAuth(pub AuthIdentity);
+
+impl FromRequestParts<AppState> for DashboardAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let identity = extract_dashboard_auth_identity(parts, &state.config, &state.db).await?;
+        Ok(DashboardAuth(identity))
     }
 }
 
@@ -70,7 +86,7 @@ impl FromRequestParts<AppState> for AdminGuard {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let identity = extract_auth_identity(parts, &state.config, &state.db).await?;
+        let identity = extract_dashboard_auth_identity(parts, &state.config, &state.db).await?;
         if identity.is_admin() {
             Ok(AdminGuard(identity))
         } else {
@@ -253,6 +269,56 @@ async fn extract_auth_identity(
     }
 
     Err(AppError::Unauthorized("Authentication required".into()))
+}
+
+async fn extract_dashboard_auth_identity(
+    parts: &mut Parts,
+    config: &crate::config::AppConfig,
+    pool: &sqlx::PgPool,
+) -> Result<AuthIdentity, AppError> {
+    if let Ok(identity) = extract_auth_identity(parts, config, pool).await {
+        return Ok(identity);
+    }
+
+    if let Some(identity) = extract_web_session_identity(parts, pool).await? {
+        return Ok(identity);
+    }
+
+    Err(AppError::Unauthorized("Authentication required".into()))
+}
+
+async fn extract_web_session_identity(
+    parts: &Parts,
+    pool: &sqlx::PgPool,
+) -> Result<Option<AuthIdentity>, AppError> {
+    let Some(user_id) = extract_web_session_user(parts, pool).await? else {
+        return Ok(None);
+    };
+
+    let user_row: Option<(String, String)> = sqlx::query_as(
+        "SELECT email, name FROM users WHERE id = $1 AND status = 'active'",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let Some((email, name)) = user_row else {
+        return Ok(None);
+    };
+
+    let org_scope = org_scope::preferred_org_scope(pool, user_id).await?;
+
+    Ok(Some(AuthIdentity {
+        user_id,
+        email,
+        name,
+        org_id: org_scope.as_ref().map(|scope| scope.org_id),
+        org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+        role: org_scope.as_ref().map(|scope| scope.role.clone()),
+        scopes: vec!["dashboard:read".into()],
+        auth_method: AuthMethod::WebSession,
+    }))
 }
 
 /// Extract the browser web session user without changing API Bearer/API key auth semantics.
