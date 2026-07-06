@@ -33,11 +33,9 @@ pub async fn upload_report(
     let project_row: (i64,) = sqlx::query_as(
         r#"INSERT INTO projects (remote_url_hash, branch, head_commit, org_id, user_id)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (remote_url_hash) DO UPDATE SET
+        ON CONFLICT (remote_url_hash, org_id, user_id) DO UPDATE SET
             branch = COALESCE(EXCLUDED.branch, projects.branch),
             head_commit = COALESCE(EXCLUDED.head_commit, projects.head_commit),
-            org_id = COALESCE(EXCLUDED.org_id, projects.org_id),
-            user_id = COALESCE(EXCLUDED.user_id, projects.user_id),
             updated_at = now()
         RETURNING id"#
     )

@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::metrics::{DecodedMetricEvent, MetricEvent, MetricsUploadResponse, MetricUploadError};
+use crate::models::metrics::{DecodedMetricEvent, MetricEvent, MetricUploadError, MetricsUploadResponse};
 use crate::pos_encoded::decode_event;
 
 /// Process a batch of metrics events
@@ -48,15 +48,9 @@ async fn store_event(
     distinct_id: &Option<String>,
 ) -> Result<(), AppError> {
     let org_id = if let Some(uid) = user_id {
-        let row: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1"
-        )
-        .bind(uid)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| AppError::Database(e))?;
-
-        row.map(|r| r.0)
+        crate::services::org_scope::preferred_org_scope(pool, uid)
+            .await?
+            .map(|scope| scope.org_id)
     } else {
         None
     };

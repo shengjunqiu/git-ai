@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
 use crate::routes::AppState;
-use crate::services::sessions;
+use crate::services::{org_scope, sessions};
 
 /// Extract auth identity from request (Bearer token or X-API-Key)
 #[derive(Debug, Clone)]
@@ -127,21 +127,15 @@ async fn extract_auth_identity(
             let user_id = Uuid::parse_str(&claims.sub)
                 .map_err(|_| AppError::Unauthorized("Invalid user ID in token".into()))?;
 
-            let org_row: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1"
-            )
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| AppError::Database(e))?;
+            let org_scope = org_scope::preferred_org_scope(pool, user_id).await?;
 
             return Ok(AuthIdentity {
                 user_id,
                 email: claims.email,
                 name: claims.name,
-                org_id: org_row.map(|r| r.0),
-                org_slug: claims.orgs.first().map(|o| o.org_slug.clone()),
-                role: claims.orgs.first().map(|o| o.role.clone()),
+                org_id: org_scope.as_ref().map(|scope| scope.org_id),
+                org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                role: org_scope.as_ref().map(|scope| scope.role.clone()),
                 scopes: vec![
                     "metrics:write".into(),
                     "cas:write".into(),
@@ -164,21 +158,15 @@ async fn extract_auth_identity(
                     let user_id = Uuid::parse_str(&claims.sub)
                         .map_err(|_| AppError::Unauthorized("Invalid user ID in token".into()))?;
 
-                    let org_row: Option<(Uuid,)> = sqlx::query_as(
-                        "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1"
-                    )
-                    .bind(user_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| AppError::Database(e))?;
+                    let org_scope = org_scope::preferred_org_scope(pool, user_id).await?;
 
                     return Ok(AuthIdentity {
                         user_id,
                         email: claims.email,
                         name: claims.name,
-                        org_id: org_row.map(|r| r.0),
-                        org_slug: claims.orgs.first().map(|o| o.org_slug.clone()),
-                        role: claims.orgs.first().map(|o| o.role.clone()),
+                        org_id: org_scope.as_ref().map(|scope| scope.org_id),
+                        org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                        role: org_scope.as_ref().map(|scope| scope.role.clone()),
                         scopes: vec![
                             "metrics:write".into(),
                             "cas:write".into(),
@@ -236,38 +224,25 @@ async fn extract_auth_identity(
                 .map_err(|e| AppError::Database(e))?;
 
                 if let Some((_id, email, name)) = user_row {
-                    // Look up the user's role in org_members for the API key's org
-                    // This is critical: we must use the org_id from the API key to get
-                    // the correct role (e.g., "member" in linewell.com vs "owner" in personal org)
-                    let role_row: Option<(String,)> = if let Some(key_org_id) = org_id {
-                        sqlx::query_as(
-                            "SELECT role FROM org_members WHERE user_id = $1 AND org_id = $2"
-                        )
-                        .bind(user_id)
-                        .bind(key_org_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| AppError::Database(e))?
+                    let membership_scope = if let Some(key_org_id) = org_id {
+                        org_scope::org_scope_for_org(pool, user_id, key_org_id).await?
                     } else {
-                        // No org_id on API key, fall back to first org membership
-                        sqlx::query_as(
-                            "SELECT role FROM org_members WHERE user_id = $1 LIMIT 1"
-                        )
-                        .bind(user_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| AppError::Database(e))?
+                        org_scope::preferred_org_scope(pool, user_id).await?
                     };
 
                     // Use org_members role if available, otherwise fall back to "api_key"
-                    let role = role_row.map(|r| r.0).unwrap_or_else(|| "api_key".into());
+                    let role = membership_scope
+                        .as_ref()
+                        .map(|scope| scope.role.clone())
+                        .unwrap_or_else(|| "api_key".into());
+                    let effective_org_id = org_id.or_else(|| membership_scope.as_ref().map(|scope| scope.org_id));
 
                     return Ok(AuthIdentity {
                         user_id,
                         email,
                         name,
-                        org_id,
-                        org_slug: None,
+                        org_id: effective_org_id,
+                        org_slug: membership_scope.as_ref().map(|scope| scope.org_slug.clone()),
                         role: Some(role),
                         scopes,
                         auth_method: AuthMethod::ApiKey,

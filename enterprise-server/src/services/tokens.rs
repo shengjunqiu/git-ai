@@ -29,10 +29,15 @@ pub async fn generate_token_response(
          FROM org_members om \
          JOIN organizations o ON o.id = om.org_id \
          WHERE om.user_id = $1 \
-         ORDER BY CASE WHEN om.org_id = $2 THEN 0 ELSE 1 END, o.created_at",
+         ORDER BY CASE \
+             WHEN $2::uuid IS NOT NULL AND om.org_id = $2 THEN 0 \
+             WHEN $2::uuid IS NULL AND $3::uuid IS NOT NULL AND om.org_id <> $3 THEN 0 \
+             ELSE 1 \
+         END, o.created_at",
     )
     .bind(user_id)
     .bind(user_row.3)
+    .bind(user_row.2)
     .fetch_all(&state.db)
     .await
     .map_err(AppError::Database)?;

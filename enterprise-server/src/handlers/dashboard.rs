@@ -1215,8 +1215,8 @@ pub async fn aggregate_departments(
             COALESCE(SUM(m.human_additions), 0)
         FROM departments d
         JOIN organizations o ON d.org_id = o.id
-        LEFT JOIN org_members om ON om.department_id = d.id
-        LEFT JOIN metrics_events m ON m.user_id = om.user_id AND m.event_type = 1
+        LEFT JOIN org_members om ON om.department_id = d.id AND om.org_id = d.org_id
+        LEFT JOIN metrics_events m ON m.user_id = om.user_id AND m.org_id = om.org_id AND m.event_type = 1
           AND ($1::uuid IS NULL OR m.user_id = $1)
         WHERE ($2::text IS NULL OR o.slug = $2)
           AND ($3::uuid IS NULL OR o.id = $3)
@@ -1879,8 +1879,8 @@ pub async fn aggregate_team_comparison(
             COALESCE(SUM(m.human_additions), 0) AS human_lines
         FROM departments d
         JOIN organizations o ON d.org_id = o.id
-        LEFT JOIN org_members om ON om.department_id = d.id
-        LEFT JOIN metrics_events m ON m.user_id = om.user_id AND m.event_type = 1
+        LEFT JOIN org_members om ON om.department_id = d.id AND om.org_id = d.org_id
+        LEFT JOIN metrics_events m ON m.user_id = om.user_id AND m.org_id = om.org_id AND m.event_type = 1
           AND ($1::uuid IS NULL OR m.user_id = $1)
         WHERE ($2::text IS NULL OR o.slug = $2)
           AND ($3::uuid IS NULL OR o.id = $3)

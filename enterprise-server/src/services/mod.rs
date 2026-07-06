@@ -2,6 +2,7 @@ pub mod audit;
 pub mod cas;
 pub mod data_retention;
 pub mod metrics;
+pub mod org_scope;
 pub mod passwords;
 pub mod rate_limit;
 pub mod registration;

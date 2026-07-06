@@ -1278,6 +1278,44 @@ Organizations
 - Alice 的数据归属 Linewell / Backend。
 - Bob 的数据独立显示，不会归到 Alice。
 
+### 阶段 6 执行记录（2026-07-06）
+
+状态：代码修正已完成；Alice/Bob 的真实浏览器登录、上传和 dashboard 手工核验留到阶段 7 端到端验收。
+
+已完成改动：
+
+- 新增 `enterprise-server/src/services/org_scope.rs`：
+  - 集中封装用户当前组织范围查询。
+  - 优先使用 `users.default_org_id` 对应的 `org_members`。
+  - 如果 `default_org_id` 为空，优先选择非个人组织 membership，再按组织创建时间兜底。
+  - 返回 `org_id`、`org_slug` 和用户在该组织内的 role。
+- 更新 `enterprise-server/src/auth/middleware.rs`：
+  - Bearer token 路径不再用 `SELECT org_id FROM org_members ... LIMIT 1`。
+  - access token cookie 路径不再用旧 `LIMIT 1`。
+  - API key 未绑定 `org_id` 时也使用默认组织范围。
+  - API key 绑定 `org_id` 时读取该组织内的 role 和 slug。
+- 更新 `enterprise-server/src/services/tokens.rs`：
+  - access token claims 中的 `orgs` 排序优先 `default_org_id`。
+  - 旧用户没有 `default_org_id` 时优先非个人组织，避免个人组织抢占第一个 org。
+- 更新 `enterprise-server/src/services/metrics.rs`：
+  - metrics 上传写入 `metrics_events.org_id` 时改用默认组织范围。
+- 更新 `enterprise-server/src/handlers/dashboard.rs`：
+  - 部门聚合和 team comparison 的 `org_members` join 增加 `om.org_id = d.org_id`。
+  - metrics join 增加 `m.org_id = om.org_id`，避免同一用户跨组织数据混入部门统计。
+  - 继续沿用 `build_data_filters()`：普通 member 限制本人，admin/owner 限制当前组织。
+- 更新 `enterprise-server/src/handlers/report.rs`：
+  - report upload 的 project upsert 改为按 `(remote_url_hash, org_id, user_id)` 冲突更新。
+  - 不再让同 repo hash 的上传覆盖已有项目的 `org_id` / `user_id`。
+- 新增 `enterprise-server/migrations/007_project_scope_by_user_org.sql` 并接入 migration runner：
+  - 移除旧的全局 `projects.remote_url_hash` 唯一约束。
+  - 新增 `(remote_url_hash, org_id, user_id)` 唯一约束。
+
+验证结果：
+
+- `cd enterprise-server && cargo test` 通过。
+- 测试结果：27 passed, 0 failed。
+- 测试输出仍包含仓库既有 warning。
+
 ## 10. 阶段 7：测试矩阵
 
 ### Task 7.1：服务端单元和 handler 测试
