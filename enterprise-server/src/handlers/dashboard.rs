@@ -267,7 +267,7 @@ pub async fn dashboard_me(
                 <div class="stats-grid" id="overview-stats">
                     <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
-                    <div class="stat-card"><div class="stat-label">人工编写代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
+                    <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
                     <div class="stat-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
                     <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
@@ -299,7 +299,7 @@ pub async fn dashboard_me(
                         <select id="trend-metric" onchange="loadTrends()">
                             <option value="ai_ratio">AI 占比</option>
                             <option value="ai_lines">AI 代码行数</option>
-                            <option value="human_lines">人工代码行数</option>
+                            <option value="human_lines">非 AI 代码行数</option>
                             <option value="commits">提交数</option>
                         </select>
                         <select id="trend-granularity" onchange="loadTrends()">
@@ -329,7 +329,7 @@ pub async fn dashboard_me(
                 </div>
                 <div class="table-card">
                     <table>
-                        <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>人工代码行</th><th>AI 占比</th></tr></thead>
+                        <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
                         <tbody id="org-table"><tr><td colspan="5">加载中...</td></tr></tbody>
                     </table>
                 </div>
@@ -345,7 +345,7 @@ pub async fn dashboard_me(
                 </div>
                 <div class="table-card">
                     <table>
-                        <thead><tr><th>姓名/邮箱</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>人工代码行</th><th>AI 占比</th></tr></thead>
+                        <thead><tr><th>姓名/邮箱</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
                         <tbody id="dev-table"><tr><td colspan="6">加载中...</td></tr></tbody>
                     </table>
                 </div>
@@ -361,7 +361,7 @@ pub async fn dashboard_me(
                 </div>
                 <div class="table-card">
                     <table>
-                        <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>人工代码行</th><th>AI 占比</th></tr></thead>
+                        <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
                         <tbody id="proj-table"><tr><td colspan="6">加载中...</td></tr></tbody>
                     </table>
                 </div>
@@ -568,7 +568,7 @@ pub async fn dashboard_me(
                         labels,
                         datasets: [
                             {{ label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 }},
-                            {{ label: '人工代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 }},
+                            {{ label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 }},
                         ]
                     }},
                     options: {{
@@ -588,7 +588,7 @@ pub async fn dashboard_me(
             const metric = document.getElementById('trend-metric').value;
             const granularity = document.getElementById('trend-granularity').value;
 
-            const metricLabels = {{ ai_ratio: 'AI 占比', ai_lines: 'AI 代码行数', human_lines: '人工代码行数', commits: '提交数' }};
+            const metricLabels = {{ ai_ratio: 'AI 占比', ai_lines: 'AI 代码行数', human_lines: '非 AI 代码行数', commits: '提交数' }};
             const granLabels = {{ day: '按天', week: '按周', month: '按月' }};
             document.getElementById('trend-chart-title').textContent =
                 `${{metricLabels[metric]}}趋势（${{granLabels[granularity]}}）`;
@@ -739,7 +739,7 @@ pub async fn dashboard_me(
                     const ai = t.ai_additions || 0;
                     const mixed = t.mixed_additions || 0;
                     const accepted = t.ai_accepted || 0;
-                    const total = (t.total_ai_additions || 0) + ai;
+                    const total = t.total_ai_additions || ai;
                     const source = t.source === 'report'
                         ? '<span class="badge human" style="margin-left:0.5rem">报告</span>'
                         : '<span class="badge ai" style="margin-left:0.5rem">指标</span>';
@@ -1096,11 +1096,12 @@ pub async fn aggregate_summary(
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
-    let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+    let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
             COUNT(*) as total_commits,
+            COALESCE(SUM(git_diff_added_lines), 0) as total_code_lines,
             COALESCE(SUM(ai_additions), 0) as total_ai_lines,
-            COALESCE(SUM(human_additions), 0) as total_human_lines,
+            COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as total_human_lines,
             COUNT(DISTINCT author_email) as total_developers,
             COUNT(DISTINCT repo_url) as total_projects
         FROM metrics_events WHERE event_type = 1
@@ -1113,11 +1114,12 @@ pub async fn aggregate_summary(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+    let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
             COUNT(cs.sha) as total_commits,
+            COALESCE(SUM(cs.git_diff_added_lines), 0) as total_code_lines,
             COALESCE(SUM(cs.ai_additions), 0) as total_ai_lines,
-            COALESCE(SUM(cs.human_additions), 0) as total_human_lines,
+            COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) as total_human_lines,
             COUNT(DISTINCT cs.author) as total_developers,
             COUNT(DISTINCT p.id) as total_projects
         FROM projects p
@@ -1139,15 +1141,55 @@ pub async fn aggregate_summary(
     .map_err(|e| AppError::Database(e))?;
 
     let total_commits = row.0.unwrap_or(0) + report_row.0.unwrap_or(0);
-    let total_ai = row.1.unwrap_or(0) + report_row.1.unwrap_or(0);
-    let total_human = row.2.unwrap_or(0) + report_row.2.unwrap_or(0);
-    let total_developers = row.3.unwrap_or(0) + report_row.3.unwrap_or(0);
-    let total_projects = row.4.unwrap_or(0) + report_row.4.unwrap_or(0);
-    let total = total_ai + total_human;
-    let pct_ai = if total > 0 { (total_ai as f64 / total as f64) * 100.0 } else { 0.0 };
+    let total_code = row.1.unwrap_or(0) + report_row.1.unwrap_or(0);
+    let total_ai = row.2.unwrap_or(0) + report_row.2.unwrap_or(0);
+    let total_human = row.3.unwrap_or(0) + report_row.3.unwrap_or(0);
+    let total_developers: i64 = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(DISTINCT developer_key)::bigint
+        FROM (
+            SELECT
+                LOWER(TRIM(CASE
+                    WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
+                    ELSE author_email
+                END)) AS developer_key
+            FROM metrics_events
+            WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+
+            UNION ALL
+
+            SELECT
+                LOWER(TRIM(CASE
+                    WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
+                    ELSE cs.author
+                END)) AS developer_key
+            FROM projects p
+            JOIN commit_stats cs ON cs.project_id = p.id
+            WHERE cs.author IS NOT NULL AND cs.author != ''
+              AND ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND NOT EXISTS (
+                  SELECT 1 FROM metrics_events m
+                  WHERE m.event_type = 1
+                    AND m.commit_sha = cs.sha
+                    AND ($1::uuid IS NULL OR m.user_id = $1)
+                    AND ($2::uuid IS NULL OR m.org_id = $2)
+              )
+        ) combined
+        WHERE developer_key IS NOT NULL AND developer_key != ''"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+    let total_projects = row.5.unwrap_or(0) + report_row.5.unwrap_or(0);
+    let pct_ai = if total_code > 0 { (total_ai as f64 / total_code as f64) * 100.0 } else { 0.0 };
 
     Ok(Json(json!({
         "total_commits": total_commits,
+        "total_code_lines": total_code,
         "total_ai_lines": total_ai,
         "total_human_lines": total_human,
         "pct_ai_lines": pct_ai,
@@ -1167,8 +1209,8 @@ pub async fn aggregate_organizations(
         r#"SELECT
             o.name, o.slug,
             COUNT(m.id),
-            COALESCE(SUM(m.ai_additions), 0),
-            COALESCE(SUM(m.human_additions), 0)
+            COALESCE(SUM(m.git_diff_added_lines), 0),
+            COALESCE(SUM(m.ai_additions), 0)
         FROM organizations o
         LEFT JOIN metrics_events m ON m.org_id = o.id AND m.event_type = 1
           AND ($1::uuid IS NULL OR m.user_id = $1)
@@ -1182,14 +1224,15 @@ pub async fn aggregate_organizations(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(name, slug, commits, ai, human)| {
+    let result: Vec<Value> = rows.iter().map(|(name, slug, commits, total, ai)| {
         let ai = ai.unwrap_or(0);
-        let human = human.unwrap_or(0);
-        let total = ai + human;
+        let total = total.unwrap_or(0);
+        let human = (total - ai).max(0);
         json!({
             "organization": name,
             "org_slug": slug,
             "total_commits": commits.unwrap_or(0),
+            "w_total": total,
             "w_ai": ai,
             "w_human": human,
             "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
@@ -1211,8 +1254,8 @@ pub async fn aggregate_departments(
         r#"SELECT
             d.name, d.slug, o.name as org_name,
             COUNT(m.id),
-            COALESCE(SUM(m.ai_additions), 0),
-            COALESCE(SUM(m.human_additions), 0)
+            COALESCE(SUM(m.git_diff_added_lines), 0),
+            COALESCE(SUM(m.ai_additions), 0)
         FROM departments d
         JOIN organizations o ON d.org_id = o.id
         LEFT JOIN org_members om ON om.department_id = d.id AND om.org_id = d.org_id
@@ -1230,14 +1273,18 @@ pub async fn aggregate_departments(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(name, slug, org_name, commits, ai, human)| {
+    let result: Vec<Value> = rows.iter().map(|(name, slug, org_name, commits, total, ai)| {
+        let ai = ai.unwrap_or(0);
+        let total = total.unwrap_or(0);
+        let human = (total - ai).max(0);
         json!({
             "department": name,
             "dept_slug": slug,
             "organization": org_name,
             "total_commits": commits.unwrap_or(0),
-            "w_ai": ai.unwrap_or(0),
-            "w_human": human.unwrap_or(0),
+            "w_total": total,
+            "w_ai": ai,
+            "w_human": human,
         })
     }).collect();
 
@@ -1256,8 +1303,8 @@ pub async fn aggregate_projects(
         r#"SELECT
             repo_url,
             COUNT(*) as total_commits,
-            COALESCE(SUM(ai_additions), 0),
-            COALESCE(SUM(human_additions), 0)
+            COALESCE(SUM(git_diff_added_lines), 0),
+            COALESCE(SUM(ai_additions), 0)
         FROM metrics_events
         WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
           AND ($1::uuid IS NULL OR user_id = $1)
@@ -1276,8 +1323,8 @@ pub async fn aggregate_projects(
         r#"SELECT
             p.id, p.remote_url_hash, p.branch, p.organization, p.department,
             COUNT(cs.sha),
-            COALESCE(SUM(cs.ai_additions), 0),
-            COALESCE(SUM(cs.human_additions), 0)
+            COALESCE(SUM(cs.git_diff_added_lines), 0),
+            COALESCE(SUM(cs.ai_additions), 0)
         FROM projects p
         LEFT JOIN commit_stats cs ON cs.project_id = p.id
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
@@ -1296,10 +1343,10 @@ pub async fn aggregate_projects(
     let mut result = Vec::new();
 
     // First pass: metrics_events data
-    for (repo_url, commits, ai, human) in &metrics_rows {
+    for (repo_url, commits, total, ai) in &metrics_rows {
         let ai = ai.unwrap_or(0);
-        let human = human.unwrap_or(0);
-        let total = ai + human;
+        let total = total.unwrap_or(0);
+        let human = (total - ai).max(0);
         seen_urls.insert(repo_url.clone());
         // Extract a human-readable project name from the repo URL
         let project_name = repo_url
@@ -1313,6 +1360,7 @@ pub async fn aggregate_projects(
             "repo_url": repo_url,
             "project_name": project_name,
             "total_commits": commits.unwrap_or(0),
+            "total_code": total,
             "total_ai": ai,
             "total_human": human,
             "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
@@ -1320,11 +1368,11 @@ pub async fn aggregate_projects(
     }
 
     // Second pass: report data (only add if not already covered by metrics)
-    for (id, url_hash, branch, org, dept, commits, ai, human) in &report_rows {
+    for (id, url_hash, branch, org, dept, commits, total, ai) in &report_rows {
         // Try to match by url_hash — skip if we already have this repo from metrics
         let ai = ai.unwrap_or(0);
-        let human = human.unwrap_or(0);
-        let total = ai + human;
+        let total = total.unwrap_or(0);
+        let human = (total - ai).max(0);
         if !seen_urls.contains(url_hash) {
             let project_name = url_hash
                 .trim_end_matches('/')
@@ -1341,6 +1389,7 @@ pub async fn aggregate_projects(
                 "organization": org,
                 "department": dept,
                 "total_commits": commits.unwrap_or(0),
+                "total_code": total,
                 "total_ai": ai,
                 "total_human": human,
                 "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
@@ -1378,7 +1427,7 @@ pub async fn aggregate_developers(
                 COUNT(*) as commits,
                 COALESCE(SUM(git_diff_added_lines), 0) as added,
                 COALESCE(SUM(ai_additions), 0) as ai,
-                COALESCE(SUM(human_additions), 0) as human
+                COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as human
             FROM metrics_events
             WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
               AND ($1::uuid IS NULL OR user_id = $1)
@@ -1396,7 +1445,7 @@ pub async fn aggregate_developers(
                 COUNT(*) as commits,
                 COALESCE(SUM(cs.git_diff_added_lines), 0) as added,
                 COALESCE(SUM(cs.ai_additions), 0) as ai,
-                COALESCE(SUM(cs.human_additions), 0) as human
+                COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) as human
             FROM projects p
             JOIN commit_stats cs ON cs.project_id = p.id
             WHERE cs.author IS NOT NULL AND cs.author != ''
@@ -1423,7 +1472,7 @@ pub async fn aggregate_developers(
     let result: Vec<Value> = rows.iter().map(|(raw_author, email, commits, added, ai, human)| {
         let ai = ai.unwrap_or(0);
         let human = human.unwrap_or(0);
-        let total = ai + human;
+        let total = added.unwrap_or(0);
         // Extract display name from "Name <email>" format
         let name = if raw_author.contains('<') {
             raw_author.split('<').next().unwrap_or("").trim().to_string()
@@ -1473,17 +1522,40 @@ pub async fn aggregate_tools(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    // From metrics_events: expand tool_model_pairs JSON array to get per-tool stats
-    let metrics_rows: Vec<(Option<serde_json::Value>, Option<i32>, Option<i32>, Option<i32>)> = sqlx::query_as(
+    // From metrics_events: expand tool_model_pairs and PosEncoded arrays by matching ordinality.
+    let metrics_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
-            tool_model_pairs,
-            ai_additions,
-            human_additions,
-            mixed_additions
-        FROM metrics_events
-        WHERE event_type = 1
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)"#
+            pair.tool_model,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions
+        FROM metrics_events m
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS pair(tool_model, ord)
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
+        WHERE m.event_type = 1
+          AND pair.tool_model != 'all'
+          AND ($1::uuid IS NULL OR m.user_id = $1)
+          AND ($2::uuid IS NULL OR m.org_id = $2)
+        GROUP BY pair.tool_model
+        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1510,44 +1582,6 @@ pub async fn aggregate_tools(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let mut tool_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-
-    // Expand tool_model_pairs from Committed events
-    for (pairs_json, ai_add, human_add, mixed_add) in &metrics_rows {
-        let ai_total = ai_add.unwrap_or(0) as i64;
-        let _human_total = human_add.unwrap_or(0) as i64;
-        let mixed_total = mixed_add.unwrap_or(0) as i64;
-
-        if let Some(pairs) = pairs_json {
-            if let Some(arr) = pairs.as_array() {
-                let count = arr.len().max(1) as i64;
-                let ai_per_tool = ai_total / count;
-                let mixed_per_tool = mixed_total / count;
-
-                for pair_val in arr {
-                    if let Some(pair_str) = pair_val.as_str() {
-                        if pair_str == "all" { continue; }
-                        *tool_map.entry(pair_str.to_string()).or_insert(0) += ai_per_tool;
-                        let mixed_key = format!("{}__mixed", pair_str);
-                        *tool_map.entry(mixed_key).or_insert(0) += mixed_per_tool;
-                    }
-                }
-            }
-        }
-    }
-
-    // Also add Checkpoint/AgentUsage events which have tool/model directly
-    for (tool, model, ai_add) in &checkpoint_rows {
-        let tool_name = tool.as_deref().unwrap_or("unknown");
-        let model_name = model.as_deref().unwrap_or("");
-        let tool_model = if model_name.is_empty() {
-            tool_name.to_string()
-        } else {
-            format!("{}::{}", tool_name, model_name)
-        };
-        *tool_map.entry(tool_model).or_insert(0) += ai_add.unwrap_or(0) as i64;
-    }
-
     let mut tools: Vec<Value> = Vec::new();
 
     // Add report-based tool stats
@@ -1563,31 +1597,38 @@ pub async fn aggregate_tools(
         }));
     }
 
-    // Add metrics-based tool stats (from tool_model_pairs expansion)
-    for (tool_model, ai_additions) in &tool_map {
-        // Skip internal mixed-tracking keys
-        if tool_model.contains("__mixed") { continue; }
+    // Add metrics-based committed-event stats.
+    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &metrics_rows {
+        tools.push(json!({
+            "tool_model": tool_model,
+            "source": "metrics",
+            "ai_additions": ai_add.unwrap_or(0),
+            "mixed_additions": mixed_add.unwrap_or(0),
+            "ai_accepted": ai_accept.unwrap_or(0),
+            "total_ai_additions": total_ai_add.unwrap_or(0),
+            "total_ai_deletions": total_ai_del.unwrap_or(0),
+        }));
+    }
 
-        let mixed_key = format!("{}__mixed", tool_model);
-        let mixed_additions = tool_map.get(&mixed_key).copied().unwrap_or(0);
+    // Also add Checkpoint/AgentUsage events which have tool/model directly.
+    for (tool, model, ai_add) in &checkpoint_rows {
+        let tool_name = tool.as_deref().unwrap_or("unknown");
+        let model_name = model.as_deref().unwrap_or("");
+        let tool_model = if model_name.is_empty() {
+            tool_name.to_string()
+        } else {
+            format!("{}::{}", tool_name, model_name)
+        };
 
-        // Check if this tool_model already exists from report data
-        let already_exists = tools.iter().any(|t| {
-            t.get("tool_model").and_then(|v| v.as_str()) == Some(tool_model)
-                && t.get("source").and_then(|v| v.as_str()) == Some("report")
-        });
-
-        if !already_exists {
-            tools.push(json!({
-                "tool_model": tool_model,
-                "source": "metrics",
-                "ai_additions": *ai_additions,
-                "mixed_additions": mixed_additions,
-                "ai_accepted": 0,
-                "total_ai_additions": 0,
-                "total_ai_deletions": 0,
-            }));
-        }
+        tools.push(json!({
+            "tool_model": tool_model,
+            "source": "metrics",
+            "ai_additions": ai_add.unwrap_or(0),
+            "mixed_additions": 0,
+            "ai_accepted": 0,
+            "total_ai_additions": 0,
+            "total_ai_deletions": 0,
+        }));
     }
 
     // Sort by ai_additions descending
@@ -1655,7 +1696,7 @@ pub async fn aggregate_trends(
             SELECT
                 DATE_TRUNC('{0}', created_at)::date AS period,
                 COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
-                COALESCE(SUM(human_additions), 0)::bigint AS human_lines,
+                COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)::bigint AS human_lines,
                 COUNT(*)::bigint AS commits
             FROM metrics_events
             WHERE event_type = 1
@@ -1671,7 +1712,7 @@ pub async fn aggregate_trends(
             SELECT
                 DATE_TRUNC('{0}', cs.author_time::timestamptz)::date AS period,
                 COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
-                COALESCE(SUM(cs.human_additions), 0)::bigint AS human_lines,
+                COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0)::bigint AS human_lines,
                 COUNT(*)::bigint AS commits
             FROM projects p
             JOIN commit_stats cs ON cs.project_id = p.id
@@ -1768,21 +1809,42 @@ pub async fn aggregate_agent_comparison(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    // From metrics events (real-time)
-    let metrics_rows: Vec<(Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    // From metrics events (real-time): expand tool_model_pairs and PosEncoded arrays by matching ordinality.
+    let metrics_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
-            tool, model,
-            COALESCE(SUM(ai_additions), 0),
-            COALESCE(SUM(human_additions), 0),
-            COUNT(*)
-        FROM metrics_events
-        WHERE event_type = 1
-          AND tool IS NOT NULL
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
-          AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-        GROUP BY tool, model
-        ORDER BY SUM(ai_additions) DESC"#
+            pair.tool_model,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions,
+            COUNT(DISTINCT m.id)::bigint AS commits
+        FROM metrics_events m
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS pair(tool_model, ord)
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
+        WHERE m.event_type = 1
+          AND pair.tool_model != 'all'
+          AND ($1::uuid IS NULL OR m.user_id = $1)
+          AND ($2::uuid IS NULL OR m.org_id = $2)
+          AND ($3::text IS NULL OR m.org_id = (SELECT id FROM organizations WHERE slug = $3))
+        GROUP BY pair.tool_model
+        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1815,35 +1877,26 @@ pub async fn aggregate_agent_comparison(
     }
 
     // Metrics-based (supplementary)
-    for (tool, model, ai_add, human_add, commits) in &metrics_rows {
-        let tool_name = tool.as_deref().unwrap_or("unknown");
-        let model_name = model.as_deref().unwrap_or("");
-        let tool_model = if model_name.is_empty() {
-            tool_name.to_string()
-        } else {
-            format!("{}::{}", tool_name, model_name)
-        };
+    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del, commits) in &metrics_rows {
+        let ai_add = ai_add.unwrap_or(0);
+        let ai_accept = ai_accept.unwrap_or(0);
+        let total_ai_add = total_ai_add.unwrap_or(0);
+        let total_ai_del = total_ai_del.unwrap_or(0);
+        let acceptance_rate = if ai_add > 0 { (ai_accept as f64 / ai_add as f64) * 100.0 } else { 0.0 };
+        let net_ai = total_ai_add - total_ai_del;
 
-        let already = comparisons.iter().any(|c| {
-            c.get("tool_model").and_then(|v| v.as_str()) == Some(&tool_model)
-                && c.get("source").and_then(|v| v.as_str()) == Some("report")
-        });
-
-        if !already {
-            let ai = ai_add.unwrap_or(0);
-            let human = human_add.unwrap_or(0);
-            let total = ai + human;
-            let acceptance_rate = if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 };
-
-            comparisons.push(json!({
-                "tool_model": tool_model,
-                "source": "metrics",
-                "ai_additions": ai,
-                "human_additions": human,
-                "commits": commits.unwrap_or(0),
-                "acceptance_rate": (acceptance_rate * 100.0).round() / 100.0,
-            }));
-        }
+        comparisons.push(json!({
+            "tool_model": tool_model,
+            "source": "metrics",
+            "ai_additions": ai_add,
+            "mixed_additions": mixed_add.unwrap_or(0),
+            "ai_accepted": ai_accept,
+            "total_ai_additions": total_ai_add,
+            "total_ai_deletions": total_ai_del,
+            "net_ai_lines": net_ai,
+            "commits": commits.unwrap_or(0),
+            "acceptance_rate": (acceptance_rate * 100.0).round() / 100.0,
+        }));
     }
 
     // Sort by ai_additions descending
@@ -1869,14 +1922,15 @@ pub async fn aggregate_team_comparison(
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
-    let rows: Vec<(String, String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let rows: Vec<(String, String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
             d.name AS dept_name,
             d.slug AS dept_slug,
             o.name AS org_name,
             COUNT(m.id) AS total_commits,
+            COALESCE(SUM(m.git_diff_added_lines), 0) AS total_lines,
             COALESCE(SUM(m.ai_additions), 0) AS ai_lines,
-            COALESCE(SUM(m.human_additions), 0) AS human_lines
+            COALESCE(SUM(GREATEST(COALESCE(m.git_diff_added_lines, 0) - COALESCE(m.ai_additions, 0), 0)), 0) AS human_lines
         FROM departments d
         JOIN organizations o ON d.org_id = o.id
         LEFT JOIN org_members om ON om.department_id = d.id AND om.org_id = d.org_id
@@ -1894,10 +1948,10 @@ pub async fn aggregate_team_comparison(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let teams: Vec<Value> = rows.iter().map(|(dept_name, dept_slug, org_name, commits, ai, human)| {
+    let teams: Vec<Value> = rows.iter().map(|(dept_name, dept_slug, org_name, commits, total, ai, human)| {
         let ai = ai.unwrap_or(0);
         let human = human.unwrap_or(0);
-        let total = ai + human;
+        let total = total.unwrap_or(0);
         let pct_ai = if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 };
 
         json!({
@@ -1905,6 +1959,7 @@ pub async fn aggregate_team_comparison(
             "dept_slug": dept_slug,
             "organization": org_name,
             "total_commits": commits.unwrap_or(0),
+            "total_lines": total,
             "ai_lines": ai,
             "human_lines": human,
             "pct_ai": (pct_ai * 100.0).round() / 100.0,

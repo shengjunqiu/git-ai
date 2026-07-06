@@ -55,7 +55,24 @@ async fn store_event(
         None
     };
 
-    let ai_additions_total = aggregate_ai_additions(
+    let ai_additions_total = aggregate_rollup(
+        event.ai_additions.as_deref(),
+        event.tool_model_pairs.as_deref(),
+    );
+    let mixed_additions_total = aggregate_rollup(
+        event.mixed_additions.as_deref(),
+        event.tool_model_pairs.as_deref(),
+    );
+    let ai_accepted_total = aggregate_rollup(
+        event.ai_accepted.as_deref(),
+        event.tool_model_pairs.as_deref(),
+    );
+    let unknown_additions = aggregate_unknown_additions(
+        event.git_diff_added_lines,
+        ai_additions_total,
+        event.human_additions,
+    );
+    let ai_additions_by_tool_json = aggregate_by_tool(
         event.ai_additions.as_deref(),
         event.tool_model_pairs.as_deref(),
     );
@@ -81,11 +98,13 @@ async fn store_event(
         r#"INSERT INTO metrics_events (
             event_type, timestamp, user_id, distinct_id, org_id,
             repo_url, author_email, tool, model, commit_sha,
-            human_additions, ai_additions,
+            human_additions, ai_additions, mixed_additions,
+            unknown_additions, ai_accepted,
             git_diff_added_lines, git_diff_deleted_lines,
-            tool_model_pairs, prompt_id, session_id, file_path,
+            tool_model_pairs, ai_additions_by_tool,
+            prompt_id, session_id, file_path,
             custom_attributes, raw_values, raw_attrs
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)"#
     )
     .bind(event.event_type as i32)
     .bind(event.timestamp)
@@ -99,9 +118,13 @@ async fn store_event(
     .bind(&event.commit_sha)
     .bind(event.human_additions)
     .bind(ai_additions_total)
+    .bind(mixed_additions_total)
+    .bind(unknown_additions)
+    .bind(ai_accepted_total)
     .bind(event.git_diff_added_lines)
     .bind(event.git_diff_deleted_lines)
     .bind(&tool_model_pairs_json)
+    .bind(&ai_additions_by_tool_json)
     .bind(&event.prompt_id)
     .bind(&event.session_id)
     .bind(&event.file_path)
@@ -115,11 +138,8 @@ async fn store_event(
     Ok(())
 }
 
-fn aggregate_ai_additions(
-    ai_additions: Option<&[i32]>,
-    tool_model_pairs: Option<&[String]>,
-) -> i32 {
-    let Some(ai_additions) = ai_additions else {
+fn aggregate_rollup(values: Option<&[i32]>, tool_model_pairs: Option<&[String]>) -> i32 {
+    let Some(values) = values else {
         return 0;
     };
 
@@ -129,48 +149,113 @@ fn aggregate_ai_additions(
             .enumerate()
             .find(|(_, pair)| pair.as_str() == "all")
         {
-            if let Some(total) = ai_additions.get(idx) {
+            if let Some(total) = values.get(idx) {
                 return *total;
             }
         }
     }
 
-    ai_additions.iter().sum()
+    values.iter().sum()
+}
+
+fn aggregate_unknown_additions(
+    git_diff_added_lines: Option<i32>,
+    ai_additions: i32,
+    human_additions: Option<i32>,
+) -> i32 {
+    git_diff_added_lines
+        .unwrap_or(0)
+        .saturating_sub(ai_additions)
+        .saturating_sub(human_additions.unwrap_or(0))
+        .max(0)
+}
+
+fn aggregate_by_tool(
+    values: Option<&[i32]>,
+    tool_model_pairs: Option<&[String]>,
+) -> Option<serde_json::Value> {
+    let values = values?;
+    let pairs = tool_model_pairs?;
+
+    let mut map = serde_json::Map::new();
+    for (idx, pair) in pairs.iter().enumerate() {
+        if pair == "all" {
+            continue;
+        }
+
+        if let Some(value) = values.get(idx) {
+            map.insert(pair.clone(), serde_json::json!(value));
+        }
+    }
+
+    if map.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(map))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::aggregate_ai_additions;
+    use super::{aggregate_by_tool, aggregate_rollup, aggregate_unknown_additions};
 
     #[test]
-    fn aggregate_ai_additions_prefers_all_rollup() {
+    fn aggregate_rollup_prefers_all_rollup() {
         let additions = [264, 264];
         let pairs = vec!["all".to_string(), "codex::gpt-5.5".to_string()];
 
-        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 264);
+        assert_eq!(aggregate_rollup(Some(&additions), Some(&pairs)), 264);
     }
 
     #[test]
-    fn aggregate_ai_additions_sums_when_no_all_rollup_exists() {
+    fn aggregate_rollup_sums_when_no_all_rollup_exists() {
         let additions = [120, 80];
         let pairs = vec![
             "codex::gpt-5.5".to_string(),
             "cursor::claude-sonnet".to_string(),
         ];
 
-        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 200);
+        assert_eq!(aggregate_rollup(Some(&additions), Some(&pairs)), 200);
     }
 
     #[test]
-    fn aggregate_ai_additions_falls_back_to_sum_when_all_has_no_matching_value() {
+    fn aggregate_rollup_falls_back_to_sum_when_all_has_no_matching_value() {
         let additions = [120];
         let pairs = vec!["codex::gpt-5.5".to_string(), "all".to_string()];
 
-        assert_eq!(aggregate_ai_additions(Some(&additions), Some(&pairs)), 120);
+        assert_eq!(aggregate_rollup(Some(&additions), Some(&pairs)), 120);
     }
 
     #[test]
-    fn aggregate_ai_additions_defaults_to_zero_without_ai_values() {
-        assert_eq!(aggregate_ai_additions(None, None), 0);
+    fn aggregate_rollup_defaults_to_zero_without_values() {
+        assert_eq!(aggregate_rollup(None, None), 0);
+    }
+
+    #[test]
+    fn aggregate_unknown_additions_counts_non_ai_unattributed_lines() {
+        assert_eq!(aggregate_unknown_additions(Some(267), 264, Some(0)), 3);
+    }
+
+    #[test]
+    fn aggregate_unknown_additions_never_goes_negative() {
+        assert_eq!(aggregate_unknown_additions(Some(10), 12, Some(1)), 0);
+    }
+
+    #[test]
+    fn aggregate_by_tool_skips_all_rollup() {
+        let additions = [264, 120, 144];
+        let pairs = vec![
+            "all".to_string(),
+            "codex::gpt-5.5".to_string(),
+            "cursor::claude-sonnet".to_string(),
+        ];
+
+        assert_eq!(
+            aggregate_by_tool(Some(&additions), Some(&pairs)),
+            Some(serde_json::json!({
+                "codex::gpt-5.5": 120,
+                "cursor::claude-sonnet": 144,
+            }))
+        );
     }
 }

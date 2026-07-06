@@ -28,6 +28,7 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
         ("007_project_scope_by_user_org", include_str!("../../migrations/007_project_scope_by_user_org.sql")),
         ("008_default_linewell_registration_options", include_str!("../../migrations/008_default_linewell_registration_options.sql")),
         ("009_fix_metrics_ai_additions_all_rollup", include_str!("../../migrations/009_fix_metrics_ai_additions_all_rollup.sql")),
+        ("010_backfill_metrics_rollup_fields", include_str!("../../migrations/010_backfill_metrics_rollup_fields.sql")),
     ];
 
     for (name, sql) in migrations {
