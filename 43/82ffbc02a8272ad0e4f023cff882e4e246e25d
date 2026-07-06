@@ -1,0 +1,28 @@
+src/auth/cli_callback.rs
+  0a05c27b91612fe9 1-265
+src/auth/pkce.rs
+  0a05c27b91612fe9 1-97
+src/commands/login.rs
+  0a05c27b91612fe9 1,3-4,8-20,32,53-54,56,60-62,64-75,77-79,82-85,89,91-134,142,157,194-202,205-228,232-285,323-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "4382ffbc02a8272ad0e4f023cff882e4e246e25d",
+  "prompts": {
+    "0a05c27b91612fe9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3625-017b-79d0-9493-215900868426",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 645,
+      "total_deletions": 57,
+      "accepted_lines": 645,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/629af3d997aa3e5fda62dd683893bf62fdd4ee339ce97cbda16a61d81d2f20e0"
+    }
+  }
+}
