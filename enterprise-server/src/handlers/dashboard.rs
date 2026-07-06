@@ -2,16 +2,15 @@ use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Json, Redirect};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::auth::middleware::{DashboardAuth, OptionalAuth};
 use crate::error::AppError;
 use crate::routes::AppState;
 
 /// GET /me — Dashboard home page
-pub async fn dashboard_me(
-    State(_state): State<AppState>,
-    auth: OptionalAuth,
-) -> impl IntoResponse {
+pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
     // If not authenticated, redirect to login page
     let auth = match auth.0 {
         Some(a) => a,
@@ -1089,6 +1088,108 @@ pub struct AggregateQuery {
     pub org: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ProjectAggregate {
+    project_id: Option<i64>,
+    repo_url: String,
+    project_name: String,
+    branch: Option<String>,
+    organization: Option<String>,
+    department: Option<String>,
+    total_commits: i64,
+    total_code: i64,
+    total_ai: i64,
+}
+
+impl ProjectAggregate {
+    fn total_human(&self) -> i64 {
+        (self.total_code - self.total_ai).max(0)
+    }
+
+    fn pct_ai(&self) -> f64 {
+        if self.total_code > 0 {
+            (self.total_ai as f64 / self.total_code as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "project_id": self.project_id,
+            "repo_url": self.repo_url,
+            "project_name": self.project_name,
+            "branch": self.branch,
+            "organization": self.organization,
+            "department": self.department,
+            "total_commits": self.total_commits,
+            "total_code": self.total_code,
+            "total_ai": self.total_ai,
+            "total_human": self.total_human(),
+            "pct_ai": self.pct_ai(),
+        })
+    }
+}
+
+fn repo_project_key(repo_url: &str) -> String {
+    let normalized = normalize_repo_url(repo_url).unwrap_or_else(|_| repo_url.trim().to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn normalize_repo_url(url_str: &str) -> Result<String, String> {
+    let url_str = url_str.trim();
+
+    if !url_str.contains("://") {
+        if let Some((user_host, path)) = url_str.split_once(':') {
+            if let Some((_, host)) = user_host.rsplit_once('@') {
+                return normalize_ssh_url(host, path);
+            }
+        }
+    }
+
+    let url = Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+    let scheme = url.scheme();
+    if !["https", "http", "git", "ssh"].contains(&scheme) {
+        return Err(format!("Unsupported URL scheme: {}", scheme));
+    }
+
+    let host = url.host_str().ok_or("URL must have a host")?;
+    let path = url.path().trim_end_matches('/').trim_end_matches(".git");
+    let canonical = format!("https://{}{}", host, path);
+    validate_normalized_repo_url(&canonical)?;
+    Ok(canonical)
+}
+
+fn normalize_ssh_url(host: &str, path: &str) -> Result<String, String> {
+    if host.is_empty() || path.is_empty() {
+        return Err("Invalid SSH URL format".to_string());
+    }
+
+    let path = path
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+    let canonical = format!("https://{}/{}", host, path);
+    validate_normalized_repo_url(&canonical)?;
+    Ok(canonical)
+}
+
+fn validate_normalized_repo_url(url_str: &str) -> Result<(), String> {
+    let url = Url::parse(url_str).map_err(|e| format!("Failed to parse normalized URL: {}", e))?;
+    if url.scheme() != "https" {
+        return Err("Normalized URL must be HTTPS".to_string());
+    }
+    if url.host_str().is_none() {
+        return Err("Normalized URL must have a valid host".to_string());
+    }
+    if url.path().is_empty() || url.path() == "/" {
+        return Err("Normalized URL must have a path".to_string());
+    }
+    Ok(())
+}
+
 /// GET /api/v1/aggregate/summary — Global aggregate summary
 pub async fn aggregate_summary(
     State(state): State<AppState>,
@@ -1096,14 +1197,12 @@ pub async fn aggregate_summary(
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
-    let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+    let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
             COUNT(*) as total_commits,
             COALESCE(SUM(git_diff_added_lines), 0) as total_code_lines,
             COALESCE(SUM(ai_additions), 0) as total_ai_lines,
-            COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as total_human_lines,
-            COUNT(DISTINCT author_email) as total_developers,
-            COUNT(DISTINCT repo_url) as total_projects
+            COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as total_human_lines
         FROM metrics_events WHERE event_type = 1
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)"#
@@ -1114,14 +1213,12 @@ pub async fn aggregate_summary(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+    let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
             COUNT(cs.sha) as total_commits,
             COALESCE(SUM(cs.git_diff_added_lines), 0) as total_code_lines,
             COALESCE(SUM(cs.ai_additions), 0) as total_ai_lines,
-            COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) as total_human_lines,
-            COUNT(DISTINCT cs.author) as total_developers,
-            COUNT(DISTINCT p.id) as total_projects
+            COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) as total_human_lines
         FROM projects p
         JOIN commit_stats cs ON cs.project_id = p.id
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
@@ -1184,8 +1281,53 @@ pub async fn aggregate_summary(
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
-    let total_projects = row.5.unwrap_or(0) + report_row.5.unwrap_or(0);
-    let pct_ai = if total_code > 0 { (total_ai as f64 / total_code as f64) * 100.0 } else { 0.0 };
+    let metrics_project_urls: Vec<String> = sqlx::query_scalar::<_, String>(
+        r#"SELECT DISTINCT repo_url
+        FROM metrics_events
+        WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+          AND ($1::uuid IS NULL OR user_id = $1)
+          AND ($2::uuid IS NULL OR org_id = $2)"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+
+    let report_project_hashes: Vec<String> = sqlx::query_scalar::<_, String>(
+        r#"SELECT DISTINCT p.remote_url_hash
+        FROM projects p
+        JOIN commit_stats cs ON cs.project_id = p.id
+        WHERE p.remote_url_hash IS NOT NULL AND p.remote_url_hash != ''
+          AND ($1::uuid IS NULL OR p.user_id = $1)
+          AND ($2::uuid IS NULL OR p.org_id = $2)
+          AND NOT EXISTS (
+              SELECT 1 FROM metrics_events m
+              WHERE m.event_type = 1
+                AND m.commit_sha = cs.sha
+                AND ($1::uuid IS NULL OR m.user_id = $1)
+                AND ($2::uuid IS NULL OR m.org_id = $2)
+          )"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+
+    let mut project_keys = std::collections::HashSet::new();
+    for repo_url in metrics_project_urls {
+        project_keys.insert(repo_project_key(&repo_url));
+    }
+    for remote_url_hash in report_project_hashes {
+        project_keys.insert(remote_url_hash);
+    }
+    let total_projects = project_keys.len() as i64;
+    let pct_ai = if total_code > 0 {
+        (total_ai as f64 / total_code as f64) * 100.0
+    } else {
+        0.0
+    };
 
     Ok(Json(json!({
         "total_commits": total_commits,
@@ -1216,7 +1358,7 @@ pub async fn aggregate_organizations(
           AND ($1::uuid IS NULL OR m.user_id = $1)
         WHERE ($2::uuid IS NULL OR o.id = $2)
         GROUP BY o.id, o.name, o.slug
-        ORDER BY o.name"#
+        ORDER BY o.name"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1224,7 +1366,9 @@ pub async fn aggregate_organizations(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(name, slug, commits, total, ai)| {
+    let result: Vec<Value> = rows
+        .iter()
+        .map(|(name, slug, commits, total, ai)| {
         let ai = ai.unwrap_or(0);
         let total = total.unwrap_or(0);
         let human = (total - ai).max(0);
@@ -1237,7 +1381,8 @@ pub async fn aggregate_organizations(
             "w_human": human,
             "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "organizations": result })))
 }
@@ -1273,7 +1418,9 @@ pub async fn aggregate_departments(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(name, slug, org_name, commits, total, ai)| {
+    let result: Vec<Value> = rows
+        .iter()
+        .map(|(name, slug, org_name, commits, total, ai)| {
         let ai = ai.unwrap_or(0);
         let total = total.unwrap_or(0);
         let human = (total - ai).max(0);
@@ -1286,7 +1433,8 @@ pub async fn aggregate_departments(
             "w_ai": ai,
             "w_human": human,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "departments": result })))
 }
@@ -1310,7 +1458,7 @@ pub async fn aggregate_projects(
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
         GROUP BY repo_url
-        ORDER BY repo_url"#
+        ORDER BY repo_url"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1319,18 +1467,34 @@ pub async fn aggregate_projects(
     .map_err(|e| AppError::Database(e))?;
 
     // Also aggregate from projects + commit_stats (legacy report upload source)
-    let report_rows: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let report_rows: Vec<(
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
         r#"SELECT
             p.id, p.remote_url_hash, p.branch, p.organization, p.department,
             COUNT(cs.sha),
             COALESCE(SUM(cs.git_diff_added_lines), 0),
             COALESCE(SUM(cs.ai_additions), 0)
         FROM projects p
-        LEFT JOIN commit_stats cs ON cs.project_id = p.id
+        JOIN commit_stats cs ON cs.project_id = p.id
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
+          AND NOT EXISTS (
+              SELECT 1 FROM metrics_events m
+              WHERE m.event_type = 1
+                AND m.commit_sha = cs.sha
+                AND ($1::uuid IS NULL OR m.user_id = $1)
+                AND ($2::uuid IS NULL OR m.org_id = $2)
+          )
         GROUP BY p.id, p.remote_url_hash, p.branch, p.organization, p.department
-        ORDER BY p.organization, p.department"#
+        ORDER BY p.organization, p.department"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1338,16 +1502,15 @@ pub async fn aggregate_projects(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    // Merge: metrics_events data by repo_url, supplemented by report data
-    let mut seen_urls = std::collections::HashSet::new();
-    let mut result = Vec::new();
+    // Merge both sources by the same project key used by report uploads: sha256(normalized repo URL).
+    let mut projects: std::collections::HashMap<String, ProjectAggregate> =
+        std::collections::HashMap::new();
 
     // First pass: metrics_events data
     for (repo_url, commits, total, ai) in &metrics_rows {
         let ai = ai.unwrap_or(0);
         let total = total.unwrap_or(0);
-        let human = (total - ai).max(0);
-        seen_urls.insert(repo_url.clone());
+        let key = repo_project_key(repo_url);
         // Extract a human-readable project name from the repo URL
         let project_name = repo_url
             .trim_end_matches('/')
@@ -1356,24 +1519,27 @@ pub async fn aggregate_projects(
             .unwrap_or(repo_url)
             .trim_end_matches(".git")
             .to_string();
-        result.push(json!({
-            "repo_url": repo_url,
-            "project_name": project_name,
-            "total_commits": commits.unwrap_or(0),
-            "total_code": total,
-            "total_ai": ai,
-            "total_human": human,
-            "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
-        }));
+        projects.insert(
+            key,
+            ProjectAggregate {
+                project_id: None,
+                repo_url: repo_url.clone(),
+                project_name,
+                branch: None,
+                organization: None,
+                department: None,
+                total_commits: commits.unwrap_or(0),
+                total_code: total,
+                total_ai: ai,
+            },
+        );
     }
 
-    // Second pass: report data (only add if not already covered by metrics)
+    // Second pass: report data, merged into the same project when the hash matches.
     for (id, url_hash, branch, org, dept, commits, total, ai) in &report_rows {
-        // Try to match by url_hash — skip if we already have this repo from metrics
         let ai = ai.unwrap_or(0);
         let total = total.unwrap_or(0);
-        let human = (total - ai).max(0);
-        if !seen_urls.contains(url_hash) {
+        let entry = projects.entry(url_hash.clone()).or_insert_with(|| {
             let project_name = url_hash
                 .trim_end_matches('/')
                 .split('/')
@@ -1381,21 +1547,41 @@ pub async fn aggregate_projects(
                 .unwrap_or(url_hash)
                 .trim_end_matches(".git")
                 .to_string();
-            result.push(json!({
-                "project_id": id,
-                "repo_url": url_hash,
-                "project_name": project_name,
-                "branch": branch,
-                "organization": org,
-                "department": dept,
-                "total_commits": commits.unwrap_or(0),
-                "total_code": total,
-                "total_ai": ai,
-                "total_human": human,
-                "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
-            }));
+
+            ProjectAggregate {
+                project_id: Some(*id),
+                repo_url: url_hash.clone(),
+                project_name,
+                branch: branch.clone(),
+                organization: org.clone(),
+                department: dept.clone(),
+                total_commits: 0,
+                total_code: 0,
+                total_ai: 0,
+            }
+        });
+
+        entry.project_id.get_or_insert(*id);
+        if entry.branch.is_none() {
+            entry.branch = branch.clone();
         }
+        if entry.organization.is_none() {
+            entry.organization = org.clone();
+        }
+        if entry.department.is_none() {
+            entry.department = dept.clone();
     }
+        entry.total_commits += commits.unwrap_or(0);
+        entry.total_code += total;
+        entry.total_ai += ai;
+    }
+
+    let mut result: Vec<Value> = projects.values().map(ProjectAggregate::to_json).collect();
+    result.sort_by(|a, b| {
+        let a_name = a.get("project_name").and_then(|v| v.as_str()).unwrap_or("");
+        let b_name = b.get("project_name").and_then(|v| v.as_str()).unwrap_or("");
+        a_name.cmp(b_name)
+    });
 
     Ok(Json(json!({ "projects": result })))
 }
@@ -1469,13 +1655,20 @@ pub async fn aggregate_developers(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(raw_author, email, commits, added, ai, human)| {
+    let result: Vec<Value> = rows
+        .iter()
+        .map(|(raw_author, email, commits, added, ai, human)| {
         let ai = ai.unwrap_or(0);
         let human = human.unwrap_or(0);
         let total = added.unwrap_or(0);
         // Extract display name from "Name <email>" format
         let name = if raw_author.contains('<') {
-            raw_author.split('<').next().unwrap_or("").trim().to_string()
+                raw_author
+                    .split('<')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
         } else {
             raw_author.clone()
         };
@@ -1488,7 +1681,8 @@ pub async fn aggregate_developers(
             "human_added_lines": human,
             "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "developers": result })))
 }
@@ -1501,7 +1695,14 @@ pub async fn aggregate_tools(
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
     // First try tool_model_stats from report uploads (richer data)
-    let report_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let report_rows: Vec<(
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
         r#"SELECT
             tms.tool_model,
             COALESCE(SUM(tms.ai_additions), 0),
@@ -1514,7 +1715,7 @@ pub async fn aggregate_tools(
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
         GROUP BY tms.tool_model
-        ORDER BY SUM(tms.ai_additions) DESC"#
+        ORDER BY SUM(tms.ai_additions) DESC"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1574,7 +1775,7 @@ pub async fn aggregate_tools(
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
         GROUP BY tool, model
-        ORDER BY SUM(ai_additions) DESC"#
+        ORDER BY SUM(ai_additions) DESC"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1668,14 +1869,16 @@ pub async fn aggregate_trends(
     let valid_metrics = ["ai_ratio", "ai_lines", "human_lines", "commits"];
     if !valid_metrics.contains(&metric) {
         return Err(AppError::BadRequest(format!(
-            "metric must be one of: {}", valid_metrics.join(", ")
+            "metric must be one of: {}",
+            valid_metrics.join(", ")
         )));
     }
 
     let valid_granularities = ["day", "week", "month"];
     if !valid_granularities.contains(&granularity) {
         return Err(AppError::BadRequest(format!(
-            "granularity must be one of: {}", valid_granularities.join(", ")
+            "granularity must be one of: {}",
+            valid_granularities.join(", ")
         )));
     }
 
@@ -1743,11 +1946,17 @@ pub async fn aggregate_trends(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let data: Vec<Value> = rows.iter().map(|(period, ai, human, commits)| {
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|(period, ai, human, commits)| {
         let ai = ai.unwrap_or(0);
         let human = human.unwrap_or(0);
         let total = ai + human;
-        let ai_ratio = if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 };
+            let ai_ratio = if total > 0 {
+                (ai as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
 
         let value = match metric {
             "ai_ratio" => ai_ratio,
@@ -1766,7 +1975,8 @@ pub async fn aggregate_trends(
             "commits": commits.unwrap_or(0),
             "ai_ratio": (ai_ratio * 100.0).round() / 100.0,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({
         "metric": metric,
@@ -1788,7 +1998,14 @@ pub async fn aggregate_agent_comparison(
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
     // From report data
-    let report_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let report_rows: Vec<(
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
         r#"SELECT
             tms.tool_model,
             COALESCE(SUM(tms.ai_additions), 0),
@@ -1801,7 +2018,7 @@ pub async fn aggregate_agent_comparison(
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
         GROUP BY tms.tool_model
-        ORDER BY SUM(tms.ai_additions) DESC"#
+        ORDER BY SUM(tms.ai_additions) DESC"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1860,7 +2077,11 @@ pub async fn aggregate_agent_comparison(
         let ai_add = ai_add.unwrap_or(0);
         let ai_accept = ai_accept.unwrap_or(0);
         let total_ai_add = total_ai_add.unwrap_or(0);
-        let acceptance_rate = if ai_add > 0 { (ai_accept as f64 / ai_add as f64) * 100.0 } else { 0.0 };
+        let acceptance_rate = if ai_add > 0 {
+            (ai_accept as f64 / ai_add as f64) * 100.0
+        } else {
+            0.0
+        };
         let net_ai = total_ai_add - total_ai_del.unwrap_or(0);
 
         comparisons.push(json!({
@@ -1877,12 +2098,18 @@ pub async fn aggregate_agent_comparison(
     }
 
     // Metrics-based (supplementary)
-    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del, commits) in &metrics_rows {
+    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del, commits) in
+        &metrics_rows
+    {
         let ai_add = ai_add.unwrap_or(0);
         let ai_accept = ai_accept.unwrap_or(0);
         let total_ai_add = total_ai_add.unwrap_or(0);
         let total_ai_del = total_ai_del.unwrap_or(0);
-        let acceptance_rate = if ai_add > 0 { (ai_accept as f64 / ai_add as f64) * 100.0 } else { 0.0 };
+        let acceptance_rate = if ai_add > 0 {
+            (ai_accept as f64 / ai_add as f64) * 100.0
+        } else {
+            0.0
+        };
         let net_ai = total_ai_add - total_ai_del;
 
         comparisons.push(json!({
@@ -1975,7 +2202,9 @@ pub async fn aggregate_team_comparison(
 /// - Admin users: (None, Some(org_id)) — sees all data within their organization
 /// - Non-admin users: (Some(user_id), Some(org_id)) — sees only their own data within their organization
 /// - If org_id is not available, falls back to no org filter (should not happen in practice)
-pub fn build_data_filters(auth: &crate::models::user::AuthIdentity) -> (Option<uuid::Uuid>, Option<uuid::Uuid>) {
+pub fn build_data_filters(
+    auth: &crate::models::user::AuthIdentity,
+) -> (Option<uuid::Uuid>, Option<uuid::Uuid>) {
     if auth.is_admin() {
         // Admin sees all data within their organization (no user filter, but org filter applies)
         (None, auth.org_id)

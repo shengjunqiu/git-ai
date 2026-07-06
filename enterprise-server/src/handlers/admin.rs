@@ -82,11 +82,18 @@ pub async fn create_user(
 
     // Audit log
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), _auth.0.org_id,
-        "user.create", Some("user"), Some(&user_id.to_string()),
+        &state.db,
+        Some(_auth.0.user_id),
+        _auth.0.org_id,
+        "user.create",
+        Some("user"),
+        Some(&user_id.to_string()),
         Some(serde_json::json!({"email": req.email, "name": req.name})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "id": user_id.to_string(),
@@ -103,8 +110,15 @@ pub async fn get_user(
     _auth: AdminGuard,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let row: Option<(Uuid, String, String, Option<Uuid>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, email, name, personal_org_id, created_at, updated_at FROM users WHERE id = $1"
+    let row: Option<(
+        Uuid,
+        String,
+        String,
+        Option<Uuid>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT id, email, name, personal_org_id, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.db)
@@ -117,17 +131,17 @@ pub async fn get_user(
     };
 
     // Get org memberships
-    let org_rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT org_id, role FROM org_members WHERE user_id = $1"
-    )
+    let org_rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT org_id, role FROM org_members WHERE user_id = $1")
     .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let orgs: Vec<Value> = org_rows.iter().map(|(org_id, role)| {
-        json!({ "org_id": org_id.to_string(), "role": role })
-    }).collect();
+    let orgs: Vec<Value> = org_rows
+        .iter()
+        .map(|(org_id, role)| json!({ "org_id": org_id.to_string(), "role": role }))
+        .collect();
 
     Ok(Json(json!({
         "id": id.to_string(),
@@ -191,10 +205,18 @@ pub async fn delete_user(
     }
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), None,
-        "user.delete", Some("user"), Some(&user_id.to_string()),
-        None, None, None,
-    ).await.ok();
+        &state.db,
+        Some(_auth.0.user_id),
+        None,
+        "user.delete",
+        Some("user"),
+        Some(&user_id.to_string()),
+        None,
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({ "success": true })))
 }
@@ -204,14 +226,22 @@ pub async fn list_users(
     State(state): State<AppState>,
     _auth: AdminGuard,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(Uuid, String, String, Option<Uuid>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, email, name, personal_org_id, created_at FROM users ORDER BY created_at DESC"
+    let rows: Vec<(
+        Uuid,
+        String,
+        String,
+        Option<Uuid>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT id, email, name, personal_org_id, created_at FROM users ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let users: Vec<Value> = rows.iter().map(|(id, email, name, personal_org_id, created_at)| {
+    let users: Vec<Value> = rows
+        .iter()
+        .map(|(id, email, name, personal_org_id, created_at)| {
         json!({
             "id": id.to_string(),
             "email": email,
@@ -219,7 +249,8 @@ pub async fn list_users(
             "personal_org_id": personal_org_id.map(|u| u.to_string()),
             "created_at": created_at,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "users": users })))
 }
@@ -251,11 +282,18 @@ pub async fn create_organization(
         .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), Some(org_id),
-        "organization.create", Some("organization"), Some(&org_id.to_string()),
+        &state.db,
+        Some(_auth.0.user_id),
+        Some(org_id),
+        "organization.create",
+        Some("organization"),
+        Some(&org_id.to_string()),
         Some(json!({"name": req.name, "slug": req.slug})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "id": org_id.to_string(),
@@ -270,9 +308,8 @@ pub async fn get_organization(
     _auth: AdminGuard,
     Path(org_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let row: Option<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, name, slug, created_at FROM organizations WHERE id = $1"
-    )
+    let row: Option<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT id, name, slug, created_at FROM organizations WHERE id = $1")
     .bind(org_id)
     .fetch_optional(&state.db)
     .await
@@ -284,9 +321,7 @@ pub async fn get_organization(
     };
 
     // Get member count
-    let member_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM org_members WHERE org_id = $1"
-    )
+    let member_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1")
     .bind(org_id)
     .fetch_one(&state.db)
     .await
@@ -318,10 +353,18 @@ pub async fn delete_organization(
     }
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), Some(org_id),
-        "organization.delete", Some("organization"), Some(&org_id.to_string()),
-        None, None, None,
-    ).await.ok();
+        &state.db,
+        Some(_auth.0.user_id),
+        Some(org_id),
+        "organization.delete",
+        Some("organization"),
+        Some(&org_id.to_string()),
+        None,
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({ "success": true })))
 }
@@ -331,21 +374,23 @@ pub async fn list_organizations(
     State(state): State<AppState>,
     _auth: AdminGuard,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, name, slug, created_at FROM organizations ORDER BY name"
-    )
+    let rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT id, name, slug, created_at FROM organizations ORDER BY name")
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let orgs: Vec<Value> = rows.iter().map(|(id, name, slug, created_at)| {
+    let orgs: Vec<Value> = rows
+        .iter()
+        .map(|(id, name, slug, created_at)| {
         json!({
             "id": id.to_string(),
             "name": name,
             "slug": slug,
             "created_at": created_at,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "organizations": orgs })))
 }
@@ -379,11 +424,18 @@ pub async fn create_department(
         .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), Some(req.org_id),
-        "department.create", Some("department"), Some(&dept_id.to_string()),
+        &state.db,
+        Some(_auth.0.user_id),
+        Some(req.org_id),
+        "department.create",
+        Some("department"),
+        Some(&dept_id.to_string()),
         Some(json!({"name": req.name, "slug": req.slug})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "id": dept_id.to_string(),
@@ -410,10 +462,18 @@ pub async fn delete_department(
     }
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), None,
-        "department.delete", Some("department"), Some(&dept_id.to_string()),
-        None, None, None,
-    ).await.ok();
+        &state.db,
+        Some(_auth.0.user_id),
+        None,
+        "department.delete",
+        Some("department"),
+        Some(&dept_id.to_string()),
+        None,
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({ "success": true })))
 }
@@ -431,7 +491,12 @@ pub async fn create_api_key(
     let (key, prefix, hash) = jwt::generate_api_key();
     let key_id = Uuid::new_v4();
     let scopes = req.scopes.unwrap_or_else(|| {
-        vec!["metrics:write".into(), "cas:write".into(), "cas:read".into(), "reports:write".into()]
+        vec![
+            "metrics:write".into(),
+            "cas:write".into(),
+            "cas:read".into(),
+            "reports:write".into(),
+        ]
     });
     // Use specified user_id if provided (admin creating key for another user), otherwise use authenticated user's id
     let target_user_id = req.user_id.unwrap_or(auth.0.user_id);
@@ -453,11 +518,18 @@ pub async fn create_api_key(
     .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), req.org_id,
-        "api_key.create", Some("api_key"), Some(&key_id.to_string()),
+        &state.db,
+        Some(auth.0.user_id),
+        req.org_id,
+        "api_key.create",
+        Some("api_key"),
+        Some(&key_id.to_string()),
         Some(json!({"name": req.name, "target_user_id": target_user_id.to_string()})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "id": key_id.to_string(),
@@ -474,16 +546,26 @@ pub async fn list_api_keys(
     auth: AdminGuard,
 ) -> Result<Json<Value>, AppError> {
     // Admin can see all keys, no user_id filter
-    let rows: Vec<(Uuid, String, Option<String>, Vec<String>, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+    let rows: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        Vec<String>,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
         r#"SELECT id, key_prefix, name, scopes, created_at, expires_at, last_used_at
         FROM api_keys WHERE revoked_at IS NULL
-        ORDER BY created_at DESC"#
+        ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(id, prefix, name, scopes, created, expires, last_used)| {
+    let result: Vec<Value> = rows
+        .iter()
+        .map(|(id, prefix, name, scopes, created, expires, last_used)| {
         json!({
             "id": id.to_string(),
             "key_prefix": prefix,
@@ -493,7 +575,8 @@ pub async fn list_api_keys(
             "expires_at": expires,
             "last_used_at": last_used,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "api_keys": result })))
 }
@@ -505,9 +588,8 @@ pub async fn revoke_api_key(
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     // Admin can revoke any key, no user_id filter
-    let result = sqlx::query(
-        "UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL"
-    )
+    let result =
+        sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
     .bind(key_id)
     .execute(&state.db)
     .await
@@ -518,10 +600,18 @@ pub async fn revoke_api_key(
     }
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), None,
-        "api_key.revoke", Some("api_key"), Some(&key_id.to_string()),
-        None, None, None,
-    ).await.ok();
+        &state.db,
+        Some(auth.0.user_id),
+        None,
+        "api_key.revoke",
+        Some("api_key"),
+        Some(&key_id.to_string()),
+        None,
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({ "success": true })))
 }
@@ -556,11 +646,18 @@ pub async fn generate_install_nonce(
         .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(_auth.0.user_id), None,
-        "install_nonce.generate", Some("install_nonce"), Some(&nonce),
+        &state.db,
+        Some(_auth.0.user_id),
+        None,
+        "install_nonce.generate",
+        Some("install_nonce"),
+        Some(&nonce),
         Some(json!({"target_user_id": req.user_id.to_string()})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "nonce": nonce,
@@ -605,7 +702,21 @@ pub async fn list_audit_log(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let entries: Vec<Value> = rows.iter().map(|(id, user_id, org_id, action, resource_type, resource_id, details, ip_address, user_agent, created_at)| {
+    let entries: Vec<Value> = rows
+        .iter()
+        .map(
+            |(
+                id,
+                user_id,
+                org_id,
+                action,
+                resource_type,
+                resource_id,
+                details,
+                ip_address,
+                user_agent,
+                created_at,
+            )| {
         json!({
             "id": id,
             "user_id": user_id.map(|u| u.to_string()),
@@ -618,7 +729,9 @@ pub async fn list_audit_log(
             "user_agent": user_agent,
             "created_at": created_at,
         })
-    }).collect();
+            },
+        )
+        .collect();
 
     Ok(Json(json!({ "entries": entries, "count": entries.len() })))
 }
@@ -642,7 +755,9 @@ pub async fn create_repo_access_rule(
     Json(req): Json<CreateRepoAccessRuleRequest>,
 ) -> Result<Json<Value>, AppError> {
     if req.rule_type != "whitelist" && req.rule_type != "blacklist" {
-        return Err(AppError::BadRequest("rule_type must be 'whitelist' or 'blacklist'".into()));
+        return Err(AppError::BadRequest(
+            "rule_type must be 'whitelist' or 'blacklist'".into(),
+        ));
     }
     if req.pattern.is_empty() {
         return Err(AppError::BadRequest("pattern must not be empty".into()));
@@ -652,7 +767,7 @@ pub async fn create_repo_access_rule(
 
     sqlx::query(
         r#"INSERT INTO repo_access_rules (id, org_id, rule_type, pattern, description, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6)"#
+        VALUES ($1, $2, $3, $4, $5, $6)"#,
     )
     .bind(rule_id)
     .bind(req.org_id)
@@ -665,11 +780,18 @@ pub async fn create_repo_access_rule(
     .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), Some(req.org_id),
-        "repo_access_rule.create", Some("repo_access_rule"), Some(&rule_id.to_string()),
+        &state.db,
+        Some(auth.0.user_id),
+        Some(req.org_id),
+        "repo_access_rule.create",
+        Some("repo_access_rule"),
+        Some(&rule_id.to_string()),
         Some(json!({"rule_type": req.rule_type, "pattern": req.pattern})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "id": rule_id.to_string(),
@@ -690,18 +812,30 @@ pub async fn list_repo_access_rules(
     _auth: AdminGuard,
     Query(query): Query<RepoAccessRulesQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(Uuid, Uuid, String, String, Option<String>, Option<Uuid>, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        String,
+        Option<String>,
+        Option<Uuid>,
+        bool,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
         r#"SELECT id, org_id, rule_type, pattern, description, created_by, enabled, created_at
         FROM repo_access_rules
         WHERE ($1::uuid IS NULL OR org_id = $1)
-        ORDER BY org_id, rule_type, created_at"#
+        ORDER BY org_id, rule_type, created_at"#,
     )
     .bind(query.org_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let rules: Vec<Value> = rows.iter().map(|(id, org_id, rule_type, pattern, desc, created_by, enabled, created_at)| {
+    let rules: Vec<Value> = rows
+        .iter()
+        .map(
+            |(id, org_id, rule_type, pattern, desc, created_by, enabled, created_at)| {
         json!({
             "id": id.to_string(),
             "org_id": org_id.to_string(),
@@ -712,7 +846,9 @@ pub async fn list_repo_access_rules(
             "enabled": enabled,
             "created_at": created_at,
         })
-    }).collect();
+            },
+        )
+        .collect();
 
     Ok(Json(json!({ "rules": rules })))
 }
@@ -763,7 +899,7 @@ pub async fn upsert_feature_flag(
         ON CONFLICT (key) DO UPDATE SET
             value = EXCLUDED.value,
             description = COALESCE(EXCLUDED.description, feature_flags.description),
-            updated_at = now()"#
+            updated_at = now()"#,
     )
     .bind(&req.key)
     .bind(&req.value)
@@ -773,11 +909,18 @@ pub async fn upsert_feature_flag(
     .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), None,
-        "feature_flag.upsert", Some("feature_flag"), Some(&req.key),
+        &state.db,
+        Some(auth.0.user_id),
+        None,
+        "feature_flag.upsert",
+        Some("feature_flag"),
+        Some(&req.key),
         Some(json!({"value": req.value})),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(json!({
         "success": true,
@@ -790,21 +933,29 @@ pub async fn list_feature_flags(
     State(state): State<AppState>,
     _auth: AdminGuard,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(String, serde_json::Value, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT key, value, description, updated_at FROM feature_flags ORDER BY key"
+    let rows: Vec<(
+        String,
+        serde_json::Value,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT key, value, description, updated_at FROM feature_flags ORDER BY key",
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let flags: Vec<Value> = rows.iter().map(|(key, value, desc, updated_at)| {
+    let flags: Vec<Value> = rows
+        .iter()
+        .map(|(key, value, desc, updated_at)| {
         json!({
             "key": key,
             "value": value,
             "description": desc,
             "updated_at": updated_at,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "flags": flags })))
 }
@@ -846,12 +997,21 @@ pub async fn create_export(
     Json(req): Json<ExportRequest>,
 ) -> Result<Json<Value>, AppError> {
     if req.export_type != "csv" && req.export_type != "json" {
-        return Err(AppError::BadRequest("export_type must be 'csv' or 'json'".into()));
+        return Err(AppError::BadRequest(
+            "export_type must be 'csv' or 'json'".into(),
+        ));
     }
-    let valid_query_types = ["summary", "developers", "projects", "organizations", "tools"];
+    let valid_query_types = [
+        "summary",
+        "developers",
+        "projects",
+        "organizations",
+        "tools",
+    ];
     if !valid_query_types.contains(&req.query_type.as_str()) {
         return Err(AppError::BadRequest(format!(
-            "query_type must be one of: {}", valid_query_types.join(", ")
+            "query_type must be one of: {}",
+            valid_query_types.join(", ")
         )));
     }
 
@@ -887,7 +1047,7 @@ pub async fn create_export(
     // CSV export: create a pending job
     sqlx::query(
         r#"INSERT INTO export_jobs (id, user_id, org_id, export_type, query_type, status)
-        VALUES ($1, $2, $3, $4, $5, 'pending')"#
+        VALUES ($1, $2, $3, $4, $5, 'pending')"#,
     )
     .bind(export_id)
     .bind(auth.0.user_id)
@@ -918,7 +1078,7 @@ async fn generate_json_export(
                     COALESCE(SUM(ai_additions), 0),
                     COALESCE(SUM(human_additions), 0),
                     COUNT(*)
-                FROM metrics_events WHERE event_type = 1"#
+                FROM metrics_events WHERE event_type = 1"#,
             )
             .fetch_one(&state.db)
             .await
@@ -946,16 +1106,20 @@ async fn generate_json_export(
         }
         "projects" => {
             let rows: Vec<(String, Option<String>, Option<i64>, Option<i64>)> = sqlx::query_as(
-                r#"SELECT remote_url_hash, branch, COALESCE(SUM(ai_additions), 0), COALESCE(SUM(human_additions), 0)
-                FROM metrics_events WHERE event_type = 1
-                GROUP BY remote_url_hash, branch ORDER BY remote_url_hash"#
+                r#"SELECT repo_url, NULL::text AS branch,
+                    COALESCE(SUM(ai_additions), 0),
+                    COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)
+                FROM metrics_events
+                WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+                GROUP BY repo_url
+                ORDER BY repo_url"#
             )
             .fetch_all(&state.db)
             .await
             .map_err(|e| AppError::Database(e))?;
 
             Ok(json!(rows.iter().map(|(url, branch, ai, human)| {
-                json!({"remote_url_hash": url, "branch": branch, "ai_lines": ai.unwrap_or(0), "human_lines": human.unwrap_or(0)})
+                json!({"repo_url": url, "branch": branch, "ai_lines": ai.unwrap_or(0), "human_lines": human.unwrap_or(0)})
             }).collect::<Vec<_>>()))
         }
         "organizations" => {
@@ -1005,7 +1169,8 @@ pub async fn get_export(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let (id, export_type, query_type, status, file_path, error, created_at, completed_at) = match row {
+    let (id, export_type, query_type, status, file_path, error, created_at, completed_at) =
+        match row {
         Some(r) => r,
         None => return Err(AppError::NotFound("Export job not found".into())),
     };
@@ -1044,21 +1209,34 @@ pub async fn upsert_retention_policy(
     Json(req): Json<UpsertRetentionPolicyRequest>,
 ) -> Result<Json<Value>, AppError> {
     let policy = crate::services::data_retention::upsert_retention_policy(
-        &state.db, req.org_id,
-        req.metrics_retention_days, req.cas_retention_days, req.audit_retention_days,
-        req.ci_events_retention_days, req.alerts_retention_days, req.auto_purge,
-    ).await?;
+        &state.db,
+        req.org_id,
+        req.metrics_retention_days,
+        req.cas_retention_days,
+        req.audit_retention_days,
+        req.ci_events_retention_days,
+        req.alerts_retention_days,
+        req.auto_purge,
+    )
+    .await?;
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), Some(req.org_id),
-        "retention_policy.upsert", Some("retention_policy"), Some(&req.org_id.to_string()),
+        &state.db,
+        Some(auth.0.user_id),
+        Some(req.org_id),
+        "retention_policy.upsert",
+        Some("retention_policy"),
+        Some(&req.org_id.to_string()),
         Some(serde_json::json!({
             "metrics_retention_days": req.metrics_retention_days,
             "cas_retention_days": req.cas_retention_days,
             "auto_purge": req.auto_purge,
         })),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(policy))
 }
@@ -1074,9 +1252,8 @@ pub async fn get_retention_policy(
     _auth: AdminGuard,
     Query(query): Query<RetentionPolicyQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let policy = crate::services::data_retention::get_retention_policy(
-        &state.db, query.org_id,
-    ).await?;
+    let policy =
+        crate::services::data_retention::get_retention_policy(&state.db, query.org_id).await?;
 
     Ok(Json(policy))
 }
@@ -1089,11 +1266,18 @@ pub async fn purge_expired_data(
     let result = crate::services::data_retention::purge_expired_data(&state.db).await?;
 
     crate::services::audit::log_action(
-        &state.db, Some(auth.0.user_id), None,
-        "data_purge.execute", Some("system"), None,
+        &state.db,
+        Some(auth.0.user_id),
+        None,
+        "data_purge.execute",
+        Some("system"),
+        None,
         Some(result.clone()),
-        None, None,
-    ).await.ok();
+        None,
+        None,
+    )
+    .await
+    .ok();
 
     Ok(Json(result))
 }
@@ -1135,7 +1319,10 @@ pub async fn list_cas_access_log(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let entries: Vec<Value> = rows.iter().map(|(id, user_id, org_id, api_key_id, hash, method, purpose, ip, ua, created)| {
+    let entries: Vec<Value> = rows
+        .iter()
+        .map(
+            |(id, user_id, org_id, api_key_id, hash, method, purpose, ip, ua, created)| {
         json!({
             "id": id,
             "user_id": user_id.map(|u| u.to_string()),
@@ -1148,7 +1335,9 @@ pub async fn list_cas_access_log(
             "user_agent": ua,
             "created_at": created,
         })
-    }).collect();
+            },
+        )
+        .collect();
 
     Ok(Json(json!({ "entries": entries, "count": entries.len() })))
 }
@@ -1163,17 +1352,27 @@ pub async fn list_user_api_keys(
     _auth: AdminGuard,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(Uuid, String, Option<String>, Vec<String>, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+    let rows: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        Vec<String>,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
         r#"SELECT id, key_prefix, name, scopes, created_at, expires_at, last_used_at
         FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL
-        ORDER BY created_at DESC"#
+        ORDER BY created_at DESC"#,
     )
     .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let result: Vec<Value> = rows.iter().map(|(id, prefix, name, scopes, created, expires, last_used)| {
+    let result: Vec<Value> = rows
+        .iter()
+        .map(|(id, prefix, name, scopes, created, expires, last_used)| {
         json!({
             "id": id.to_string(),
             "key_prefix": prefix,
@@ -1183,7 +1382,8 @@ pub async fn list_user_api_keys(
             "expires_at": expires,
             "last_used_at": last_used,
         })
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(json!({ "api_keys": result })))
 }
