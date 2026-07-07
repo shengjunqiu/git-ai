@@ -1071,42 +1071,20 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                         <label class="form-label">部门名称</label>
                         <input type="text" id="create-dept-name" class="form-input" placeholder="例如：技术中心" />
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Slug</label>
-                        <input type="text" id="create-dept-slug" class="form-input" placeholder="例如：technology-center" />
-                    </div>
                     <div class="form-actions">
                         <button class="btn" onclick="closeModal()">取消</button>
                         <button class="btn btn-primary" onclick="createDepartment()">新增</button>
                     </div>
                 </div>
             </div>`;
-            document.getElementById('create-dept-name').addEventListener('input', () => {{
-                const slugInput = document.getElementById('create-dept-slug');
-                if (slugInput.dataset.touched === 'true') return;
-                const generated = normalizeSlug(document.getElementById('create-dept-name').value);
-                if (generated) slugInput.value = generated;
-            }});
-            document.getElementById('create-dept-slug').addEventListener('input', event => {{
-                event.currentTarget.dataset.touched = 'true';
-            }});
-        }}
-
-        function normalizeSlug(value) {{
-            return String(value || '')
-                .trim()
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '-')
-                .replace(/^-+|-+$/g, '');
         }}
 
         async function createDepartment() {{
             const org_id = document.getElementById('create-dept-org').value;
             const name = document.getElementById('create-dept-name').value.trim();
-            const slug = document.getElementById('create-dept-slug').value.trim();
 
-            if (!org_id || !name || !slug) {{
-                showToast('请填写组织、部门名称和 Slug', 'error');
+            if (!org_id || !name) {{
+                showToast('请填写组织和部门名称', 'error');
                 return;
             }}
 
@@ -1114,7 +1092,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 const r = await fetch('/api/admin/departments', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ org_id, name, slug }})
+                    body: JSON.stringify({{ org_id, name }})
                 }});
                 const d = await r.json();
                 if (r.ok) {{

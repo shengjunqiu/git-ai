@@ -456,7 +456,6 @@ pub struct ListDepartmentsQuery {
 pub struct CreateDepartmentRequest {
     pub org_id: Uuid,
     pub name: String,
-    pub slug: String,
 }
 
 /// GET /api/admin/departments — List departments
@@ -524,21 +523,18 @@ pub async fn create_department(
     Json(req): Json<CreateDepartmentRequest>,
 ) -> Result<Json<Value>, AppError> {
     let name = req.name.trim();
-    let slug = req.slug.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest("Department name is required".into()));
     }
-    if slug.is_empty() {
-        return Err(AppError::BadRequest("Department slug is required".into()));
-    }
 
     let dept_id = Uuid::new_v4();
+    let slug = generate_department_slug(name, dept_id);
 
     sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
         .bind(dept_id)
         .bind(req.org_id)
         .bind(name)
-        .bind(slug)
+        .bind(&slug)
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e))?;
@@ -563,6 +559,58 @@ pub async fn create_department(
         "name": name,
         "slug": slug,
     })))
+}
+
+fn generate_department_slug(name: &str, dept_id: Uuid) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !slug.is_empty() && !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    let id = dept_id.to_string();
+    let suffix = &id[..8];
+    if slug.is_empty() {
+        format!("dept-{}", suffix)
+    } else {
+        format!("{}-{}", slug, suffix)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixed_uuid() -> Uuid {
+        Uuid::parse_str("12345678-1234-5678-1234-567812345678").unwrap()
+    }
+
+    #[test]
+    fn generate_department_slug_keeps_ascii_name_readable() {
+        assert_eq!(
+            generate_department_slug("R&D Center", fixed_uuid()),
+            "r-d-center-12345678"
+        );
+    }
+
+    #[test]
+    fn generate_department_slug_falls_back_for_non_ascii_name() {
+        assert_eq!(
+            generate_department_slug("技术中心", fixed_uuid()),
+            "dept-12345678"
+        );
+    }
 }
 
 /// DELETE /api/admin/departments/{id} — Delete a department
