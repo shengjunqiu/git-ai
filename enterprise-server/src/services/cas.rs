@@ -91,15 +91,19 @@ impl CasStore {
         }
     }
 
+    pub fn release_asset_path(version: &str, filename: &str) -> String {
+        format!("releases/{}/{}", version, filename)
+    }
+
     /// Store release asset in S3
-    /// Key: releases/{channel}/{filename}
+    /// Key: releases/{version}/{filename}
     pub async fn put_release(
         &self,
-        channel: &str,
+        version: &str,
         filename: &str,
         content: &[u8],
     ) -> Result<(), AppError> {
-        let key = format!("releases/{}/{}", channel, filename);
+        let key = Self::release_asset_path(version, filename);
         let path = ObjectPath::from(key);
         let bytes = bytes::Bytes::copy_from_slice(content);
 
@@ -110,7 +114,7 @@ impl CasStore {
 
         tracing::info!(
             "Release stored: {}/{} ({} bytes)",
-            channel,
+            version,
             filename,
             content.len()
         );
@@ -120,11 +124,16 @@ impl CasStore {
     /// Retrieve release asset from S3
     pub async fn get_release(
         &self,
-        channel: &str,
+        version: &str,
         filename: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
-        let key = format!("releases/{}/{}", channel, filename);
-        let path = ObjectPath::from(key);
+        let key = Self::release_asset_path(version, filename);
+        self.get_release_path(&key).await
+    }
+
+    /// Retrieve release asset from an explicit storage path
+    pub async fn get_release_path(&self, storage_path: &str) -> Result<Option<Vec<u8>>, AppError> {
+        let path = ObjectPath::from(storage_path.to_string());
 
         match self.store.get(&path).await {
             Ok(result) => {
