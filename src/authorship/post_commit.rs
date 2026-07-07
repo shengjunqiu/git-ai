@@ -305,6 +305,9 @@ pub fn post_commit_with_final_state(
         let is_interactive = std::io::stdout().is_terminal();
         if let Some(stats) = stats.as_ref() {
             write_stats_to_terminal(stats, is_interactive);
+            if is_interactive {
+                crate::daemon::telemetry_worker::print_commit_upload_notice();
+            }
         } else {
             match skip_reason.as_ref() {
                 Some(StatsSkipReason::MergeCommit) => {

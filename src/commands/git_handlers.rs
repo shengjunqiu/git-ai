@@ -786,6 +786,7 @@ fn maybe_show_async_post_commit_stats(parsed: &ParsedGitInvocation, repo: &Repos
     // Compute and display the full stats.
     if let Ok(stats) = stats_for_commit_stats(repo, &commit_sha, &ignore_patterns) {
         write_stats_to_terminal(&stats, true);
+        crate::daemon::telemetry_worker::print_commit_upload_notice();
     }
 }
 

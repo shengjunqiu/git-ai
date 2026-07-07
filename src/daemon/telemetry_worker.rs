@@ -702,11 +702,105 @@ pub fn telemetry_upload_diagnostics() -> TelemetryUploadDiagnostics {
     }
 }
 
+/// Print a concise post-commit upload status for user-facing CLI output.
+///
+/// This intentionally reports queue/auth/daemon state, not "uploaded successfully":
+/// the actual network upload is asynchronous and may still retry in the background.
+pub fn print_commit_upload_notice() {
+    let diag = telemetry_upload_diagnostics();
+    let daemon_available = crate::daemon::daemon_process_active()
+        || crate::daemon::telemetry_handle::daemon_telemetry_available();
+    eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
+}
+
+fn commit_upload_notice_message(
+    diag: &TelemetryUploadDiagnostics,
+    daemon_available: bool,
+) -> String {
+    // The enterprise metrics endpoint is authenticated; a custom server URL alone is
+    // not enough to give the user a meaningful "queued for upload" confirmation.
+    if !diag.is_logged_in && !diag.has_api_key {
+        let login_target = if diag.using_default_api {
+            "<enterprise-server-url>"
+        } else {
+            diag.api_base_url.as_str()
+        };
+        return format!(
+            "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server {}` or set GIT_AI_API_KEY.",
+            login_target
+        );
+    }
+
+    if !daemon_available {
+        return "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it.".to_string();
+    }
+
+    format!(
+        "[git-ai] AI tracking upload queued to {}.",
+        diag.api_base_url
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::client::{ApiClient, ApiContext};
     use crate::config::DEFAULT_API_BASE_URL;
+
+    fn test_diag(
+        api_base_url: &str,
+        using_default_api: bool,
+        is_logged_in: bool,
+        has_api_key: bool,
+    ) -> TelemetryUploadDiagnostics {
+        TelemetryUploadDiagnostics {
+            api_base_url: api_base_url.to_string(),
+            using_default_api,
+            is_logged_in,
+            has_api_key,
+            should_upload: !using_default_api || is_logged_in || has_api_key,
+        }
+    }
+
+    #[test]
+    fn test_commit_upload_notice_queued_when_authenticated_and_daemon_available() {
+        let diag = test_diag("https://enterprise.example.com", false, true, false);
+        let message = commit_upload_notice_message(&diag, true);
+        assert_eq!(
+            message,
+            "[git-ai] AI tracking upload queued to https://enterprise.example.com."
+        );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_requests_login_for_enterprise_url() {
+        let diag = test_diag("https://enterprise.example.com", false, false, false);
+        let message = commit_upload_notice_message(&diag, true);
+        assert_eq!(
+            message,
+            "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server https://enterprise.example.com` or set GIT_AI_API_KEY."
+        );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_requests_server_for_default_url() {
+        let diag = test_diag(DEFAULT_API_BASE_URL, true, false, false);
+        let message = commit_upload_notice_message(&diag, true);
+        assert_eq!(
+            message,
+            "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server <enterprise-server-url>` or set GIT_AI_API_KEY."
+        );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_reports_missing_daemon_after_auth() {
+        let diag = test_diag("https://enterprise.example.com", false, true, false);
+        let message = commit_upload_notice_message(&diag, false);
+        assert_eq!(
+            message,
+            "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it."
+        );
+    }
 
     // ==================== Upload Gating Logic Tests ====================
 
