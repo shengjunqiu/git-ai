@@ -1,0 +1,26 @@
+src/commands/login.rs
+  0115b6c4cf9b845f 53-59
+src/auth/cli_callback.rs
+  0115b6c4cf9b845f 53-57,70,86,108,127,138,145,355-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "39d923181f0b5a99173193857241f7c0a0f55985",
+  "prompts": {
+    "0115b6c4cf9b845f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3a1d-9a4d-7d51-ae30-c63bef545f60",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 58,
+      "total_deletions": 349,
+      "accepted_lines": 20,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/0274f554dae89b7a27b95dfb89271b812e785565445b459cb3287be17ba92926"
+    }
+  }
+}
