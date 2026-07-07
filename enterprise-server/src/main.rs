@@ -11,6 +11,8 @@ mod pos_encoded;
 mod routes;
 mod services;
 
+/// test
+
 /// git-ai Enterprise Server
 #[derive(Parser, Debug)]
 #[command(name = "git-ai-enterprise-server", version, about)]
