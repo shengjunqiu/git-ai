@@ -1,3 +1,4 @@
+use crate::api::{ClientStatusKind, upload_client_status_with_token};
 use crate::auth::{CallbackListener, CallbackResponse, CredentialStore, OAuthClient, pkce};
 use crate::config;
 use std::time::Duration;
@@ -160,6 +161,14 @@ pub fn handle_login(args: &[String]) {
                 } else {
                     eprintln!("\nServer URL saved to config: {}", url);
                 }
+            }
+
+            if let Err(e) = upload_client_status_with_token(
+                effective_url.to_string(),
+                creds.access_token.clone(),
+                ClientStatusKind::LoggedIn,
+            ) {
+                eprintln!("\nWarning: Failed to upload git-ai login status: {}", e);
             }
 
             eprintln!("\nSuccessfully logged in!");

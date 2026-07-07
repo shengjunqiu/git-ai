@@ -17,3 +17,4 @@ pub mod login;
 pub mod auth_pages;
 pub mod auth_api;
 pub mod cli_authorize;
+pub mod client_status;

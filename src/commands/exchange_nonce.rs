@@ -7,6 +7,7 @@
 //! On failure, exits with code 1 silently so the install script can fall back
 //! to running `git-ai login`. Errors are recorded server-side for debugging.
 
+use crate::api::{ClientStatusKind, upload_client_status_with_token};
 use crate::auth::CredentialStore;
 use crate::auth::client::OAuthClient;
 
@@ -48,6 +49,12 @@ fn exchange_nonce(nonce: &str, api_base: &str) -> Result<(), String> {
     // Store credentials
     let store = CredentialStore::new();
     store.store(&credentials)?;
+
+    let _ = upload_client_status_with_token(
+        api_base.to_string(),
+        credentials.access_token.clone(),
+        ClientStatusKind::LoggedIn,
+    );
 
     eprintln!("\x1b[32m✓ Logged in automatically\x1b[0m");
     Ok(())

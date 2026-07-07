@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod cas;
+pub mod client_status;
 pub mod data_retention;
 pub mod metrics;
 pub mod org_scope;

@@ -1,9 +1,10 @@
+use crate::authorship::authorship_log_serialization::generate_short_hash;
 use crate::authorship::ignore::{
     IgnoreMatcher, build_ignore_matcher, effective_ignore_patterns, should_ignore_file_with_matcher,
 };
 use crate::authorship::stats::{CommitStats, stats_from_authorship_log, write_stats_to_terminal};
 use crate::authorship::virtual_attribution::VirtualAttributions;
-use crate::authorship::working_log::CheckpointKind;
+use crate::authorship::working_log::{Checkpoint, CheckpointKind};
 use crate::commands::checkpoint;
 use crate::error::GitAiError;
 use crate::git::find_repository;
@@ -93,30 +94,6 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
         return Ok(());
     }
 
-    let mut checkpoint_infos = Vec::new();
-
-    for checkpoint in checkpoints.iter().rev() {
-        let (additions, deletions) = (
-            checkpoint.line_stats.additions,
-            checkpoint.line_stats.deletions,
-        );
-
-        let tool_model = checkpoint
-            .agent_id
-            .as_ref()
-            .map(|a| format!("{} {}", capitalize(&a.tool), &a.model))
-            .unwrap_or_else(|| default_user_name.clone());
-
-        let is_human = checkpoint.kind == CheckpointKind::Human;
-        checkpoint_infos.push(CheckpointInfo {
-            time_ago: format_time_ago(checkpoint.timestamp),
-            additions,
-            deletions,
-            tool_model,
-            is_human,
-        });
-    }
-
     let working_va = VirtualAttributions::from_just_working_log(
         repo.clone(),
         head_sha.clone(),
@@ -145,6 +122,9 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
     // not in authorship_log.attestations (which is for committed changes).
     // Count AI lines from the uncommitted attributions.
     let ai_accepted = count_ai_lines_from_initial(&initial, &ignore_matcher);
+
+    let checkpoint_infos =
+        build_checkpoint_infos(&checkpoints, &initial, &ignore_matcher, &default_user_name);
 
     let stats = stats_from_authorship_log(
         Some(&authorship_log),
@@ -193,6 +173,118 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
     }
 
     Ok(())
+}
+
+fn build_checkpoint_infos(
+    checkpoints: &[Checkpoint],
+    initial: &InitialAttributions,
+    ignore_matcher: &IgnoreMatcher,
+    default_user_name: &str,
+) -> Vec<CheckpointInfo> {
+    let mut checkpoint_infos = Vec::new();
+    let mut fallback_prompt_ids = HashSet::new();
+    let mut seen_checkpoint_keys = HashSet::new();
+
+    for checkpoint in checkpoints.iter().rev() {
+        if !seen_checkpoint_keys.insert(checkpoint_display_key(checkpoint)) {
+            continue;
+        }
+
+        let (additions, deletions) = display_counts_for_checkpoint(
+            checkpoint,
+            initial,
+            ignore_matcher,
+            &mut fallback_prompt_ids,
+        );
+
+        let tool_model = checkpoint
+            .agent_id
+            .as_ref()
+            .map(|a| format!("{} {}", capitalize(&a.tool), &a.model))
+            .unwrap_or_else(|| default_user_name.to_string());
+
+        let is_human = checkpoint.kind == CheckpointKind::Human;
+        checkpoint_infos.push(CheckpointInfo {
+            time_ago: format_time_ago(checkpoint.timestamp),
+            additions,
+            deletions,
+            tool_model,
+            is_human,
+        });
+    }
+
+    checkpoint_infos
+}
+
+fn checkpoint_display_key(checkpoint: &Checkpoint) -> String {
+    let mut key = format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        checkpoint.kind,
+        checkpoint.diff,
+        checkpoint.line_stats.additions,
+        checkpoint.line_stats.deletions,
+        checkpoint.line_stats.additions_sloc,
+        checkpoint.line_stats.deletions_sloc,
+        checkpoint.entries.len()
+    );
+
+    if let Some(agent_id) = &checkpoint.agent_id {
+        key.push_str("|agent:");
+        key.push_str(&agent_id.tool);
+        key.push('|');
+        key.push_str(&agent_id.id);
+        key.push('|');
+        key.push_str(&agent_id.model);
+    }
+
+    for entry in &checkpoint.entries {
+        key.push_str("|entry:");
+        key.push_str(&entry.file);
+        key.push('|');
+        key.push_str(&entry.blob_sha);
+    }
+
+    key
+}
+
+fn display_counts_for_checkpoint(
+    checkpoint: &Checkpoint,
+    initial: &InitialAttributions,
+    ignore_matcher: &IgnoreMatcher,
+    fallback_prompt_ids: &mut HashSet<String>,
+) -> (u32, u32) {
+    let additions = checkpoint.line_stats.additions;
+    let deletions = checkpoint.line_stats.deletions;
+    if additions > 0 || deletions > 0 || !checkpoint.kind.is_ai() {
+        return (additions, deletions);
+    }
+
+    let Some(agent_id) = checkpoint.agent_id.as_ref() else {
+        return (additions, deletions);
+    };
+    let prompt_id = generate_short_hash(&agent_id.id, &agent_id.tool);
+    if !checkpoint_has_prompt_attribution(checkpoint, &prompt_id) {
+        return (additions, deletions);
+    }
+    if !fallback_prompt_ids.insert(prompt_id.clone()) {
+        return (additions, deletions);
+    }
+
+    let current_ai_lines = count_lines_from_initial_by_author(initial, &prompt_id, ignore_matcher);
+    if current_ai_lines > 0 {
+        (current_ai_lines, deletions)
+    } else {
+        (additions, deletions)
+    }
+}
+
+fn checkpoint_has_prompt_attribution(checkpoint: &Checkpoint, prompt_id: &str) -> bool {
+    checkpoint.entries.iter().any(|entry| {
+        entry
+            .line_attributions
+            .iter()
+            .any(|line_attr| line_attr.author_id == prompt_id)
+    })
 }
 
 fn format_time_ago(timestamp: u64) -> String {
@@ -325,6 +417,31 @@ fn count_ai_lines_from_initial(
     }
 
     ai_lines
+}
+
+fn count_lines_from_initial_by_author(
+    initial: &InitialAttributions,
+    author_id: &str,
+    ignore_matcher: &IgnoreMatcher,
+) -> u32 {
+    if !initial.prompts.contains_key(author_id) {
+        return 0;
+    }
+
+    let mut lines = 0u32;
+    for (file_path, line_attrs) in &initial.files {
+        if should_ignore_file_with_matcher(file_path, ignore_matcher) {
+            continue;
+        }
+
+        for line_attr in line_attrs {
+            if line_attr.author_id == author_id {
+                lines += line_attr.line_count();
+            }
+        }
+    }
+
+    lines
 }
 
 #[cfg(test)]
@@ -539,5 +656,206 @@ mod tests {
         let ignore_matcher = build_ignore_matcher(&["Cargo.lock".to_string()]);
         let ai_lines = count_ai_lines_from_initial(&initial, &ignore_matcher);
         assert_eq!(ai_lines, 2);
+    }
+
+    #[test]
+    fn test_display_counts_falls_back_to_current_ai_lines_for_zero_line_stats() {
+        use crate::authorship::attribution_tracker::LineAttribution;
+        use crate::authorship::authorship_log::PromptRecord;
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, WorkingLogEntry,
+        };
+
+        let agent_id = AgentId {
+            tool: "codex".to_string(),
+            id: "session-1".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+        let prompt_id = generate_short_hash(&agent_id.id, &agent_id.tool);
+
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff".to_string(),
+            "Test User".to_string(),
+            vec![WorkingLogEntry::new(
+                "src/lib.rs".to_string(),
+                "blob".to_string(),
+                vec![],
+                vec![LineAttribution::new(10, 12, prompt_id.clone(), None)],
+            )],
+        );
+        checkpoint.agent_id = Some(agent_id.clone());
+
+        let mut initial = InitialAttributions::default();
+        initial.prompts.insert(
+            prompt_id.clone(),
+            PromptRecord {
+                agent_id,
+                human_author: None,
+                messages: vec![],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 0,
+                overriden_lines: 0,
+                messages_url: None,
+                custom_attributes: None,
+            },
+        );
+        initial.files.insert(
+            "src/lib.rs".to_string(),
+            vec![LineAttribution::new(1, 4, prompt_id.clone(), None)],
+        );
+        initial.files.insert(
+            "Cargo.lock".to_string(),
+            vec![LineAttribution::new(1, 100, prompt_id.clone(), None)],
+        );
+
+        let ignore_matcher = build_ignore_matcher(&["Cargo.lock".to_string()]);
+        let mut fallback_prompt_ids = HashSet::new();
+        let (additions, deletions) = display_counts_for_checkpoint(
+            &checkpoint,
+            &initial,
+            &ignore_matcher,
+            &mut fallback_prompt_ids,
+        );
+
+        assert_eq!(additions, 4);
+        assert_eq!(deletions, 0);
+    }
+
+    #[test]
+    fn test_display_counts_keeps_nonzero_line_stats() {
+        use crate::authorship::attribution_tracker::LineAttribution;
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, CheckpointLineStats, WorkingLogEntry,
+        };
+
+        let agent_id = AgentId {
+            tool: "codex".to_string(),
+            id: "session-1".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+        let prompt_id = generate_short_hash(&agent_id.id, &agent_id.tool);
+
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff".to_string(),
+            "Test User".to_string(),
+            vec![WorkingLogEntry::new(
+                "src/lib.rs".to_string(),
+                "blob".to_string(),
+                vec![],
+                vec![LineAttribution::new(1, 20, prompt_id.clone(), None)],
+            )],
+        );
+        checkpoint.agent_id = Some(agent_id);
+        checkpoint.line_stats = CheckpointLineStats {
+            additions: 7,
+            deletions: 2,
+            additions_sloc: 7,
+            deletions_sloc: 2,
+        };
+
+        let initial = InitialAttributions::default();
+        let ignore_matcher = build_ignore_matcher(&[]);
+        let mut fallback_prompt_ids = HashSet::new();
+        let (additions, deletions) = display_counts_for_checkpoint(
+            &checkpoint,
+            &initial,
+            &ignore_matcher,
+            &mut fallback_prompt_ids,
+        );
+
+        assert_eq!(additions, 7);
+        assert_eq!(deletions, 2);
+    }
+
+    #[test]
+    fn test_build_checkpoint_infos_dedupes_identical_checkpoints() {
+        use crate::authorship::attribution_tracker::LineAttribution;
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, CheckpointLineStats, WorkingLogEntry,
+        };
+
+        let agent_id = AgentId {
+            tool: "codex".to_string(),
+            id: "session-1".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+        let prompt_id = generate_short_hash(&agent_id.id, &agent_id.tool);
+
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "same-diff".to_string(),
+            "Test User".to_string(),
+            vec![WorkingLogEntry::new(
+                "src/lib.rs".to_string(),
+                "same-blob".to_string(),
+                vec![],
+                vec![LineAttribution::new(1, 3, prompt_id, None)],
+            )],
+        );
+        checkpoint.agent_id = Some(agent_id);
+        checkpoint.line_stats = CheckpointLineStats {
+            additions: 3,
+            deletions: 1,
+            additions_sloc: 3,
+            deletions_sloc: 1,
+        };
+
+        let mut later_duplicate = checkpoint.clone();
+        later_duplicate.timestamp += 1;
+
+        let checkpoints = vec![checkpoint, later_duplicate];
+        let initial = InitialAttributions::default();
+        let ignore_matcher = build_ignore_matcher(&[]);
+        let infos = build_checkpoint_infos(&checkpoints, &initial, &ignore_matcher, "Test User");
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].additions, 3);
+        assert_eq!(infos[0].deletions, 1);
+    }
+
+    #[test]
+    fn test_build_checkpoint_infos_keeps_distinct_checkpoints() {
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, CheckpointLineStats, WorkingLogEntry,
+        };
+
+        let agent_id = AgentId {
+            tool: "codex".to_string(),
+            id: "session-1".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+
+        let mut first = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff-1".to_string(),
+            "Test User".to_string(),
+            vec![WorkingLogEntry::new(
+                "src/lib.rs".to_string(),
+                "blob-1".to_string(),
+                vec![],
+                vec![],
+            )],
+        );
+        first.agent_id = Some(agent_id.clone());
+        first.line_stats = CheckpointLineStats {
+            additions: 3,
+            deletions: 1,
+            additions_sloc: 3,
+            deletions_sloc: 1,
+        };
+
+        let mut second = first.clone();
+        second.diff = "diff-2".to_string();
+        second.entries[0].blob_sha = "blob-2".to_string();
+
+        let checkpoints = vec![first, second];
+        let initial = InitialAttributions::default();
+        let ignore_matcher = build_ignore_matcher(&[]);
+        let infos = build_checkpoint_infos(&checkpoints, &initial, &ignore_matcher, "Test User");
+
+        assert_eq!(infos.len(), 2);
     }
 }

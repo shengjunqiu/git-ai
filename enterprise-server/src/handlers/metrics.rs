@@ -24,15 +24,29 @@ pub async fn upload_metrics(
         headers.0.distinct_id,
     );
 
+    let distinct_id = headers.0.distinct_id.clone();
     let response = crate::services::metrics::process_metrics_batch(
         &state.db,
         batch.events,
         Some(auth.0.user_id),
-        headers.0.distinct_id,
+        distinct_id.clone(),
     )
     .await;
 
     let success_count = event_count - response.errors.len();
+    if success_count > 0 {
+        if let Err(e) = crate::services::client_status::touch_last_seen(
+            &state.db,
+            auth.0.user_id,
+            auth.0.org_id,
+            distinct_id,
+        )
+        .await
+        {
+            tracing::warn!(%e, "failed to update client last_seen_at after metrics upload");
+        }
+    }
+
     tracing::info!(
         "Metrics upload result: {} success, {} errors",
         success_count,

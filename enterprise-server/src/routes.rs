@@ -88,6 +88,10 @@ pub fn build_router(state: AppState) -> Router {
             "/worker/metrics/upload",
             post(crate::handlers::metrics::upload_metrics),
         )
+        .route(
+            "/worker/client/status",
+            post(crate::handlers::client_status::update_client_status),
+        )
         // CAS
         .route(
             "/worker/cas/upload",
@@ -169,6 +173,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/aggregate/tools",
             get(crate::handlers::dashboard::aggregate_tools),
+        )
+        .route(
+            "/api/v1/client/status",
+            get(crate::handlers::client_status::current_client_status),
         )
         // Audit log query
         .route(

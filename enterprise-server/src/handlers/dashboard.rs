@@ -68,6 +68,14 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .sidebar-user {{ padding: 0.5rem 0.75rem; color: var(--text-secondary); font-size: 0.8rem; }}
         .sidebar-user-name {{ color: var(--text-primary); font-weight: 500; }}
         .sidebar-user-email {{ color: var(--text-muted); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .sidebar-gitai {{ display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 0.55rem; align-items: start; margin: 0.65rem 0 0; min-width: 0; }}
+        .sidebar-gitai-dot {{ width: 8px; height: 8px; border-radius: 999px; margin-top: 0.32rem; background: var(--text-muted); }}
+        .sidebar-gitai-dot.online {{ background: var(--success); }}
+        .sidebar-gitai-dot.offline {{ background: var(--danger); }}
+        .sidebar-gitai-dot.error {{ background: var(--warning); }}
+        .sidebar-gitai-content {{ min-width: 0; line-height: 1.35; }}
+        .sidebar-gitai-status {{ color: var(--text-secondary); font-size: 0.75rem; font-weight: 600; }}
+        .sidebar-gitai-detail {{ color: var(--text-muted); font-size: 0.68rem; margin-top: 0.15rem; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }}
         .logout-btn {{ display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-muted);
                        font-size: 0.8rem; cursor: pointer; border: none; background: none; width: 100%;
                        border-radius: 6px; transition: all 0.15s; margin-top: 0.5rem; }}
@@ -250,6 +258,13 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 <div class="sidebar-user">
                     <div class="sidebar-user-name">{name}</div>
                     <div class="sidebar-user-email" title="{email}">{email}</div>
+                    <div class="sidebar-gitai">
+                        <span class="sidebar-gitai-dot" id="sidebar-gitai-dot"></span>
+                        <div class="sidebar-gitai-content">
+                            <div class="sidebar-gitai-status" id="sidebar-gitai-status">git-ai 检测中</div>
+                            <div class="sidebar-gitai-detail" id="sidebar-gitai-detail">正在读取状态</div>
+                        </div>
+                    </div>
                 </div>
                 <button class="logout-btn" onclick="window.location.href='/logout'">
                     <span>🚪</span> 退出登录
@@ -467,6 +482,19 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             div.textContent = value ?? '';
             return div.innerHTML;
         }}
+        function fmtTimeAgo(value) {{
+            if (!value) return '从未';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '未知';
+            const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+            if (seconds < 60) return '刚刚';
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${{minutes}} 分钟前`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${{hours}} 小时前`;
+            const days = Math.floor(hours / 24);
+            return `${{days}} 天前`;
+        }}
 
         // --- Auto refresh ---
         let refreshInterval = null;
@@ -496,6 +524,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         function refreshCurrentSection() {{
             loadSection(currentSection);
+            loadClientStatus();
             updateRefreshTime();
         }}
 
@@ -603,6 +632,42 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
             // Load mini trend chart for overview
             loadOverviewTrend();
+        }}
+
+        async function loadClientStatus() {{
+            const statusEl = document.getElementById('sidebar-gitai-status');
+            const detailEl = document.getElementById('sidebar-gitai-detail');
+            const dotEl = document.getElementById('sidebar-gitai-dot');
+            if (!statusEl || !detailEl || !dotEl) return;
+            try {{
+                const r = await fetch('/api/v1/client/status');
+                const d = await r.json();
+                if (!d.detected) {{
+                    statusEl.textContent = 'git-ai 未检测到';
+                    dotEl.className = 'sidebar-gitai-dot';
+                    detailEl.textContent = 'CLI 登录后会显示状态';
+                    return;
+                }}
+
+                const loggedIn = d.status === 'logged_in';
+                statusEl.textContent = `git-ai ${{d.status_label || (loggedIn ? '已登录' : '已登出')}}`;
+                dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
+
+                const parts = [];
+                if (d.last_seen_at) {{
+                    parts.push(`最近同步 ${{fmtTimeAgo(d.last_seen_at)}}`);
+                }} else if (d.last_status_at) {{
+                    parts.push(`最近状态 ${{fmtTimeAgo(d.last_status_at)}}`);
+                }}
+                if (d.cli_version) parts.push(`v${{d.cli_version}}`);
+                if (d.hostname) parts.push(d.hostname);
+                detailEl.textContent = parts.join(' · ') || '暂无同步记录';
+            }} catch(e) {{
+                console.error(e);
+                statusEl.textContent = 'git-ai 检测失败';
+                dotEl.className = 'sidebar-gitai-dot error';
+                detailEl.textContent = '无法读取状态';
+            }}
         }}
 
         async function loadOverviewTrend() {{
@@ -836,11 +901,12 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 const r = await fetch('/api/v1/aggregate/projects');
                 const d = await r.json();
                 document.getElementById('proj-table').innerHTML = (d.projects || []).map(p => {{
-                    const displayName = p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—');
-                    const displayUrl = p.repo_url || p.remote_url_hash || '';
+                    const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
+                    const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
+                    const branch = escapeHtml(p.branch || '—');
                     return `<tr>
                         <td title="${{displayUrl}}"><strong>${{displayName}}</strong></td>
-                        <td>${{p.branch || '—'}}</td>
+                        <td>${{branch}}</td>
                         <td>${{fmt(p.total_commits)}}</td>
                         <td>${{fmt(p.total_ai)}}</td>
                         <td>${{fmt(p.total_human)}}</td>
@@ -1406,6 +1472,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         // --- Init ---
         loadOverview();
+        loadClientStatus();
         updateRefreshTime();
         startAutoRefresh();
     </script>
@@ -1891,16 +1958,28 @@ pub async fn aggregate_projects(
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
     // Aggregate from metrics_events (primary source from client auto-upload)
-    let metrics_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"SELECT
+    let metrics_rows: Vec<(String, Option<String>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        r#"WITH committed_events AS (
+            SELECT
+                repo_url,
+                COALESCE(
+                    NULLIF(BTRIM(raw_attrs->>'branch'), ''),
+                    NULLIF(BTRIM(raw_attrs->>'5'), '')
+                ) AS branch,
+                git_diff_added_lines,
+                ai_additions
+            FROM metrics_events
+            WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+        )
+        SELECT
             repo_url,
+            STRING_AGG(DISTINCT branch, ', ' ORDER BY branch) AS branch,
             COUNT(*) as total_commits,
             COALESCE(SUM(git_diff_added_lines), 0),
             COALESCE(SUM(ai_additions), 0)
-        FROM metrics_events
-        WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
+        FROM committed_events
         GROUP BY repo_url
         ORDER BY repo_url"#,
     )
@@ -1951,7 +2030,7 @@ pub async fn aggregate_projects(
         std::collections::HashMap::new();
 
     // First pass: metrics_events data
-    for (repo_url, commits, total, ai) in &metrics_rows {
+    for (repo_url, branch, commits, total, ai) in &metrics_rows {
         let ai = ai.unwrap_or(0);
         let total = total.unwrap_or(0);
         let key = repo_project_key(repo_url);
@@ -1969,7 +2048,7 @@ pub async fn aggregate_projects(
                 project_id: None,
                 repo_url: repo_url.clone(),
                 project_name,
-                branch: None,
+                branch: branch.clone(),
                 organization: None,
                 department: None,
                 total_commits: commits.unwrap_or(0),
