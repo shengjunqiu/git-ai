@@ -11,6 +11,7 @@ mod pos_encoded;
 mod routes;
 mod services;
 
+// test
 
 /// git-ai Enterprise Server
 #[derive(Parser, Debug)]
