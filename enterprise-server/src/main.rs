@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let cas_store = services::cas::CasStore::new(&config)?;
 
     // Initialize rate limiter
-    let rate_limiter = services::rate_limit::RateLimiter::new();
+    let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone());
 
     // Build application state
     let state = crate::routes::AppState {
