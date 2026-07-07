@@ -211,7 +211,8 @@ pub fn build_router(state: AppState) -> Router {
         // Admin: Departments
         .route(
             "/api/admin/departments",
-            post(crate::handlers::admin::create_department),
+            post(crate::handlers::admin::create_department)
+                .get(crate::handlers::admin::list_departments),
         )
         .route(
             "/api/admin/departments/{id}",

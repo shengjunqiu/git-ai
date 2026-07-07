@@ -57,41 +57,32 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         .unwrap_or_default();
 
     let register_fields = if is_register {
-        let department_options = crate::services::registration::DEFAULT_REGISTER_DEPARTMENTS
-            .iter()
-            .map(|(slug, name)| {
-                format!(
-                    r#"<option value="{}">{}</option>"#,
-                    html_escape(slug),
-                    html_escape(name)
-                )
-            })
-            .collect::<String>();
-        format!(
-            r#"
+        r#"
       <label for="name">姓名</label>
       <input id="name" name="name" type="text" autocomplete="name" required />
 
       <label for="confirm_password">确认密码</label>
       <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required />
 
-      <input type="hidden" name="org_slug" value="{org_slug}" />
-      <div class="fixed-field">
-        <span>组织</span>
-        <strong>{org_name}</strong>
-      </div>
-
-      <label for="department_slug">部门</label>
-      <select id="department_slug" name="department_slug" required>
-        {department_options}
+      <label for="org_id">组织</label>
+      <select id="org_id" name="org_id" required disabled>
+        <option value="">输入邮箱后选择组织</option>
       </select>
-"#,
-            org_slug = html_escape(crate::services::registration::DEFAULT_REGISTER_ORG_SLUG),
-            org_name = html_escape(crate::services::registration::DEFAULT_REGISTER_ORG_NAME),
-            department_options = department_options,
-        )
+
+      <label for="department_id">部门</label>
+      <select id="department_id" name="department_id" required disabled>
+        <option value="">先选择组织</option>
+      </select>
+      <div class="form-hint" id="registration-scope-hint">输入邮箱后加载可加入的组织和部门</div>
+"#
+        .to_string()
     } else {
         String::new()
+    };
+    let page_script = if is_register {
+        REGISTER_PAGE_SCRIPT
+    } else {
+        ""
     };
 
     let password_autocomplete = if is_register {
@@ -139,6 +130,7 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
       <p class="alternate"><a href="{alternate_href}">{alternate_text}</a></p>
     </section>
   </main>
+{page_script}
 </body>
 </html>"#,
         title = html_escape(title),
@@ -150,6 +142,7 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         alternate_href = html_escape(&alternate_href),
         alternate_text = alternate_text,
         styles = AUTH_PAGE_STYLES,
+        page_script = page_script,
     )
 }
 
@@ -173,6 +166,143 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
 }
+
+const REGISTER_PAGE_SCRIPT: &str = r#"<script>
+(() => {
+  const emailInput = document.getElementById('email');
+  const orgSelect = document.getElementById('org_id');
+  const departmentSelect = document.getElementById('department_id');
+  const hint = document.getElementById('registration-scope-hint');
+  const submit = document.querySelector('button[type="submit"]');
+  let emailTimer = null;
+
+  function resetSelect(select, text) {
+    select.innerHTML = '';
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = text;
+    select.appendChild(option);
+    select.disabled = true;
+  }
+
+  function setHint(text, type = '') {
+    hint.textContent = text;
+    hint.className = type ? `form-hint ${type}` : 'form-hint';
+  }
+
+  function updateSubmitState() {
+    submit.disabled = !(orgSelect.value && departmentSelect.value);
+  }
+
+  function appendOption(select, value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+
+  async function loadDepartments(orgId) {
+    resetSelect(departmentSelect, '加载部门中...');
+    updateSubmitState();
+
+    try {
+      const response = await fetch(`/auth/organizations/${orgId}/departments`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || '部门加载失败');
+      }
+
+      const departments = data.departments || [];
+      resetSelect(departmentSelect, departments.length ? '请选择部门' : '暂无可选部门');
+      if (departments.length === 0) {
+        setHint('该组织还没有可选部门，请联系管理员添加部门。', 'error');
+        updateSubmitState();
+        return;
+      }
+
+      departments.forEach(department => {
+        appendOption(departmentSelect, department.id, department.name);
+      });
+      departmentSelect.disabled = false;
+      if (departments.length === 1) {
+        departmentSelect.value = departments[0].id;
+      }
+      setHint('请选择你所在的部门。');
+    } catch (error) {
+      resetSelect(departmentSelect, '部门加载失败');
+      setHint(error.message || '部门加载失败', 'error');
+    }
+
+    updateSubmitState();
+  }
+
+  async function loadOrganizations() {
+    const email = emailInput.value.trim();
+    resetSelect(orgSelect, '加载组织中...');
+    resetSelect(departmentSelect, '先选择组织');
+    updateSubmitState();
+
+    if (!email.includes('@')) {
+      resetSelect(orgSelect, '输入邮箱后选择组织');
+      setHint('输入邮箱后加载可加入的组织和部门');
+      return;
+    }
+
+    try {
+      const response = await fetch(`/auth/organizations?email=${encodeURIComponent(email)}`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || '组织加载失败');
+      }
+
+      const organizations = data.organizations || [];
+      resetSelect(orgSelect, organizations.length ? '请选择组织' : '暂无可加入组织');
+      if (organizations.length === 0) {
+        setHint('当前邮箱域名没有可加入组织，请联系管理员。', 'error');
+        return;
+      }
+
+      organizations.forEach(org => {
+        appendOption(orgSelect, org.id, `${org.name} (${org.slug})`);
+      });
+      orgSelect.disabled = false;
+      if (organizations.length === 1) {
+        orgSelect.value = organizations[0].id;
+        await loadDepartments(orgSelect.value);
+      } else {
+        setHint('请选择要加入的组织。');
+      }
+    } catch (error) {
+      resetSelect(orgSelect, '组织加载失败');
+      setHint(error.message || '组织加载失败', 'error');
+    }
+
+    updateSubmitState();
+  }
+
+  emailInput.addEventListener('input', () => {
+    clearTimeout(emailTimer);
+    emailTimer = setTimeout(loadOrganizations, 300);
+  });
+  orgSelect.addEventListener('change', () => {
+    if (orgSelect.value) {
+      loadDepartments(orgSelect.value);
+    } else {
+      resetSelect(departmentSelect, '先选择组织');
+      updateSubmitState();
+    }
+  });
+  departmentSelect.addEventListener('change', updateSubmitState);
+
+  resetSelect(orgSelect, '输入邮箱后选择组织');
+  resetSelect(departmentSelect, '先选择组织');
+  updateSubmitState();
+})();
+</script>"#;
 
 pub(crate) const AUTH_PAGE_STYLES: &str = r#"
 :root {
@@ -271,6 +401,20 @@ select:focus {
 }
 input::placeholder {
   color: var(--text-muted);
+}
+select:disabled,
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.form-hint {
+  margin-top: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.form-hint.error {
+  color: var(--danger);
 }
 .fixed-field {
   margin-top: 1rem;
@@ -431,15 +575,16 @@ mod tests {
     }
 
     #[test]
-    fn register_page_uses_default_linewell_department_options() {
+    fn register_page_uses_dynamic_department_options() {
         let html = auth_page("注册", "/auth/register", &None, true);
 
-        assert!(html.contains(r#"name="org_slug" value="linewell.com""#));
-        assert!(html.contains("<strong>Linewell</strong>"));
-        assert!(html.contains(r#"<select id="department_slug" name="department_slug" required>"#));
-        assert!(html.contains(r#"<option value="technology-center">技术中心</option>"#));
-        assert!(html.contains(r#"<option value="rd-center">研发中心</option>"#));
-        assert!(!html.contains("org_id"));
-        assert!(!html.contains("department_id"));
+        assert!(html.contains(r#"<select id="org_id" name="org_id" required disabled>"#));
+        assert!(html.contains(
+            r#"<select id="department_id" name="department_id" required disabled>"#
+        ));
+        assert!(html.contains("/auth/organizations?email="));
+        assert!(html.contains("/departments"));
+        assert!(!html.contains(r#"name="org_slug" value="linewell.com""#));
+        assert!(!html.contains(r#"name="department_slug""#));
     }
 }

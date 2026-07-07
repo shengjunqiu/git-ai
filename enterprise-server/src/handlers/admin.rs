@@ -400,10 +400,73 @@ pub async fn list_organizations(
 // ================================================================
 
 #[derive(Debug, Deserialize)]
+pub struct ListDepartmentsQuery {
+    pub org_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateDepartmentRequest {
     pub org_id: Uuid,
     pub name: String,
     pub slug: String,
+}
+
+/// GET /api/admin/departments — List departments
+pub async fn list_departments(
+    State(state): State<AppState>,
+    _auth: AdminGuard,
+    Query(query): Query<ListDepartmentsQuery>,
+) -> Result<Json<Value>, AppError> {
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        String,
+        chrono::DateTime<chrono::Utc>,
+        String,
+        String,
+        i64,
+    )> = sqlx::query_as(
+        r#"SELECT
+            d.id,
+            d.org_id,
+            d.name,
+            d.slug,
+            d.created_at,
+            o.name AS org_name,
+            o.slug AS org_slug,
+            COUNT(om.user_id)::bigint AS member_count
+        FROM departments d
+        JOIN organizations o ON o.id = d.org_id
+        LEFT JOIN org_members om ON om.org_id = d.org_id AND om.department_id = d.id
+        WHERE ($1::uuid IS NULL OR d.org_id = $1)
+        GROUP BY d.id, d.org_id, d.name, d.slug, d.created_at, o.name, o.slug
+        ORDER BY o.name, d.name"#,
+    )
+    .bind(query.org_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+
+    let departments: Vec<Value> = rows
+        .iter()
+        .map(
+            |(id, org_id, name, slug, created_at, org_name, org_slug, member_count)| {
+                json!({
+                    "id": id.to_string(),
+                    "org_id": org_id.to_string(),
+                    "name": name,
+                    "slug": slug,
+                    "org_name": org_name,
+                    "org_slug": org_slug,
+                    "member_count": member_count,
+                    "created_at": created_at,
+                })
+            },
+        )
+        .collect();
+
+    Ok(Json(json!({ "departments": departments })))
 }
 
 /// POST /api/admin/departments — Create a department
@@ -412,13 +475,22 @@ pub async fn create_department(
     _auth: AdminGuard,
     Json(req): Json<CreateDepartmentRequest>,
 ) -> Result<Json<Value>, AppError> {
+    let name = req.name.trim();
+    let slug = req.slug.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Department name is required".into()));
+    }
+    if slug.is_empty() {
+        return Err(AppError::BadRequest("Department slug is required".into()));
+    }
+
     let dept_id = Uuid::new_v4();
 
     sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
         .bind(dept_id)
         .bind(req.org_id)
-        .bind(&req.name)
-        .bind(&req.slug)
+        .bind(name)
+        .bind(slug)
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e))?;
@@ -430,7 +502,7 @@ pub async fn create_department(
         "department.create",
         Some("department"),
         Some(&dept_id.to_string()),
-        Some(json!({"name": req.name, "slug": req.slug})),
+        Some(json!({"name": name, "slug": slug})),
         None,
         None,
     )
@@ -440,8 +512,8 @@ pub async fn create_department(
     Ok(Json(json!({
         "id": dept_id.to_string(),
         "org_id": req.org_id.to_string(),
-        "name": req.name,
-        "slug": req.slug,
+        "name": name,
+        "slug": slug,
     })))
 }
 

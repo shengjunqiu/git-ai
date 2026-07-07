@@ -212,6 +212,9 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             <a class="nav-item" onclick="showSection('organizations')">
                 <span class="nav-icon">🏢</span> 组织
             </a>
+            <a class="nav-item" onclick="showSection('departments')">
+                <span class="nav-icon">🏷️</span> 部门
+            </a>
             <a class="nav-item" onclick="showSection('developers')">
                 <span class="nav-icon">👥</span> 开发者
             </a>
@@ -399,6 +402,23 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 </div>
             </div>
 
+            <!-- Departments Section -->
+            <div id="section-departments" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">部门</div>
+                        <div class="page-subtitle">按部门查看 AI 代码归属分析</div>
+                    </div>
+                    <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>组织</th><th>部门</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                        <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- API Keys Management Section -->
             <div id="section-apikeys" class="section admin-only">
                 <div class="page-header">
@@ -426,6 +446,11 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         const email = "{email}";
         const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
         const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${{Math.min(pct,100)}}%"></div></div>`;
+        function escapeHtml(value) {{
+            const div = document.createElement('div');
+            div.textContent = value ?? '';
+            return div.innerHTML;
+        }}
 
         // --- Auto refresh ---
         let refreshInterval = null;
@@ -481,6 +506,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 case 'projects': loadProjects(); break;
                 case 'tools': loadTools(); break;
                 case 'users': loadUsers(); break;
+                case 'departments': loadDepartments(); break;
                 case 'apikeys': loadApiKeys(); break;
             }}
         }}
@@ -872,6 +898,144 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 }}
             }} catch(e) {{
                 showToast('删除用户时发生错误', 'error');
+            }}
+        }}
+
+        // --- Departments Management ---
+        let adminOrganizationsCache = null;
+
+        async function loadAdminOrganizations() {{
+            if (adminOrganizationsCache) return adminOrganizationsCache;
+            const r = await fetch('/api/admin/organizations/list');
+            const d = await r.json();
+            if (!r.ok) {{
+                throw new Error(d.error || '加载组织列表失败');
+            }}
+            adminOrganizationsCache = d.organizations || [];
+            return adminOrganizationsCache;
+        }}
+
+        async function loadDepartments() {{
+            try {{
+                const r = await fetch('/api/v1/aggregate/departments');
+                const d = await r.json();
+                if (!r.ok) {{
+                    throw new Error(d.error || '加载部门列表失败');
+                }}
+                const departments = d.departments || [];
+                if (departments.length === 0) {{
+                    document.getElementById('departments-table').innerHTML =
+                        '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
+                    return;
+                }}
+
+                document.getElementById('departments-table').innerHTML = departments.map(dept => {{
+                    const departmentName = escapeHtml(dept.department || '—');
+                    const orgName = escapeHtml(dept.organization || '—');
+                    const ai = dept.w_ai || 0;
+                    const human = dept.w_human || 0;
+                    const total = dept.w_total || (ai + human);
+                    const pct = total > 0 ? (ai / total * 100) : 0;
+                    return `<tr>
+                        <td><strong>${{orgName}}</strong></td>
+                        <td><strong>${{departmentName}}</strong></td>
+                        <td>${{fmt(dept.total_commits || 0)}}</td>
+                        <td>${{fmt(ai)}}</td>
+                        <td>${{fmt(human)}}</td>
+                        <td>${{pctBar(pct)}} <span style="font-size:0.8rem">${{pct.toFixed(1)}}%</span></td>
+                    </tr>`;
+                }}).join('');
+            }} catch(e) {{
+                console.error(e);
+                document.getElementById('departments-table').innerHTML =
+                    '<tr><td colspan="6" style="color:var(--danger)">加载部门列表失败</td></tr>';
+            }}
+        }}
+
+        async function showCreateDepartmentModal() {{
+            let orgs = [];
+            try {{
+                orgs = await loadAdminOrganizations();
+            }} catch(e) {{
+                showToast(e.message || '加载组织列表失败', 'error');
+                return;
+            }}
+            if (orgs.length === 0) {{
+                showToast('请先创建组织', 'error');
+                return;
+            }}
+            const orgOptions = orgs.map(org => {{
+                const label = `${{escapeHtml(org.name || org.slug)}}${{org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}}`;
+                return `<option value="${{org.id}}">${{label}}</option>`;
+            }}).join('');
+
+            document.getElementById('modal-container').innerHTML = `
+            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+                <div class="modal">
+                    <div class="modal-title">新增部门</div>
+                    <div class="form-group">
+                        <label class="form-label">所属组织</label>
+                        <select id="create-dept-org" class="form-input">${{orgOptions}}</select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">部门名称</label>
+                        <input type="text" id="create-dept-name" class="form-input" placeholder="例如：技术中心" />
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Slug</label>
+                        <input type="text" id="create-dept-slug" class="form-input" placeholder="例如：technology-center" />
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn" onclick="closeModal()">取消</button>
+                        <button class="btn btn-primary" onclick="createDepartment()">新增</button>
+                    </div>
+                </div>
+            </div>`;
+            document.getElementById('create-dept-name').addEventListener('input', () => {{
+                const slugInput = document.getElementById('create-dept-slug');
+                if (slugInput.dataset.touched === 'true') return;
+                const generated = normalizeSlug(document.getElementById('create-dept-name').value);
+                if (generated) slugInput.value = generated;
+            }});
+            document.getElementById('create-dept-slug').addEventListener('input', event => {{
+                event.currentTarget.dataset.touched = 'true';
+            }});
+        }}
+
+        function normalizeSlug(value) {{
+            return String(value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+        }}
+
+        async function createDepartment() {{
+            const org_id = document.getElementById('create-dept-org').value;
+            const name = document.getElementById('create-dept-name').value.trim();
+            const slug = document.getElementById('create-dept-slug').value.trim();
+
+            if (!org_id || !name || !slug) {{
+                showToast('请填写组织、部门名称和 Slug', 'error');
+                return;
+            }}
+
+            try {{
+                const r = await fetch('/api/admin/departments', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ org_id, name, slug }})
+                }});
+                const d = await r.json();
+                if (r.ok) {{
+                    showToast(`部门「${{name}}」已新增`, 'success');
+                    closeModal();
+                    loadDepartments();
+                }} else {{
+                    showToast(`新增失败: ${{d.error || '未知错误'}}`, 'error');
+                }}
+            }} catch(e) {{
+                showToast('新增部门时发生错误', 'error');
             }}
         }}
 
