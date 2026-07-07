@@ -68,14 +68,17 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .sidebar-user {{ padding: 0.5rem 0.75rem; color: var(--text-secondary); font-size: 0.8rem; }}
         .sidebar-user-name {{ color: var(--text-primary); font-weight: 500; }}
         .sidebar-user-email {{ color: var(--text-muted); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-        .sidebar-gitai {{ display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 0.55rem; align-items: start; margin: 0.65rem 0 0; min-width: 0; }}
-        .sidebar-gitai-dot {{ width: 8px; height: 8px; border-radius: 999px; margin-top: 0.32rem; background: var(--text-muted); }}
+        .sidebar-gitai {{ display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 0.55rem; align-items: center; margin: 0.75rem 0 0; min-width: 0; padding: 0.55rem 0.65rem; border: 1px solid rgba(148,163,184,0.14); border-radius: 8px; background: rgba(15,23,42,0.38); }}
+        .sidebar-gitai.online {{ border-color: rgba(52,211,153,0.18); background: rgba(52,211,153,0.07); }}
+        .sidebar-gitai.offline {{ border-color: rgba(248,113,113,0.18); background: rgba(248,113,113,0.07); }}
+        .sidebar-gitai.error {{ border-color: rgba(251,191,36,0.2); background: rgba(251,191,36,0.07); }}
+        .sidebar-gitai-dot {{ width: 7px; height: 7px; border-radius: 999px; background: var(--text-muted); }}
         .sidebar-gitai-dot.online {{ background: var(--success); }}
         .sidebar-gitai-dot.offline {{ background: var(--danger); }}
         .sidebar-gitai-dot.error {{ background: var(--warning); }}
-        .sidebar-gitai-content {{ min-width: 0; line-height: 1.35; }}
-        .sidebar-gitai-status {{ color: var(--text-secondary); font-size: 0.75rem; font-weight: 600; }}
-        .sidebar-gitai-detail {{ color: var(--text-muted); font-size: 0.68rem; margin-top: 0.15rem; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }}
+        .sidebar-gitai-content {{ min-width: 0; line-height: 1.25; }}
+        .sidebar-gitai-status {{ color: var(--text-primary); font-size: 0.72rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .sidebar-gitai-detail {{ color: var(--text-muted); font-size: 0.66rem; margin-top: 0.16rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .logout-btn {{ display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-muted);
                        font-size: 0.8rem; cursor: pointer; border: none; background: none; width: 100%;
                        border-radius: 6px; transition: all 0.15s; margin-top: 0.5rem; }}
@@ -258,7 +261,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 <div class="sidebar-user">
                     <div class="sidebar-user-name">{name}</div>
                     <div class="sidebar-user-email" title="{email}">{email}</div>
-                    <div class="sidebar-gitai">
+                    <div class="sidebar-gitai" id="sidebar-gitai">
                         <span class="sidebar-gitai-dot" id="sidebar-gitai-dot"></span>
                         <div class="sidebar-gitai-content">
                             <div class="sidebar-gitai-status" id="sidebar-gitai-status">git-ai 检测中</div>
@@ -635,22 +638,26 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         }}
 
         async function loadClientStatus() {{
+            const cardEl = document.getElementById('sidebar-gitai');
             const statusEl = document.getElementById('sidebar-gitai-status');
             const detailEl = document.getElementById('sidebar-gitai-detail');
             const dotEl = document.getElementById('sidebar-gitai-dot');
-            if (!statusEl || !detailEl || !dotEl) return;
+            if (!cardEl || !statusEl || !detailEl || !dotEl) return;
             try {{
                 const r = await fetch('/api/v1/client/status');
                 const d = await r.json();
                 if (!d.detected) {{
                     statusEl.textContent = 'git-ai 未检测到';
+                    cardEl.className = 'sidebar-gitai';
                     dotEl.className = 'sidebar-gitai-dot';
                     detailEl.textContent = 'CLI 登录后会显示状态';
+                    detailEl.title = '';
                     return;
                 }}
 
                 const loggedIn = d.status === 'logged_in';
                 statusEl.textContent = `git-ai ${{d.status_label || (loggedIn ? '已登录' : '已登出')}}`;
+                cardEl.className = loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline';
                 dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
 
                 const parts = [];
@@ -660,13 +667,18 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     parts.push(`最近状态 ${{fmtTimeAgo(d.last_status_at)}}`);
                 }}
                 if (d.cli_version) parts.push(`v${{d.cli_version}}`);
-                if (d.hostname) parts.push(d.hostname);
                 detailEl.textContent = parts.join(' · ') || '暂无同步记录';
+                const titleParts = [...parts];
+                if (d.hostname) titleParts.push(d.hostname);
+                if (d.os || d.arch) titleParts.push([d.os, d.arch].filter(Boolean).join('/'));
+                detailEl.title = titleParts.join(' · ');
             }} catch(e) {{
                 console.error(e);
                 statusEl.textContent = 'git-ai 检测失败';
+                cardEl.className = 'sidebar-gitai error';
                 dotEl.className = 'sidebar-gitai-dot error';
                 detailEl.textContent = '无法读取状态';
+                detailEl.title = '';
             }}
         }}
 
