@@ -36,6 +36,11 @@ impl CasStore {
         })
     }
 
+    #[cfg(test)]
+    pub fn from_object_store(store: std::sync::Arc<dyn ObjectStore>, bucket: String) -> Self {
+        Self { store, bucket }
+    }
+
     /// Store CAS content in S3
     /// Key: cas/{first 2 chars of hash}/{hash}
     pub async fn put(&self, hash: &str, content: &[u8]) -> Result<(), AppError> {
@@ -88,7 +93,12 @@ impl CasStore {
 
     /// Store release asset in S3
     /// Key: releases/{channel}/{filename}
-    pub async fn put_release(&self, channel: &str, filename: &str, content: &[u8]) -> Result<(), AppError> {
+    pub async fn put_release(
+        &self,
+        channel: &str,
+        filename: &str,
+        content: &[u8],
+    ) -> Result<(), AppError> {
         let key = format!("releases/{}/{}", channel, filename);
         let path = ObjectPath::from(key);
         let bytes = bytes::Bytes::copy_from_slice(content);
@@ -98,25 +108,36 @@ impl CasStore {
             .await
             .map_err(|e| AppError::CasStorage(format!("S3 release put failed: {}", e)))?;
 
-        tracing::info!("Release stored: {}/{} ({} bytes)", channel, filename, content.len());
+        tracing::info!(
+            "Release stored: {}/{} ({} bytes)",
+            channel,
+            filename,
+            content.len()
+        );
         Ok(())
     }
 
     /// Retrieve release asset from S3
-    pub async fn get_release(&self, channel: &str, filename: &str) -> Result<Option<Vec<u8>>, AppError> {
+    pub async fn get_release(
+        &self,
+        channel: &str,
+        filename: &str,
+    ) -> Result<Option<Vec<u8>>, AppError> {
         let key = format!("releases/{}/{}", channel, filename);
         let path = ObjectPath::from(key);
 
         match self.store.get(&path).await {
             Ok(result) => {
-                let bytes = result
-                    .bytes()
-                    .await
-                    .map_err(|e| AppError::CasStorage(format!("S3 release get read failed: {}", e)))?;
+                let bytes = result.bytes().await.map_err(|e| {
+                    AppError::CasStorage(format!("S3 release get read failed: {}", e))
+                })?;
                 Ok(Some(bytes.to_vec()))
             }
             Err(object_store::Error::NotFound { .. }) => Ok(None),
-            Err(e) => Err(AppError::CasStorage(format!("S3 release get failed: {}", e))),
+            Err(e) => Err(AppError::CasStorage(format!(
+                "S3 release get failed: {}",
+                e
+            ))),
         }
     }
 }
