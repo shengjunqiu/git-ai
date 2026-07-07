@@ -20,17 +20,10 @@ pub enum CallbackResponse {
 pub struct CallbackListener {
     listener: TcpListener,
     redirect_uri: String,
-    completion_redirect_url: Option<String>,
 }
 
 impl CallbackListener {
     pub fn bind() -> Result<Self, String> {
-        Self::bind_with_completion_redirect(None)
-    }
-
-    pub fn bind_with_completion_redirect(
-        completion_redirect_url: Option<String>,
-    ) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .map_err(|e| format!("Failed to bind local callback listener: {}", e))?;
         listener
@@ -45,7 +38,6 @@ impl CallbackListener {
         Ok(Self {
             listener,
             redirect_uri,
-            completion_redirect_url,
         })
     }
 
@@ -58,13 +50,11 @@ impl CallbackListener {
 
         loop {
             match self.listener.accept() {
-                Ok((stream, _addr)) => {
-                    match handle_stream(stream, self.completion_redirect_url.as_deref()) {
-                        Ok(Some(response)) => return Ok(response),
-                        Ok(None) => {}
-                        Err(err) => return Err(err),
-                    }
-                }
+                Ok((stream, _addr)) => match handle_stream(stream) {
+                    Ok(Some(response)) => return Ok(response),
+                    Ok(None) => {}
+                    Err(err) => return Err(err),
+                },
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         return Err("Timed out waiting for browser authorization".to_string());
@@ -77,10 +67,7 @@ impl CallbackListener {
     }
 }
 
-fn handle_stream(
-    mut stream: TcpStream,
-    completion_redirect_url: Option<&str>,
-) -> Result<Option<CallbackResponse>, String> {
+fn handle_stream(mut stream: TcpStream) -> Result<Option<CallbackResponse>, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| format!("Failed to configure callback connection: {}", e))?;
@@ -96,12 +83,7 @@ fn handle_stream(
         let method = parts.next().unwrap_or_default();
         let target = parts.next().unwrap_or_default();
         if method != "GET" || target.is_empty() {
-            write_html_response(
-                &mut stream,
-                400,
-                "Invalid authorization callback request.",
-                None,
-            )?;
+            write_html_response(&mut stream, 400, "Invalid authorization callback request.")?;
             return Err("Invalid authorization callback request".to_string());
         }
 
@@ -123,12 +105,7 @@ fn handle_stream(
         .map_err(|e| format!("Invalid authorization callback URL: {}", e))?;
 
     if url.path() != "/callback" {
-        write_html_response(
-            &mut stream,
-            404,
-            "Unknown authorization callback path.",
-            None,
-        )?;
+        write_html_response(&mut stream, 404, "Unknown authorization callback path.")?;
         return Ok(None);
     }
 
@@ -147,7 +124,7 @@ fn handle_stream(
     }
 
     let response = if let Some(error) = error {
-        write_html_response(&mut stream, 200, "授权未完成。你可以返回终端。", None)?;
+        write_html_response(&mut stream, 200, "授权未完成。你可以返回终端。")?;
         CallbackResponse::Error {
             error,
             state,
@@ -158,46 +135,20 @@ fn handle_stream(
             code.ok_or_else(|| "Authorization callback did not include a code".to_string())?;
         let state =
             state.ok_or_else(|| "Authorization callback did not include a state".to_string())?;
-        write_html_response(
-            &mut stream,
-            200,
-            "授权成功。你可以返回终端。",
-            completion_redirect_url,
-        )?;
+        write_html_response(&mut stream, 200, "授权成功。你可以返回终端。")?;
         CallbackResponse::Authorized { code, state }
     };
 
     Ok(Some(response))
 }
 
-fn write_html_response(
-    stream: &mut TcpStream,
-    status: u16,
-    message: &str,
-    redirect_url: Option<&str>,
-) -> Result<(), String> {
+fn write_html_response(stream: &mut TcpStream, status: u16, message: &str) -> Result<(), String> {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
         _ => "OK",
     };
-    let head_redirect = redirect_url
-        .map(|url| {
-            format!(
-                r#"<meta http-equiv="refresh" content="1;url={url}">"#,
-                url = html_escape(url),
-            )
-        })
-        .unwrap_or_default();
-    let body_redirect = redirect_url
-        .map(|url| {
-            format!(
-                r#"<p class="page-copy">正在返回 Git AI 管理后台...</p><a class="btn btn-primary" href="{url}">返回 Git AI 管理后台</a>"#,
-                url = html_escape(url),
-            )
-        })
-        .unwrap_or_default();
     let title = if status == 200 {
         "授权成功"
     } else {
@@ -215,7 +166,6 @@ fn write_html_response(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>git-ai 登录</title>
-  {head_redirect}
   <style>{styles}</style>
 </head>
 <body>
@@ -231,19 +181,14 @@ fn write_html_response(
         <span class="status-dot"></span>
         <p>{message}</p>
       </div>
-      <div class="auth-actions">
-        {body_redirect}
-      </div>
     </section>
   </main>
 </body>
 </html>"#,
-        head_redirect = head_redirect,
         styles = CALLBACK_PAGE_STYLES,
         title = title,
         status_class = status_class,
         message = html_escape(message),
-        body_redirect = body_redirect,
     );
     let response = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -262,13 +207,11 @@ const CALLBACK_PAGE_STYLES: &str = r#"
   font-size: 112.5%;
   --bg-primary: #0f172a;
   --bg-card: #1e293b;
-  --bg-card-hover: #263548;
   --border: #334155;
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
   --accent: #818cf8;
-  --accent-light: #6366f1;
   --success: #34d399;
   --danger: #f87171;
 }
@@ -353,43 +296,6 @@ h1 {
   background: var(--danger);
   box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
 }
-.auth-actions {
-  margin-top: 1.25rem;
-}
-.page-copy {
-  color: var(--text-secondary);
-  margin: 0 0 1rem;
-  line-height: 1.5;
-  font-size: 0.875rem;
-}
-.btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0.625rem 0.875rem;
-  border-radius: 8px;
-  text-decoration: none;
-  font-size: 0.875rem;
-  font-weight: 600;
-  transition: all 0.15s;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--text-primary);
-}
-.btn:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--accent);
-}
-.btn-primary {
-  background: linear-gradient(135deg, var(--accent-light), var(--accent));
-  border: none;
-  color: #fff;
-}
-.btn-primary:hover {
-  opacity: 0.9;
-}
 "#;
 
 fn html_escape(value: &str) -> String {
@@ -444,31 +350,10 @@ mod tests {
 
         let browser_response = requester.join().unwrap();
         assert!(browser_response.contains("授权成功"));
-    }
-
-    #[test]
-    fn callback_success_page_redirects_back_to_dashboard_when_configured() {
-        let listener = CallbackListener::bind_with_completion_redirect(Some(
-            "https://git-ai.example.com/me".to_string(),
-        ))
-        .unwrap();
-        let redirect_uri = listener.redirect_uri().to_string();
-        let requester = thread::spawn(move || {
-            request_callback(&redirect_uri, "/callback?code=abc123&state=state123")
-        });
-
-        let response = listener
-            .wait_for_callback(Duration::from_secs(2))
-            .expect("callback should arrive");
-        assert!(matches!(response, CallbackResponse::Authorized { .. }));
-
-        let browser_response = requester.join().unwrap();
-        assert!(browser_response.contains("授权成功"));
-        assert!(browser_response.contains("https://git-ai.example.com/me"));
-        assert!(browser_response.contains("http-equiv=\"refresh\""));
         assert!(browser_response.contains("auth-shell"));
         assert!(browser_response.contains("brand-title"));
-        assert!(browser_response.contains("返回 Git AI 管理后台"));
+        assert!(!browser_response.contains("http-equiv=\"refresh\""));
+        assert!(!browser_response.contains("/me"));
     }
 
     #[test]
