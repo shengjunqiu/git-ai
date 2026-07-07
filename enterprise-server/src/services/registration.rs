@@ -6,10 +6,6 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-pub const DEFAULT_REGISTER_ORG_SLUG: &str = "linewell.com";
-pub const DEFAULT_REGISTER_DEPARTMENTS: [(&str, &str); 2] =
-    [("technology-center", "技术中心"), ("rd-center", "研发中心")];
-
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterableOrganization {
     pub id: Uuid,

@@ -71,6 +71,8 @@ curl -s -X POST "$SERVER/api/admin/users" \
   --data '{
     "email": "developer@example.com",
     "name": "Developer Name",
+    "org_id": "<organization-uuid>",
+    "department_id": "<department-uuid>",
     "generate_nonce": true
   }'
 ```
@@ -81,34 +83,27 @@ curl -s -X POST "$SERVER/api/admin/users" \
 {
   "id": "...",
   "email": "developer@example.com",
+  "personal_org_id": null,
+  "default_org_id": "<organization-uuid>",
+  "department_id": "<department-uuid>",
   "install_nonce": "..."
 }
 ```
 
-注意：当前 `POST /api/admin/users` 只会创建用户和个人组织，并把用户作为 owner 加入自己的个人组织；它不会自动加入公司组织。
+`POST /api/admin/users` 不再创建个人组织；它会把用户加入指定组织和部门，并把该组织设置为默认组织。
 
-### 4. 把开发者绑定到公司组织
+### 4. 调整组织角色
 
-当前没有正式的“添加组织成员”admin API，最直接方式是写 `org_members` 表。
-
-示例：把开发者加入 `linewell.com`，角色为普通成员：
+创建用户时默认角色是 `member`。如果要把用户设置为组织管理员，可以更新 `org_members` 表：
 
 ```bash
 docker compose exec -T postgres psql -U gitai -d gitai_enterprise <<'SQL'
-INSERT INTO org_members (user_id, org_id, role)
-SELECT u.id, o.id, 'member'
-FROM users u, organizations o
+UPDATE org_members om
+SET role = 'admin'
+FROM users u
 WHERE u.email = 'developer@example.com'
-  AND o.slug = 'linewell.com'
-ON CONFLICT (user_id, org_id)
-DO UPDATE SET role = EXCLUDED.role;
+  AND om.user_id = u.id;
 SQL
-```
-
-如果要把用户设置为组织管理员：
-
-```sql
-DO UPDATE SET role = 'admin';
 ```
 
 角色含义：
@@ -431,25 +426,13 @@ curl -s -X POST "$SERVER/api/admin/users" \
   --data '{
     "email": "developer@example.com",
     "name": "Developer Name",
+    "org_id": "<organization-uuid>",
+    "department_id": "<department-uuid>",
     "generate_nonce": true
   }'
 ```
 
-把用户加入组织：
-
-```bash
-docker compose exec -T postgres psql -U gitai -d gitai_enterprise <<'SQL'
-INSERT INTO org_members (user_id, org_id, role)
-SELECT u.id, o.id, 'member'
-FROM users u, organizations o
-WHERE u.email = 'developer@example.com'
-  AND o.slug = 'linewell.com'
-ON CONFLICT (user_id, org_id)
-DO UPDATE SET role = EXCLUDED.role;
-SQL
-```
-
-把返回的 `install_nonce` 给开发者。
+接口会把用户加入指定组织和部门；把返回的 `install_nonce` 给开发者。
 
 ### 开发者侧
 
@@ -546,4 +529,3 @@ API key 更适合：
 - 长期机器身份调用 API。
 
 如果 API key 带 `admin` scope，它就具备管理员权限，应严格保管。
-

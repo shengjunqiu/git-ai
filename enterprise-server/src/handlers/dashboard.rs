@@ -841,6 +841,18 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                         <input type="email" id="create-user-email" class="form-input" placeholder="请输入邮箱地址" />
                     </div>
                     <div class="form-group">
+                        <label class="form-label">组织</label>
+                        <select id="create-user-org" class="form-input" disabled>
+                            <option value="">加载组织中...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">部门</label>
+                        <select id="create-user-dept" class="form-input" disabled>
+                            <option value="">请先选择组织</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label style="display:flex;align-items:center;gap:0.5rem;color:var(--text-secondary);font-size:0.85rem;cursor:pointer">
                             <input type="checkbox" id="create-user-nonce" checked />
                             生成安装令牌（一次性登录凭证）
@@ -852,15 +864,87 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     </div>
                 </div>
             </div>`;
+            document.getElementById('create-user-org').addEventListener('change', event => {{
+                loadCreateUserDepartments(event.currentTarget.value);
+            }});
+            populateCreateUserOrganizations();
+        }}
+
+        async function populateCreateUserOrganizations() {{
+            const orgSelect = document.getElementById('create-user-org');
+            const deptSelect = document.getElementById('create-user-dept');
+            try {{
+                const orgs = await loadAdminOrganizations();
+                if (orgs.length === 0) {{
+                    orgSelect.innerHTML = '<option value="">暂无可选组织</option>';
+                    deptSelect.innerHTML = '<option value="">暂无可选部门</option>';
+                    showToast('请先创建组织', 'error');
+                    return;
+                }}
+
+                orgSelect.innerHTML = '<option value="">请选择组织</option>' + orgs.map(org => {{
+                    const label = `${{escapeHtml(org.name || org.slug)}}${{org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}}`;
+                    return `<option value="${{org.id}}">${{label}}</option>`;
+                }}).join('');
+                orgSelect.disabled = false;
+
+                if (orgs.length === 1) {{
+                    orgSelect.value = orgs[0].id;
+                    await loadCreateUserDepartments(orgs[0].id);
+                }}
+            }} catch(e) {{
+                orgSelect.innerHTML = '<option value="">组织加载失败</option>';
+                deptSelect.innerHTML = '<option value="">请先选择组织</option>';
+                showToast(e.message || '加载组织列表失败', 'error');
+            }}
+        }}
+
+        async function loadCreateUserDepartments(orgId) {{
+            const deptSelect = document.getElementById('create-user-dept');
+            deptSelect.disabled = true;
+            if (!orgId) {{
+                deptSelect.innerHTML = '<option value="">请先选择组织</option>';
+                return;
+            }}
+
+            deptSelect.innerHTML = '<option value="">加载部门中...</option>';
+            try {{
+                const r = await fetch(`/api/admin/departments?org_id=${{encodeURIComponent(orgId)}}`);
+                const d = await r.json();
+                if (!r.ok) {{
+                    throw new Error(d.error || '加载部门列表失败');
+                }}
+
+                const departments = d.departments || [];
+                if (departments.length === 0) {{
+                    deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
+                    return;
+                }}
+
+                deptSelect.innerHTML = '<option value="">请选择部门</option>' + departments.map(dept => {{
+                    const label = escapeHtml(dept.name || dept.slug || '未命名部门');
+                    return `<option value="${{dept.id}}">${{label}}</option>`;
+                }}).join('');
+                deptSelect.disabled = false;
+
+                if (departments.length === 1) {{
+                    deptSelect.value = departments[0].id;
+                }}
+            }} catch(e) {{
+                deptSelect.innerHTML = '<option value="">部门加载失败</option>';
+                showToast(e.message || '加载部门列表失败', 'error');
+            }}
         }}
 
         async function createUser() {{
             const name = document.getElementById('create-user-name').value.trim();
             const emailVal = document.getElementById('create-user-email').value.trim();
+            const orgId = document.getElementById('create-user-org').value;
+            const departmentId = document.getElementById('create-user-dept').value;
             const genNonce = document.getElementById('create-user-nonce').checked;
 
-            if (!name || !emailVal) {{
-                showToast('请填写用户名和邮箱', 'error');
+            if (!name || !emailVal || !orgId || !departmentId) {{
+                showToast('请填写用户名、邮箱、组织和部门', 'error');
                 return;
             }}
 
@@ -868,7 +952,13 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 const r = await fetch('/api/admin/users', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ name, email: emailVal, generate_nonce: genNonce }})
+                    body: JSON.stringify({{
+                        name,
+                        email: emailVal,
+                        org_id: orgId,
+                        department_id: departmentId,
+                        generate_nonce: genNonce
+                    }})
                 }});
                 const d = await r.json();
                 if (r.ok) {{
@@ -906,7 +996,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         async function loadAdminOrganizations() {{
             if (adminOrganizationsCache) return adminOrganizationsCache;
-            const r = await fetch('/api/admin/organizations/list');
+            const r = await fetch('/api/admin/organizations/list?include_personal=false');
             const d = await r.json();
             if (!r.ok) {{
                 throw new Error(d.error || '加载组织列表失败');

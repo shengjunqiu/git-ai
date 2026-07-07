@@ -42,7 +42,7 @@ struct AuthUserResponse {
     pub id: Uuid,
     pub email: String,
     pub name: String,
-    pub personal_org_id: Uuid,
+    pub personal_org_id: Option<Uuid>,
     pub default_org_id: Uuid,
 }
 
@@ -255,41 +255,23 @@ async fn register_user(
     }
 
     let user_id = Uuid::new_v4();
-    let personal_org_id = Uuid::new_v4();
-    let personal_org_slug = format!("personal-{}", &user_id.to_string()[..8]);
     let password_hash = crate::services::passwords::hash_password(&req.password)?;
 
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
-    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
-        .bind(personal_org_id)
-        .bind(format!("{}'s Org", name))
-        .bind(&personal_org_slug)
-        .execute(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
-
     sqlx::query(
         "INSERT INTO users \
-         (id, email, name, personal_org_id, password_hash, default_org_id, status) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'active')",
+         (id, email, name, password_hash, default_org_id, status) \
+         VALUES ($1, $2, $3, $4, $5, 'active')",
     )
     .bind(user_id)
     .bind(&email)
     .bind(&name)
-    .bind(personal_org_id)
     .bind(&password_hash)
     .bind(org_id)
     .execute(&mut *tx)
     .await
     .map_err(AppError::Database)?;
-
-    sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, 'owner')")
-        .bind(user_id)
-        .bind(personal_org_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
 
     sqlx::query(
         "INSERT INTO org_members (user_id, org_id, department_id, role) \
@@ -310,7 +292,7 @@ async fn register_user(
         id: user_id,
         email,
         name,
-        personal_org_id,
+        personal_org_id: None,
         default_org_id: org_id,
     })
 }
@@ -325,10 +307,10 @@ async fn resolve_register_scope(
             let org_slug = req
                 .org_slug
                 .as_deref()
-                .unwrap_or(crate::services::registration::DEFAULT_REGISTER_ORG_SLUG)
+                .ok_or_else(|| AppError::BadRequest("Organization is required".into()))?
                 .trim();
             if org_slug.is_empty() {
-                return Err(AppError::BadRequest("org_slug is required".into()));
+                return Err(AppError::BadRequest("Organization is required".into()));
             }
             crate::services::registration::find_org_id_by_slug(&state.db, org_slug).await?
         }
@@ -340,10 +322,10 @@ async fn resolve_register_scope(
             let department_slug = req
                 .department_slug
                 .as_deref()
-                .unwrap_or(crate::services::registration::DEFAULT_REGISTER_DEPARTMENTS[0].0)
+                .ok_or_else(|| AppError::BadRequest("Department is required".into()))?
                 .trim();
             if department_slug.is_empty() {
-                return Err(AppError::BadRequest("department_slug is required".into()));
+                return Err(AppError::BadRequest("Department is required".into()));
             }
             crate::services::registration::find_department_id_by_slug(
                 &state.db,
@@ -369,8 +351,7 @@ fn parse_register_request(headers: &HeaderMap, body: &Bytes) -> Result<RegisterR
             confirm_password: fields.get("confirm_password").cloned(),
             org_id: parse_optional_uuid_field(&fields, "org_id")?,
             department_id: parse_optional_uuid_field(&fields, "department_id")?,
-            org_slug: optional_field(&fields, "org_slug")
-                .or_else(|| Some(crate::services::registration::DEFAULT_REGISTER_ORG_SLUG.into())),
+            org_slug: optional_field(&fields, "org_slug"),
             department_slug: optional_field(&fields, "department_slug"),
             return_to: fields.get("return_to").cloned(),
         })
@@ -570,13 +551,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_register_form_defaults_org_slug_to_linewell() {
+    fn parse_register_form_does_not_default_org_slug() {
         let body = Bytes::from(
             "email=alice%40linewell.com&name=Alice&password=secret-password&department_slug=rd-center",
         );
 
         let req = parse_register_request(&HeaderMap::new(), &body).unwrap();
-        assert_eq!(req.org_slug.as_deref(), Some("linewell.com"));
+        assert_eq!(req.org_slug.as_deref(), None);
         assert_eq!(req.department_slug.as_deref(), Some("rd-center"));
     }
 

@@ -18,6 +18,8 @@ use crate::routes::AppState;
 pub struct CreateUserRequest {
     pub email: String,
     pub name: String,
+    pub org_id: Uuid,
+    pub department_id: Uuid,
     #[serde(default)]
     pub generate_nonce: bool,
 }
@@ -28,34 +30,43 @@ pub async fn create_user(
     _auth: AdminGuard,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<Value>, AppError> {
-    let user_id = Uuid::new_v4();
-    let personal_org_id = Uuid::new_v4();
-    let org_slug = format!("personal-{}", &user_id.to_string()[..8]);
+    let email = req.email.trim();
+    let name = req.name.trim();
+    if email.is_empty() {
+        return Err(AppError::BadRequest("Email is required".into()));
+    }
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Name is required".into()));
+    }
+    crate::services::registration::validate_department(
+        &state.db,
+        req.org_id,
+        req.department_id,
+    )
+    .await?;
 
-    // Create personal org
-    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
-        .bind(personal_org_id)
-        .bind(format!("{}'s Org", req.name))
-        .bind(&org_slug)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+    let user_id = Uuid::new_v4();
+    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
     // Create user
-    sqlx::query("INSERT INTO users (id, email, name, personal_org_id) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
         .bind(user_id)
-        .bind(&req.email)
-        .bind(&req.name)
-        .bind(personal_org_id)
-        .execute(&state.db)
+        .bind(email)
+        .bind(name)
+        .bind(req.org_id)
+        .execute(&mut *tx)
         .await
         .map_err(|e| AppError::Database(e))?;
 
-    // Add user to personal org as owner
-    sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, 'owner')")
+    // Add user to the selected organization and department.
+    sqlx::query(
+        "INSERT INTO org_members (user_id, org_id, department_id, role) \
+         VALUES ($1, $2, $3, 'member')",
+    )
         .bind(user_id)
-        .bind(personal_org_id)
-        .execute(&state.db)
+        .bind(req.org_id)
+        .bind(req.department_id)
+        .execute(&mut *tx)
         .await
         .map_err(|e| AppError::Database(e))?;
 
@@ -71,7 +82,7 @@ pub async fn create_user(
         sqlx::query("INSERT INTO install_nonces (nonce, user_id) VALUES ($1, $2)")
             .bind(&nonce)
             .bind(user_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await
             .map_err(|e| AppError::Database(e))?;
 
@@ -80,15 +91,22 @@ pub async fn create_user(
         None
     };
 
+    tx.commit().await.map_err(AppError::Database)?;
+
     // Audit log
     crate::services::audit::log_action(
         &state.db,
         Some(_auth.0.user_id),
-        _auth.0.org_id,
+        Some(req.org_id),
         "user.create",
         Some("user"),
         Some(&user_id.to_string()),
-        Some(serde_json::json!({"email": req.email, "name": req.name})),
+        Some(serde_json::json!({
+            "email": email,
+            "name": name,
+            "org_id": req.org_id,
+            "department_id": req.department_id,
+        })),
         None,
         None,
     )
@@ -97,9 +115,11 @@ pub async fn create_user(
 
     Ok(Json(json!({
         "id": user_id.to_string(),
-        "email": req.email,
-        "name": req.name,
-        "personal_org_id": personal_org_id.to_string(),
+        "email": email,
+        "name": name,
+        "personal_org_id": null,
+        "default_org_id": req.org_id.to_string(),
+        "department_id": req.department_id.to_string(),
         "install_nonce": install_nonce,
     })))
 }
@@ -369,13 +389,41 @@ pub async fn delete_organization(
     Ok(Json(json!({ "success": true })))
 }
 
-/// GET /api/admin/organizations/list — List all organizations
+/// GET /api/admin/organizations/list — List organizations.
+/// Personal organizations are hidden by default; pass include_personal=true to include them.
+#[derive(Debug, Deserialize)]
+pub struct ListOrganizationsQuery {
+    pub include_personal: Option<bool>,
+}
+
 pub async fn list_organizations(
     State(state): State<AppState>,
     _auth: AdminGuard,
+    Query(query): Query<ListOrganizationsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as("SELECT id, name, slug, created_at FROM organizations ORDER BY name")
+    let include_personal = query.include_personal.unwrap_or(false);
+    let rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT o.id, o.name, o.slug, o.created_at \
+         FROM organizations o \
+         WHERE ( \
+             $1::bool = true \
+             OR ( \
+                 o.slug NOT LIKE 'personal-%' \
+                 AND NOT EXISTS ( \
+                     SELECT 1 \
+                     FROM users u \
+                     WHERE u.personal_org_id = o.id \
+                       AND NOT EXISTS ( \
+                           SELECT 1 \
+                           FROM organization_domains od \
+                           WHERE od.org_id = o.id \
+                       ) \
+                 ) \
+             ) \
+         ) \
+         ORDER BY o.name",
+    )
+    .bind(include_personal)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
