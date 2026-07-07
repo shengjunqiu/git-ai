@@ -219,6 +219,7 @@ pub struct AuthIdentity {
     pub name: String,
     pub org_id: Option<Uuid>,
     pub org_slug: Option<String>,
+    pub department_id: Option<Uuid>,
     pub role: Option<String>,
     pub scopes: Vec<String>,
     pub auth_method: AuthMethod,
@@ -256,6 +257,11 @@ impl AuthIdentity {
             return None; // Admin sees all users' data within the org
         }
         Some(self.user_id)
+    }
+
+    /// Returns whether department list views should be constrained to the user's own department.
+    pub fn should_filter_department_scope(&self) -> bool {
+        !self.is_admin()
     }
 }
 

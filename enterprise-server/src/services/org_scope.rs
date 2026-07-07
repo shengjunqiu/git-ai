@@ -8,6 +8,7 @@ use crate::error::AppError;
 pub struct OrgScope {
     pub org_id: Uuid,
     pub org_slug: String,
+    pub department_id: Option<Uuid>,
     pub role: String,
 }
 
@@ -15,8 +16,8 @@ pub async fn preferred_org_scope(
     pool: &sqlx::PgPool,
     user_id: Uuid,
 ) -> Result<Option<OrgScope>, AppError> {
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT om.org_id, o.slug, om.role \
+    let row: Option<(Uuid, String, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT om.org_id, o.slug, om.department_id, om.role \
          FROM org_members om \
          JOIN organizations o ON o.id = om.org_id \
          JOIN users u ON u.id = om.user_id \
@@ -33,9 +34,10 @@ pub async fn preferred_org_scope(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(row.map(|(org_id, org_slug, role)| OrgScope {
+    Ok(row.map(|(org_id, org_slug, department_id, role)| OrgScope {
         org_id,
         org_slug,
+        department_id,
         role,
     }))
 }
@@ -45,8 +47,8 @@ pub async fn org_scope_for_org(
     user_id: Uuid,
     org_id: Uuid,
 ) -> Result<Option<OrgScope>, AppError> {
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT om.org_id, o.slug, om.role \
+    let row: Option<(Uuid, String, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT om.org_id, o.slug, om.department_id, om.role \
          FROM org_members om \
          JOIN organizations o ON o.id = om.org_id \
          WHERE om.user_id = $1 AND om.org_id = $2",
@@ -57,9 +59,10 @@ pub async fn org_scope_for_org(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(row.map(|(org_id, org_slug, role)| OrgScope {
+    Ok(row.map(|(org_id, org_slug, department_id, role)| OrgScope {
         org_id,
         org_slug,
+        department_id,
         role,
     }))
 }

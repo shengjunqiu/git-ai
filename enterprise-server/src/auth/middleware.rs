@@ -151,6 +151,7 @@ async fn extract_auth_identity(
                 name: claims.name,
                 org_id: org_scope.as_ref().map(|scope| scope.org_id),
                 org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                department_id: org_scope.as_ref().and_then(|scope| scope.department_id),
                 role: org_scope.as_ref().map(|scope| scope.role.clone()),
                 scopes: vec![
                     "metrics:write".into(),
@@ -182,6 +183,7 @@ async fn extract_auth_identity(
                         name: claims.name,
                         org_id: org_scope.as_ref().map(|scope| scope.org_id),
                         org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                        department_id: org_scope.as_ref().and_then(|scope| scope.department_id),
                         role: org_scope.as_ref().map(|scope| scope.role.clone()),
                         scopes: vec![
                             "metrics:write".into(),
@@ -259,6 +261,9 @@ async fn extract_auth_identity(
                         name,
                         org_id: effective_org_id,
                         org_slug: membership_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                        department_id: membership_scope
+                            .as_ref()
+                            .and_then(|scope| scope.department_id),
                         role: Some(role),
                         scopes,
                         auth_method: AuthMethod::ApiKey,
@@ -315,6 +320,7 @@ async fn extract_web_session_identity(
         name,
         org_id: org_scope.as_ref().map(|scope| scope.org_id),
         org_slug: org_scope.as_ref().map(|scope| scope.org_slug.clone()),
+        department_id: org_scope.as_ref().and_then(|scope| scope.department_id),
         role: org_scope.as_ref().map(|scope| scope.role.clone()),
         scopes: vec!["dashboard:read".into()],
         auth_method: AuthMethod::WebSession,

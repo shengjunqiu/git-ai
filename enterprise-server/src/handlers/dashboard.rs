@@ -44,13 +44,15 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             --danger: #f87171;
         }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ height: 100%; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-                background: var(--bg-primary); color: var(--text-primary); }}
-        .layout {{ display: flex; min-height: 100vh; }}
+                background: var(--bg-primary); color: var(--text-primary); overflow: hidden; }}
+        .layout {{ display: flex; height: 100vh; height: 100dvh; min-height: 100vh; overflow: hidden; }}
 
         /* Sidebar */
         .sidebar {{ width: 260px; background: var(--bg-card); border-right: 1px solid var(--border);
-                    padding: 1.5rem; flex-shrink: 0; display: flex; flex-direction: column; }}
+                    padding: 1.5rem; flex-shrink: 0; display: flex; flex-direction: column;
+                    height: 100vh; height: 100dvh; min-height: 0; overflow-y: auto; }}
         .sidebar-logo {{ font-size: 1.25rem; font-weight: 800; margin-bottom: 0.25rem; }}
         .sidebar-logo span {{ color: var(--accent); }}
         .sidebar-subtitle {{ color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2rem; }}
@@ -72,7 +74,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .logout-btn:hover {{ background: var(--bg-card-hover); color: var(--danger); }}
 
         /* Main content */
-        .main {{ flex: 1; padding: 2rem; overflow-y: auto; }}
+        .main {{ flex: 1; min-width: 0; height: 100vh; height: 100dvh; min-height: 0; padding: 2rem; overflow-y: auto; }}
         .page-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }}
         .page-title {{ font-size: 1.75rem; font-weight: 700; }}
         .page-subtitle {{ color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.25rem; }}
@@ -1780,7 +1782,14 @@ pub async fn aggregate_departments(
     auth: DashboardAuth,
     Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let (scope_user_filter, org_filter) = build_data_filters(&auth.0);
+    let restrict_department = auth.0.should_filter_department_scope();
+    let department_filter = auth.0.department_id;
+    let user_filter = if restrict_department {
+        None
+    } else {
+        scope_user_filter
+    };
 
     let rows: Vec<(String, String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         r#"SELECT
@@ -1810,6 +1819,7 @@ pub async fn aggregate_departments(
                   AND m.event_type = 1
                 WHERE ($1::uuid IS NULL OR m.user_id = $1)
                   AND ($3::uuid IS NULL OR m.org_id = $3)
+                  AND ($4::boolean = FALSE OR om.department_id = $5::uuid)
                 GROUP BY m.org_id, om.department_id
 
                 UNION ALL
@@ -1825,6 +1835,7 @@ pub async fn aggregate_departments(
                 JOIN org_members om ON om.user_id = p.user_id AND om.org_id = p.org_id
                 WHERE ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($3::uuid IS NULL OR p.org_id = $3)
+                  AND ($4::boolean = FALSE OR om.department_id = $5::uuid)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -1839,11 +1850,14 @@ pub async fn aggregate_departments(
         ) stats ON stats.org_id = d.org_id AND stats.department_id = d.id
         WHERE ($2::text IS NULL OR o.slug = $2)
           AND ($3::uuid IS NULL OR o.id = $3)
+          AND ($4::boolean = FALSE OR d.id = $5::uuid)
         ORDER BY o.name, d.name"#
     )
     .bind(user_filter)
     .bind(&query.org)
     .bind(org_filter)
+    .bind(restrict_department)
+    .bind(department_filter)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
