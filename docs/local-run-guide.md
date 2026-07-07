@@ -50,6 +50,7 @@ java --version
 task build
 ```
 
+//test
 
 这只用于检查项目能否编译。
 
