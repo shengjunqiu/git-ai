@@ -1,0 +1,24 @@
+enterprise-server/src/db/migrations.rs
+  ce0da89509cb3227 6-90,93-116,120-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "2a6d9380e6e71a92747256997f999131ca25a722",
+  "prompts": {
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1137,
+      "total_deletions": 667,
+      "accepted_lines": 7834,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/115bd810b846b2abe828d5b0cadd9ed6e517f441807dd884e3d95dc5a578c238"
+    }
+  }
+}
