@@ -95,6 +95,21 @@ async fn handle_device_code_grant(
 ) -> Result<axum::response::Response, AppError> {
     let device_code =
         device_code.ok_or_else(|| AppError::BadRequest("device_code is required".into()))?;
+    let consumed: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "DELETE FROM oauth_devices \
+         WHERE device_code = $1 \
+           AND expires_at > now() \
+           AND user_id IS NOT NULL \
+         RETURNING user_id",
+    )
+    .bind(device_code)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    if let Some((user_id,)) = consumed {
+        return token_response(state, user_id).await;
+    }
 
     let row: Option<(chrono::DateTime<Utc>, Option<uuid::Uuid>)> =
         sqlx::query_as("SELECT expires_at, user_id FROM oauth_devices WHERE device_code = $1")
@@ -124,26 +139,21 @@ async fn handle_device_code_grant(
             .into_response());
     }
 
-    let user_id = match user_id {
-        Some(uid) => uid,
-        None => {
-            let err = OAuthError::authorization_pending();
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::to_value(err).unwrap()),
-            )
-                .into_response());
-        }
-    };
+    if user_id.is_none() {
+        let err = OAuthError::authorization_pending();
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(err).unwrap()),
+        )
+            .into_response());
+    }
 
-    // Clean up used device code
-    sqlx::query("DELETE FROM oauth_devices WHERE device_code = $1")
-        .bind(device_code)
-        .execute(&state.db)
-        .await
-        .ok();
-
-    token_response(state, user_id).await
+    let err = OAuthError::expired_token();
+    Ok((
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::to_value(err).unwrap()),
+    )
+        .into_response())
 }
 
 async fn handle_refresh_token_grant(
@@ -154,43 +164,30 @@ async fn handle_refresh_token_grant(
         refresh_token.ok_or_else(|| AppError::BadRequest("refresh_token is required".into()))?;
     let token_hash = jwt::hash_token(refresh_token);
 
-    let row: Option<(uuid::Uuid, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT user_id, expires_at FROM refresh_tokens WHERE token_hash = $1 AND revoked_at IS NULL"
+    let consumed: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "UPDATE refresh_tokens \
+         SET revoked_at = now() \
+         WHERE token_hash = $1 \
+           AND revoked_at IS NULL \
+           AND expires_at > now() \
+         RETURNING user_id",
     )
     .bind(&token_hash)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(AppError::Database)?;
 
-    let (user_id, expires_at) = match row {
-        Some(r) => r,
+    match consumed {
+        Some((user_id,)) => token_response(state, user_id).await,
         None => {
             let err = OAuthError::invalid_grant("Invalid or revoked refresh token");
-            return Ok((
+            Ok((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::to_value(err).unwrap()),
             )
-                .into_response());
+                .into_response())
         }
-    };
-
-    if expires_at < Utc::now() {
-        let err = OAuthError::invalid_grant("Refresh token expired");
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::to_value(err).unwrap()),
-        )
-            .into_response());
     }
-
-    // Revoke old refresh token
-    sqlx::query("UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1")
-        .bind(&token_hash)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
-
-    token_response(state, user_id).await
 }
 
 async fn handle_install_nonce_grant(
@@ -200,42 +197,29 @@ async fn handle_install_nonce_grant(
     let nonce =
         install_nonce.ok_or_else(|| AppError::BadRequest("install_nonce is required".into()))?;
 
-    let row: Option<(uuid::Uuid, bool)> =
-        sqlx::query_as("SELECT user_id, used FROM install_nonces WHERE nonce = $1")
-            .bind(nonce)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| AppError::Database(e))?;
+    let consumed: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "UPDATE install_nonces \
+         SET used = true, used_at = now() \
+         WHERE nonce = $1 \
+           AND used = false \
+         RETURNING user_id",
+    )
+    .bind(nonce)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
 
-    let (user_id, used) = match row {
-        Some(r) => r,
+    match consumed {
+        Some((user_id,)) => token_response(state, user_id).await,
         None => {
             let err = OAuthError::invalid_grant("Invalid install nonce");
-            return Ok((
+            Ok((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::to_value(err).unwrap()),
             )
-                .into_response());
+                .into_response())
         }
-    };
-
-    if used {
-        let err = OAuthError::invalid_grant("Install nonce already used");
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::to_value(err).unwrap()),
-        )
-            .into_response());
     }
-
-    // Mark nonce as used
-    sqlx::query("UPDATE install_nonces SET used = true, used_at = now() WHERE nonce = $1")
-        .bind(nonce)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
-
-    token_response(state, user_id).await
 }
 
 async fn handle_authorization_code_grant(
@@ -385,6 +369,277 @@ fn base64url_no_pad(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    struct TestDatabase {
+        state: AppState,
+        admin_pool: PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping oauth concurrency test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping oauth concurrency test: could not create isolated database {db_name}: {error}"
+                );
+                return Ok(None);
+            }
+
+            let pool = PgPoolOptions::new()
+                .max_connections(6)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            let config = test_config(&test_url);
+            let redis = redis::Client::open(config.redis_url.clone())?;
+            let cas_store = crate::services::cas::CasStore::new(&config)?;
+            let state = AppState {
+                db: pool,
+                redis,
+                config,
+                cas_store,
+                rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+            };
+
+            Ok(Some(Self {
+                state,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.state.db.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_token_concurrent_exchange_succeeds_once() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let user_id = insert_test_user(&db.state.db).await?;
+        let refresh_token = "refresh-token-concurrency-test";
+        let refresh_token_hash = jwt::hash_token(refresh_token);
+
+        sqlx::query(
+            "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) \
+             VALUES ($1, $2, now() + interval '1 hour')",
+        )
+        .bind(user_id)
+        .bind(&refresh_token_hash)
+        .execute(&db.state.db)
+        .await?;
+
+        let first = handle_refresh_token_grant(&db.state, Some(refresh_token));
+        let second = handle_refresh_token_grant(&db.state, Some(refresh_token));
+        let (first_response, second_response) = tokio::join!(first, second);
+        let responses = [first_response?, second_response?];
+
+        assert_single_success(&responses);
+
+        let old_token_revoked: bool = sqlx::query_scalar(
+            "SELECT revoked_at IS NOT NULL FROM refresh_tokens WHERE token_hash = $1",
+        )
+        .bind(&refresh_token_hash)
+        .fetch_one(&db.state.db)
+        .await?;
+        assert!(old_token_revoked);
+
+        assert_eq!(active_refresh_token_count(&db.state.db, user_id).await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn install_nonce_concurrent_exchange_succeeds_once() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let user_id = insert_test_user(&db.state.db).await?;
+        let nonce = "install-nonce-concurrency-test";
+
+        sqlx::query("INSERT INTO install_nonces (nonce, user_id) VALUES ($1, $2)")
+            .bind(nonce)
+            .bind(user_id)
+            .execute(&db.state.db)
+            .await?;
+
+        let first = handle_install_nonce_grant(&db.state, Some(nonce));
+        let second = handle_install_nonce_grant(&db.state, Some(nonce));
+        let (first_response, second_response) = tokio::join!(first, second);
+        let responses = [first_response?, second_response?];
+
+        assert_single_success(&responses);
+
+        let nonce_used: bool =
+            sqlx::query_scalar("SELECT used FROM install_nonces WHERE nonce = $1")
+                .bind(nonce)
+                .fetch_one(&db.state.db)
+                .await?;
+        assert!(nonce_used);
+        assert_eq!(active_refresh_token_count(&db.state.db, user_id).await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn device_code_concurrent_exchange_succeeds_once() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let user_id = insert_test_user(&db.state.db).await?;
+        let device_code = "device-code-concurrency-test";
+
+        sqlx::query(
+            "INSERT INTO oauth_devices (
+                device_code, user_code, verification_uri, expires_at, user_id, authorized_at
+            ) VALUES ($1, $2, $3, now() + interval '15 minutes', $4, now())",
+        )
+        .bind(device_code)
+        .bind("USER-CODE")
+        .bind("http://localhost:8080/verify")
+        .bind(user_id)
+        .execute(&db.state.db)
+        .await?;
+
+        let first = handle_device_code_grant(&db.state, Some(device_code));
+        let second = handle_device_code_grant(&db.state, Some(device_code));
+        let (first_response, second_response) = tokio::join!(first, second);
+        let responses = [first_response?, second_response?];
+
+        assert_single_success(&responses);
+
+        let device_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oauth_devices WHERE device_code = $1")
+                .bind(device_code)
+                .fetch_one(&db.state.db)
+                .await?;
+        assert_eq!(device_rows, 0);
+        assert_eq!(active_refresh_token_count(&db.state.db, user_id).await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    fn assert_single_success(responses: &[axum::response::Response]) {
+        let success_count = responses
+            .iter()
+            .filter(|response| response.status() == StatusCode::OK)
+            .count();
+        let bad_request_count = responses
+            .iter()
+            .filter(|response| response.status() == StatusCode::BAD_REQUEST)
+            .count();
+
+        assert_eq!(success_count, 1, "exactly one exchange should succeed");
+        assert_eq!(
+            bad_request_count, 1,
+            "the concurrent loser should receive a grant error"
+        );
+    }
+
+    async fn insert_test_user(pool: &PgPool) -> anyhow::Result<Uuid> {
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email, name) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("OAuth Test User")
+            .execute(pool)
+            .await?;
+        Ok(user_id)
+    }
+
+    async fn active_refresh_token_count(pool: &PgPool, user_id: Uuid) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?)
+    }
+
+    fn test_config(database_url: &str) -> crate::config::AppConfig {
+        crate::config::AppConfig {
+            database_url: database_url.to_string(),
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: "oauth-concurrency-test-secret".to_string(),
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_bucket: "git-ai-cas".to_string(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_region: "us-east-1".to_string(),
+            base_url: "http://localhost:8080".to_string(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_oauth_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
 
     #[test]
     fn pkce_challenge_matches_rfc7636_example() {
