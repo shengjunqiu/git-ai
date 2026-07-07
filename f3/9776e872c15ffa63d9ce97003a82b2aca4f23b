@@ -1,0 +1,62 @@
+enterprise-server/src/handlers/client_status.rs
+  0115b6c4cf9b845f 1-79
+src/commands/exchange_nonce.rs
+  0115b6c4cf9b845f 10,53-57
+src/commands/status.rs
+  ce0da89509cb3227 1,7,126-128,178-289,422-446,660-859
+enterprise-server/src/handlers/dashboard.rs
+  ce0da89509cb3227 68-70,80-81,258-260,269-270,525-529,1473-1477,1961-1976,1978,1982-1983,1985,2033,2051
+  0115b6c4cf9b845f 71-78,116-119,301-304,485-497,631-637,642-645,648-652,655-661,663,665-666,669-671,901-912
+enterprise-server/src/handlers/mod.rs
+  0115b6c4cf9b845f 18-20
+enterprise-server/src/routes.rs
+  0115b6c4cf9b845f 87-94,173-180
+enterprise-server/src/handlers/metrics.rs
+  0115b6c4cf9b845f 27-52
+enterprise-server/src/db/migrations.rs
+  ce0da89509cb3227 32
+src/commands/login.rs
+  0115b6c4cf9b845f 1,166-171
+src/commands/logout.rs
+  0115b6c4cf9b845f 1,11-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "f39776e872c15ffa63d9ce97003a82b2aca4f23b",
+  "prompts": {
+    "0115b6c4cf9b845f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3a1d-9a4d-7d51-ae30-c63bef545f60",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1746,
+      "total_deletions": 965,
+      "accepted_lines": 4503,
+      "overriden_lines": 11,
+      "messages_url": "http://localhost:8080/cas/e8846fe2ac5776014c7d2726592cfa8e52f19087c1e4e3114e7e8bce642e343f"
+    },
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 691,
+      "total_deletions": 488,
+      "accepted_lines": 2004,
+      "overriden_lines": 3,
+      "messages_url": "http://localhost:8080/cas/bc44fa375853fc45d25219588401208cbccb5509fc14b9c2b7046e8532ed5620"
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
