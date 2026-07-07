@@ -1,0 +1,26 @@
+enterprise-server/src/main.rs
+  ce0da89509cb3227 64
+enterprise-server/src/services/rate_limit.rs
+  ce0da89509cb3227 1-321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "c0a6338299adfd9697774b03e9d25dff381b2ea7",
+  "prompts": {
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 2104,
+      "total_deletions": 1262,
+      "accepted_lines": 7229,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/b6ff6368f91463eb00958a80793c26a72e85a8f54e590ab8342d4bd983433426"
+    }
+  }
+}
