@@ -50,13 +50,15 @@ pub fn handle_login(args: &[String]) {
         eprintln!();
     }
 
-    let listener = match CallbackListener::bind() {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!("Failed to start local callback listener: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let completion_redirect_url = format!("{}/me", effective_url.trim_end_matches('/'));
+    let listener =
+        match CallbackListener::bind_with_completion_redirect(Some(completion_redirect_url)) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("Failed to start local callback listener: {}", e);
+                std::process::exit(1);
+            }
+        };
     let redirect_uri = listener.redirect_uri().to_string();
     let state = pkce::generate_state();
     let pkce_pair = pkce::generate_pkce_pair();
