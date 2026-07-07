@@ -1,0 +1,28 @@
+enterprise-server/Cargo.toml
+  ce0da89509cb3227 21-26
+enterprise-server/src/services/cas.rs
+  ce0da89509cb3227 1-143
+enterprise-server/src/handlers/cas.rs
+  ce0da89509cb3227 1-692
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "9fa10d4f64f0145bead222bdeba7cc38963a366a",
+  "prompts": {
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 552,
+      "total_deletions": 68,
+      "accepted_lines": 841,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/fedfe71543a78c6a79f631f72e6a3b4eee004bf791ed5e1299ceebf6a336dd39"
+    }
+  }
+}
