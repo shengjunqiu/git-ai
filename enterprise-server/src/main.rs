@@ -12,6 +12,7 @@ mod routes;
 mod services;
 
 // test
+// 测试
 
 /// git-ai Enterprise Server
 #[derive(Parser, Debug)]
