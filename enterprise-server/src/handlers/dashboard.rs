@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use url::Url;
+use uuid::Uuid;
 
 use crate::auth::middleware::{DashboardAuth, OptionalAuth};
 use crate::error::AppError;
@@ -167,6 +168,16 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                             padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem;
                             color: var(--warning); word-break: break-all; margin-top: 0.5rem;
                             position: relative; }}
+        .detail-list {{ border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }}
+        .detail-row {{ display: flex; justify-content: space-between; gap: 1rem; padding: 0.75rem 0.875rem;
+                       border-bottom: 1px solid var(--border); background: var(--bg-primary); }}
+        .detail-row:last-child {{ border-bottom: none; }}
+        .detail-label {{ color: var(--text-muted); font-size: 0.75rem; white-space: nowrap; }}
+        .detail-value {{ color: var(--text-primary); font-size: 0.875rem; text-align: right; overflow-wrap: anywhere; }}
+        .git-identity-list {{ display: grid; gap: 0.75rem; margin-top: 0.75rem; }}
+        .git-identity-item {{ border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); padding: 0.875rem; }}
+        .git-identity-name {{ color: var(--text-primary); font-weight: 600; margin-bottom: 0.25rem; }}
+        .git-identity-email {{ color: var(--text-secondary); font-size: 0.8rem; overflow-wrap: anywhere; }}
         .copy-btn {{ position: absolute; top: 0.5rem; right: 0.5rem; padding: 0.25rem 0.5rem;
                      font-size: 0.7rem; border-radius: 4px; border: 1px solid var(--border);
                      background: var(--bg-card); color: var(--text-secondary); cursor: pointer; }}
@@ -347,8 +358,8 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 </div>
                 <div class="table-card">
                     <table>
-                        <thead><tr><th>姓名/邮箱</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="dev-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                        <thead><tr><th>开发者</th><th>部门</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th><th>操作</th></tr></thead>
+                        <tbody id="dev-table"><tr><td colspan="8">加载中...</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -535,6 +546,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         let overviewTrendChart = null;
         let trendChart = null;
         let agentComparisonChart = null;
+        let developerGitInfo = new Map();
 
         // --- Overview ---
         async function loadOverview() {{
@@ -560,8 +572,8 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     const human = dev.human_added_lines || 0;
                     const aiW = maxLines > 0 ? (ai/maxLines*100) : 0;
                     const humanW = maxLines > 0 ? (human/maxLines*100) : 0;
-                    const displayName = dev.name || dev.email || '未知';
-                    const displayEmail = dev.email || '';
+                    const displayName = escapeHtml(dev.name || dev.email || '未知');
+                    const displayEmail = escapeHtml(dev.email || '');
                     return `<div class="chart-bar">
                         <div class="chart-label" title="${{displayName}} ${{displayEmail}}">${{displayName}}</div>
                         <div class="chart-track"><div class="chart-fill"><div class="ai-part" style="width:${{aiW}}%"></div><div class="human-part" style="width:${{humanW}}%"></div></div></div>
@@ -709,24 +721,82 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             try {{
                 const r = await fetch('/api/v1/aggregate/developers');
                 const d = await r.json();
-                document.getElementById('dev-table').innerHTML = (d.developers || []).map(dev => {{
+                const developers = d.developers || [];
+                developerGitInfo = new Map();
+                if (developers.length === 0) {{
+                    document.getElementById('dev-table').innerHTML =
+                        '<tr><td colspan="8" style="color:var(--text-muted)">暂无开发者数据</td></tr>';
+                    return;
+                }}
+
+                document.getElementById('dev-table').innerHTML = developers.map(dev => {{
                     const total = dev.total_added_lines || 0;
                     const ai = dev.ai_added_lines || 0;
-                    const emailDisplay = dev.email || '—';
-                    const nameDisplay = dev.name || '';
-                    const label = nameDisplay && nameDisplay !== emailDisplay
+                    const devId = dev.id || dev.email || '';
+                    const emailDisplay = escapeHtml(dev.email || '—');
+                    const nameDisplay = escapeHtml(dev.name || '');
+                    const departmentDisplay = escapeHtml(dev.department || '未设置');
+                    const label = dev.name && dev.name !== dev.email
                         ? `<strong>${{nameDisplay}}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${{emailDisplay}}</span>`
                         : `<strong>${{emailDisplay}}</strong>`;
+                    developerGitInfo.set(devId, {{
+                        name: dev.name || '',
+                        email: dev.email || '',
+                        department: dev.department || '',
+                        gitIdentities: dev.git_identities || []
+                    }});
                     return `<tr>
                         <td>${{label}}</td>
+                        <td>${{departmentDisplay}}</td>
                         <td>${{fmt(dev.total_commits)}}</td>
                         <td>${{fmt(total)}}</td>
                         <td>${{fmt(ai)}}</td>
                         <td>${{fmt(dev.human_added_lines)}}</td>
                         <td>${{pctBar(dev.pct_ai || 0)}} <span style="font-size:0.8rem">${{(dev.pct_ai || 0).toFixed(1)}}%</span></td>
+                        <td><button class="btn btn-sm" onclick="showDeveloperGitInfo('${{devId}}')">Git 信息</button></td>
                     </tr>`;
-                }}).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无开发者数据</td></tr>';
+                }}).join('');
             }} catch(e) {{ console.error(e); }}
+        }}
+
+        function showDeveloperGitInfo(devId) {{
+            const info = developerGitInfo.get(devId);
+            if (!info) {{
+                showToast('未找到开发者 Git 信息', 'error');
+                return;
+            }}
+
+            const identities = info.gitIdentities || [];
+            const platformName = escapeHtml(info.name || '—');
+            const platformEmail = escapeHtml(info.email || '—');
+            const department = escapeHtml(info.department || '未设置');
+            const gitList = identities.length > 0
+                ? identities.map(identity => {{
+                    const gitName = escapeHtml(identity.name || '—');
+                    const gitEmail = escapeHtml(identity.email || '—');
+                    return `<div class="git-identity-item">
+                        <div class="git-identity-name">${{gitName}}</div>
+                        <div class="git-identity-email">${{gitEmail}}</div>
+                    </div>`;
+                }}).join('')
+                : '<div class="empty-state"><div class="empty-icon">ℹ️</div><p>暂无 Git 用户名和邮箱信息</p></div>';
+
+            document.getElementById('modal-container').innerHTML = `
+            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+                <div class="modal">
+                    <div class="modal-title">Git 信息</div>
+                    <div class="detail-list">
+                        <div class="detail-row"><span class="detail-label">平台注册用户名</span><span class="detail-value">${{platformName}}</span></div>
+                        <div class="detail-row"><span class="detail-label">平台注册邮箱</span><span class="detail-value">${{platformEmail}}</span></div>
+                        <div class="detail-row"><span class="detail-label">部门</span><span class="detail-value">${{department}}</span></div>
+                    </div>
+                    <div class="form-label">Git 用户名和邮箱</div>
+                    <div class="git-identity-list">${{gitList}}</div>
+                    <div class="form-actions">
+                        <button class="btn" onclick="closeModal()">关闭</button>
+                    </div>
+                </div>
+            </div>`;
         }}
 
         // --- Projects ---
@@ -1474,28 +1544,21 @@ pub async fn aggregate_summary(
     let total_ai = row.2.unwrap_or(0) + report_row.2.unwrap_or(0);
     let total_human = row.3.unwrap_or(0) + report_row.3.unwrap_or(0);
     let total_developers: i64 = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(DISTINCT developer_key)::bigint
+        r#"SELECT COUNT(DISTINCT user_id)::bigint
         FROM (
-            SELECT
-                LOWER(TRIM(CASE
-                    WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
-                    ELSE author_email
-                END)) AS developer_key
+            SELECT user_id
             FROM metrics_events
-            WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
+            WHERE event_type = 1
+              AND user_id IS NOT NULL
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
 
             UNION ALL
 
-            SELECT
-                LOWER(TRIM(CASE
-                    WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
-                    ELSE cs.author
-                END)) AS developer_key
+            SELECT p.user_id
             FROM projects p
             JOIN commit_stats cs ON cs.project_id = p.id
-            WHERE cs.author IS NOT NULL AND cs.author != ''
+            WHERE p.user_id IS NOT NULL
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
               AND NOT EXISTS (
@@ -1506,7 +1569,7 @@ pub async fn aggregate_summary(
                     AND ($2::uuid IS NULL OR m.org_id = $2)
               )
         ) combined
-        WHERE developer_key IS NOT NULL AND developer_key != ''"#,
+        WHERE user_id IS NOT NULL"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1906,61 +1969,143 @@ pub async fn aggregate_developers(
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
-    // The author_email column may contain "Name <email>" format or just a name.
-    // Extract the email portion when present, otherwise use the value as-is.
-    let rows: Vec<(String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"SELECT
-            raw_author,
-            display_email,
-            SUM(commits)::bigint,
-            SUM(added)::bigint,
-            SUM(ai)::bigint,
-            SUM(human)::bigint
-        FROM (
+    let rows: Vec<(
+        Uuid,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Value,
+    )> = sqlx::query_as(
+        r#"WITH developer_stats AS (
             SELECT
-                author_email as raw_author,
-                CASE
-                    WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
-                    ELSE author_email
-                END as display_email,
-                COUNT(*) as commits,
-                COALESCE(SUM(git_diff_added_lines), 0) as added,
-                COALESCE(SUM(ai_additions), 0) as ai,
-                COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as human
-            FROM metrics_events
-            WHERE event_type = 1 AND author_email IS NOT NULL AND author_email != ''
-              AND ($1::uuid IS NULL OR user_id = $1)
-              AND ($2::uuid IS NULL OR org_id = $2)
-            GROUP BY author_email, display_email
+                user_id,
+                org_id,
+                SUM(commits)::bigint AS total_commits,
+                SUM(added)::bigint AS total_added_lines,
+                SUM(ai)::bigint AS ai_added_lines,
+                SUM(human)::bigint AS human_added_lines
+            FROM (
+                SELECT
+                    user_id,
+                    org_id,
+                    COUNT(*) AS commits,
+                    COALESCE(SUM(git_diff_added_lines), 0) AS added,
+                    COALESCE(SUM(ai_additions), 0) AS ai,
+                    COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) AS human
+                FROM metrics_events
+                WHERE event_type = 1
+                  AND user_id IS NOT NULL
+                  AND ($1::uuid IS NULL OR user_id = $1)
+                  AND ($2::uuid IS NULL OR org_id = $2)
+                GROUP BY user_id, org_id
 
-            UNION ALL
+                UNION ALL
 
+                SELECT
+                    p.user_id,
+                    p.org_id,
+                    COUNT(*) AS commits,
+                    COALESCE(SUM(cs.git_diff_added_lines), 0) AS added,
+                    COALESCE(SUM(cs.ai_additions), 0) AS ai,
+                    COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) AS human
+                FROM projects p
+                JOIN commit_stats cs ON cs.project_id = p.id
+                WHERE p.user_id IS NOT NULL
+                  AND ($1::uuid IS NULL OR p.user_id = $1)
+                  AND ($2::uuid IS NULL OR p.org_id = $2)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM metrics_events m
+                      WHERE m.event_type = 1
+                        AND m.commit_sha = cs.sha
+                        AND ($1::uuid IS NULL OR m.user_id = $1)
+                        AND ($2::uuid IS NULL OR m.org_id = $2)
+                  )
+                GROUP BY p.user_id, p.org_id
+            ) combined
+            GROUP BY user_id, org_id
+        ),
+        git_identities AS (
             SELECT
-                cs.author as raw_author,
-                CASE
-                    WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
-                    ELSE cs.author
-                END as display_email,
-                COUNT(*) as commits,
-                COALESCE(SUM(cs.git_diff_added_lines), 0) as added,
-                COALESCE(SUM(cs.ai_additions), 0) as ai,
-                COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) as human
-            FROM projects p
-            JOIN commit_stats cs ON cs.project_id = p.id
-            WHERE cs.author IS NOT NULL AND cs.author != ''
-              AND ($1::uuid IS NULL OR p.user_id = $1)
-              AND ($2::uuid IS NULL OR p.org_id = $2)
-              AND NOT EXISTS (
-                  SELECT 1 FROM metrics_events m
-                  WHERE m.event_type = 1
-                    AND m.commit_sha = cs.sha
-                    AND ($1::uuid IS NULL OR m.user_id = $1)
-                    AND ($2::uuid IS NULL OR m.org_id = $2)
-              )
-            GROUP BY cs.author, display_email
-        ) combined
-        GROUP BY raw_author, display_email
-        ORDER BY SUM(commits) DESC"#
+                user_id,
+                org_id,
+                jsonb_agg(DISTINCT jsonb_build_object('name', git_name, 'email', git_email))
+                    FILTER (WHERE git_name != '' OR git_email != '') AS identities
+            FROM (
+                SELECT
+                    user_id,
+                    org_id,
+                    TRIM(CASE
+                        WHEN author_email ~ '<[^>]+>' THEN split_part(author_email, '<', 1)
+                        WHEN author_email LIKE '%@%' THEN ''
+                        ELSE author_email
+                    END) AS git_name,
+                    TRIM(CASE
+                        WHEN author_email ~ '<[^>]+>' THEN substring(author_email from '<([^>]+)>')
+                        WHEN author_email LIKE '%@%' THEN author_email
+                        ELSE ''
+                    END) AS git_email
+                FROM metrics_events
+                WHERE event_type = 1
+                  AND user_id IS NOT NULL
+                  AND author_email IS NOT NULL
+                  AND author_email != ''
+                  AND ($1::uuid IS NULL OR user_id = $1)
+                  AND ($2::uuid IS NULL OR org_id = $2)
+
+                UNION
+
+                SELECT
+                    p.user_id,
+                    p.org_id,
+                    TRIM(CASE
+                        WHEN cs.author ~ '<[^>]+>' THEN split_part(cs.author, '<', 1)
+                        WHEN cs.author LIKE '%@%' THEN ''
+                        ELSE cs.author
+                    END) AS git_name,
+                    TRIM(CASE
+                        WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
+                        WHEN cs.author LIKE '%@%' THEN cs.author
+                        ELSE ''
+                    END) AS git_email
+                FROM projects p
+                JOIN commit_stats cs ON cs.project_id = p.id
+                WHERE p.user_id IS NOT NULL
+                  AND cs.author IS NOT NULL
+                  AND cs.author != ''
+                  AND ($1::uuid IS NULL OR p.user_id = $1)
+                  AND ($2::uuid IS NULL OR p.org_id = $2)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM metrics_events m
+                      WHERE m.event_type = 1
+                        AND m.commit_sha = cs.sha
+                        AND ($1::uuid IS NULL OR m.user_id = $1)
+                        AND ($2::uuid IS NULL OR m.org_id = $2)
+                  )
+            ) identities
+            GROUP BY user_id, org_id
+        )
+        SELECT
+            u.id,
+            u.name,
+            u.email,
+            d.name AS department_name,
+            ds.total_commits,
+            ds.total_added_lines,
+            ds.ai_added_lines,
+            ds.human_added_lines,
+            COALESCE(gi.identities, '[]'::jsonb) AS git_identities
+        FROM developer_stats ds
+        JOIN users u ON u.id = ds.user_id
+        LEFT JOIN org_members om ON om.user_id = u.id
+          AND om.org_id = COALESCE(ds.org_id, u.default_org_id)
+        LEFT JOIN departments d ON d.id = om.department_id AND d.org_id = om.org_id
+        LEFT JOIN git_identities gi ON gi.user_id = ds.user_id
+          AND gi.org_id IS NOT DISTINCT FROM ds.org_id
+        ORDER BY ds.total_commits DESC, u.name ASC"#
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1970,31 +2115,24 @@ pub async fn aggregate_developers(
 
     let result: Vec<Value> = rows
         .iter()
-        .map(|(raw_author, email, commits, added, ai, human)| {
-        let ai = ai.unwrap_or(0);
-        let human = human.unwrap_or(0);
-        let total = added.unwrap_or(0);
-        // Extract display name from "Name <email>" format
-        let name = if raw_author.contains('<') {
-                raw_author
-                    .split('<')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-        } else {
-            raw_author.clone()
-        };
-        json!({
-            "email": email,
-            "name": name,
-            "total_commits": commits.unwrap_or(0),
-            "total_added_lines": added.unwrap_or(0),
-            "ai_added_lines": ai,
-            "human_added_lines": human,
-            "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
-        })
-        })
+        .map(
+            |(user_id, name, email, department, commits, added, ai, human, git_identities)| {
+                let ai = ai.unwrap_or(0);
+                let total = added.unwrap_or(0);
+                json!({
+                    "id": user_id.to_string(),
+                    "email": email,
+                    "name": name,
+                    "department": department,
+                    "total_commits": commits.unwrap_or(0),
+                    "total_added_lines": total,
+                    "ai_added_lines": ai,
+                    "human_added_lines": human.unwrap_or(0),
+                    "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
+                    "git_identities": git_identities,
+                })
+            },
+        )
         .collect();
 
     Ok(Json(json!({ "developers": result })))
