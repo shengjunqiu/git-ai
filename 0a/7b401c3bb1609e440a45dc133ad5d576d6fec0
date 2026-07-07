@@ -1,0 +1,24 @@
+enterprise-server/src/handlers/report.rs
+  ce0da89509cb3227 32-37,39,42,45-51,59-60,65,71,79,87-102,120,124,126-127,138-150,153-162,167-168,173-176,193,209-612
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "0a7b401c3bb1609e440a45dc133ad5d576d6fec0",
+  "prompts": {
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 875,
+      "total_deletions": 49,
+      "accepted_lines": 474,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/a930a6b20cd089618c4025f01d5171fd6b07c9ba2a9fa970423f072cf5851740"
+    }
+  }
+}
