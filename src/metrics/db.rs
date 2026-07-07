@@ -4,7 +4,7 @@
 //! Server handles idempotency - no retry/queue logic needed.
 
 use crate::error::GitAiError;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -638,16 +638,19 @@ mod tests {
         let prompt_id = "prompt-123";
 
         // First event for a prompt should be allowed.
-        assert!(db
-            .should_emit_agent_usage(prompt_id, 1_700_000_000, 300)
-            .unwrap());
+        assert!(
+            db.should_emit_agent_usage(prompt_id, 1_700_000_000, 300)
+                .unwrap()
+        );
         // Subsequent event inside the window should be throttled.
-        assert!(!db
-            .should_emit_agent_usage(prompt_id, 1_700_000_120, 300)
-            .unwrap());
+        assert!(
+            !db.should_emit_agent_usage(prompt_id, 1_700_000_120, 300)
+                .unwrap()
+        );
         // Event outside the window should be allowed again.
-        assert!(db
-            .should_emit_agent_usage(prompt_id, 1_700_000_301, 300)
-            .unwrap());
+        assert!(
+            db.should_emit_agent_usage(prompt_id, 1_700_000_301, 300)
+                .unwrap()
+        );
     }
 }

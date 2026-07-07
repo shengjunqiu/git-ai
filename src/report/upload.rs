@@ -175,12 +175,12 @@ pub fn validate_server_url(server_url: &str) -> Result<(), GitAiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::types::StoredCredentials;
     use crate::auth::CredentialStore;
+    use crate::auth::types::StoredCredentials;
     use crate::authorship::stats::CommitStats;
     use crate::report::model::{
-        DeveloperSummary, ProjectRatios, ProjectSummaryReport, ReportCommit, ReportRangeInfo,
-        ReportRangeMode, ReportRatios, ReportRepoInfo, ReportSummary, REPORT_SCHEMA_VERSION,
+        DeveloperSummary, ProjectRatios, ProjectSummaryReport, REPORT_SCHEMA_VERSION, ReportCommit,
+        ReportRangeInfo, ReportRangeMode, ReportRatios, ReportRepoInfo, ReportSummary,
     };
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
