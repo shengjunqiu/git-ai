@@ -790,8 +790,10 @@ fn execute_resolved_checkpoint(
         working_log.set_dirty_files(Some(resolved.dirty_files.clone()));
     }
 
+    let _working_log_guard = working_log.acquire_lock()?;
+
     let read_checkpoints_start = Instant::now();
-    let mut checkpoints = working_log.read_all_checkpoints()?;
+    let mut checkpoints = working_log.read_all_checkpoints_unlocked()?;
     tracing::debug!(
         "[BENCHMARK] Reading {} checkpoints took {:?}",
         checkpoints.len(),
@@ -927,27 +929,30 @@ fn execute_resolved_checkpoint(
         }
 
         let append_start = Instant::now();
-        working_log.append_checkpoint(&checkpoint)?;
+        let appended = working_log.append_checkpoint_unlocked(&checkpoint)?;
         tracing::debug!(
             "[BENCHMARK] Appending checkpoint to working log took {:?}",
             append_start.elapsed()
         );
-        checkpoints.push(checkpoint.clone());
 
-        let attrs =
-            build_checkpoint_attrs(repo, &resolved.base_commit, checkpoint.agent_id.as_ref());
+        if appended {
+            checkpoints.push(checkpoint.clone());
 
-        for (entry, file_stat) in entries.iter().zip(file_stats.iter()) {
-            let values = crate::metrics::CheckpointValues::new()
-                .checkpoint_ts(checkpoint.timestamp)
-                .kind(checkpoint.kind.to_str().to_string())
-                .file_path(entry.file.clone())
-                .lines_added(file_stat.additions)
-                .lines_deleted(file_stat.deletions)
-                .lines_added_sloc(file_stat.additions_sloc)
-                .lines_deleted_sloc(file_stat.deletions_sloc);
-            let file_attrs = attrs.clone().author(&checkpoint.author);
-            crate::metrics::record(values, file_attrs);
+            let attrs =
+                build_checkpoint_attrs(repo, &resolved.base_commit, checkpoint.agent_id.as_ref());
+
+            for (entry, file_stat) in entries.iter().zip(file_stats.iter()) {
+                let values = crate::metrics::CheckpointValues::new()
+                    .checkpoint_ts(checkpoint.timestamp)
+                    .kind(checkpoint.kind.to_str().to_string())
+                    .file_path(entry.file.clone())
+                    .lines_added(file_stat.additions)
+                    .lines_deleted(file_stat.deletions)
+                    .lines_added_sloc(file_stat.additions_sloc)
+                    .lines_deleted_sloc(file_stat.deletions_sloc);
+                let file_attrs = attrs.clone().author(&checkpoint.author);
+                crate::metrics::record(values, file_attrs);
+            }
         }
     }
 

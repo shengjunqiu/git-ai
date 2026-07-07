@@ -4,13 +4,17 @@ use crate::authorship::authorship_log_serialization::generate_short_hash;
 use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
-use crate::utils::normalize_to_posix;
+use crate::utils::{LockFile, normalize_to_posix};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+const WORKING_LOG_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKING_LOG_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+const WORKING_LOG_LOCK_FILE: &str = "working_log.lock";
 
 /// Initial attributions data structure stored in the INITIAL file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -34,6 +38,63 @@ pub struct RepoStorage {
     pub working_logs: PathBuf,
     pub rewrite_log: PathBuf,
     pub logs: PathBuf,
+}
+
+fn acquire_working_log_lock(dir: &Path) -> Result<LockFile, GitAiError> {
+    fs::create_dir_all(dir)?;
+    let lock_path = dir.join(WORKING_LOG_LOCK_FILE);
+    let start = Instant::now();
+
+    loop {
+        if let Some(lock) = LockFile::try_acquire(&lock_path) {
+            return Ok(lock);
+        }
+
+        if start.elapsed() >= WORKING_LOG_LOCK_TIMEOUT {
+            return Err(GitAiError::Generic(format!(
+                "Timed out waiting for working log lock at {}",
+                lock_path.display()
+            )));
+        }
+
+        std::thread::sleep(WORKING_LOG_LOCK_RETRY_INTERVAL);
+    }
+}
+
+fn checkpoint_dedupe_key(checkpoint: &Checkpoint) -> String {
+    let mut key = format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        checkpoint.kind,
+        checkpoint.diff,
+        checkpoint.line_stats.additions,
+        checkpoint.line_stats.deletions,
+        checkpoint.line_stats.additions_sloc,
+        checkpoint.line_stats.deletions_sloc,
+        checkpoint.entries.len()
+    );
+
+    if let Some(agent_id) = &checkpoint.agent_id {
+        key.push_str("|agent:");
+        key.push_str(&agent_id.tool);
+        key.push('|');
+        key.push_str(&agent_id.id);
+        key.push('|');
+        key.push_str(&agent_id.model);
+    }
+
+    let mut entry_keys: Vec<String> = checkpoint
+        .entries
+        .iter()
+        .map(|entry| format!("{}|{}", entry.file, entry.blob_sha))
+        .collect();
+    entry_keys.sort();
+
+    for entry_key in entry_keys {
+        key.push_str("|entry:");
+        key.push_str(&entry_key);
+    }
+
+    key
 }
 
 impl RepoStorage {
@@ -109,6 +170,8 @@ impl RepoStorage {
     pub fn delete_working_log_for_base_commit(&self, sha: &str) -> Result<(), GitAiError> {
         let working_log_dir = self.working_logs.join(sha);
         if working_log_dir.exists() {
+            let _guard = acquire_working_log_lock(&working_log_dir)?;
+
             // Both debug and release: move to old-{sha} for retention
             let old_dir = self.working_logs.join(format!("old-{}", sha));
             // If old-{sha} already exists, remove it first
@@ -263,7 +326,13 @@ impl PersistedWorkingLog {
         self.dirty_files = normalized_dirty_files;
     }
 
+    pub fn acquire_lock(&self) -> Result<LockFile, GitAiError> {
+        acquire_working_log_lock(&self.dir)
+    }
+
     pub fn reset_working_log(&self) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+
         // Clear all blobs by removing the blobs directory
         let blobs_dir = self.dir.join("blobs");
         if blobs_dir.exists() {
@@ -388,8 +457,16 @@ impl PersistedWorkingLog {
 
     /* append checkpoint */
     pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+        self.append_checkpoint_unlocked(checkpoint).map(|_| ())
+    }
+
+    pub(crate) fn append_checkpoint_unlocked(
+        &self,
+        checkpoint: &Checkpoint,
+    ) -> Result<bool, GitAiError> {
         // Read existing checkpoints
-        let mut checkpoints = self.read_all_checkpoints().unwrap_or_default();
+        let mut checkpoints = self.read_all_checkpoints_unlocked().unwrap_or_default();
 
         // Create a copy, potentially without transcript to reduce storage size.
         // Transcripts are refetched in update_prompts_to_latest() before post-commit
@@ -441,6 +518,14 @@ impl PersistedWorkingLog {
             storage_checkpoint.transcript = None;
         }
 
+        let new_key = checkpoint_dedupe_key(&storage_checkpoint);
+        if checkpoints
+            .iter()
+            .any(|existing| checkpoint_dedupe_key(existing) == new_key)
+        {
+            return Ok(false);
+        }
+
         // Add the new checkpoint
         checkpoints.push(storage_checkpoint);
 
@@ -449,10 +534,15 @@ impl PersistedWorkingLog {
         self.prune_old_char_attributions(&mut checkpoints);
 
         // Write all checkpoints back
-        self.write_all_checkpoints(&checkpoints)
+        self.write_all_checkpoints_unlocked(&checkpoints)?;
+        Ok(true)
     }
 
     pub fn read_all_checkpoints(&self) -> Result<Vec<Checkpoint>, GitAiError> {
+        self.read_all_checkpoints_unlocked()
+    }
+
+    pub(crate) fn read_all_checkpoints_unlocked(&self) -> Result<Vec<Checkpoint>, GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
 
         if !checkpoints_file.exists() {
@@ -562,6 +652,14 @@ impl PersistedWorkingLog {
     /// by post-commit after transcripts have been refetched and need to be preserved
     /// for from_just_working_log() to read them.
     pub fn write_all_checkpoints(&self, checkpoints: &[Checkpoint]) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+        self.write_all_checkpoints_unlocked(checkpoints)
+    }
+
+    pub(crate) fn write_all_checkpoints_unlocked(
+        &self,
+        checkpoints: &[Checkpoint],
+    ) -> Result<(), GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
 
         // Serialize all checkpoints to JSONL
@@ -586,9 +684,10 @@ impl PersistedWorkingLog {
     where
         F: FnOnce(&mut Vec<Checkpoint>) -> Result<(), GitAiError>,
     {
-        let mut checkpoints = self.read_all_checkpoints()?;
+        let _guard = self.acquire_lock()?;
+        let mut checkpoints = self.read_all_checkpoints_unlocked()?;
         mutator(&mut checkpoints)?;
-        self.write_all_checkpoints(&checkpoints)?;
+        self.write_all_checkpoints_unlocked(&checkpoints)?;
         Ok(checkpoints)
     }
 
@@ -649,6 +748,7 @@ impl PersistedWorkingLog {
         humans: std::collections::BTreeMap<String, HumanRecord>,
         file_contents: HashMap<String, String>,
     ) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
         let filtered: HashMap<String, Vec<LineAttribution>> = attributions
             .into_iter()
             .filter(|(_, attrs)| !attrs.is_empty())
@@ -661,7 +761,7 @@ impl PersistedWorkingLog {
             }
         }
 
-        self.write_initial(InitialAttributions {
+        self.write_initial_unlocked(InitialAttributions {
             files: filtered,
             prompts,
             file_blobs,
@@ -671,6 +771,11 @@ impl PersistedWorkingLog {
 
     /// Write a fully-formed INITIAL state, preserving any persisted blob references.
     pub fn write_initial(&self, initial: InitialAttributions) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+        self.write_initial_unlocked(initial)
+    }
+
+    fn write_initial_unlocked(&self, initial: InitialAttributions) -> Result<(), GitAiError> {
         let filtered_files: HashMap<String, Vec<LineAttribution>> = initial
             .files
             .into_iter()
@@ -952,6 +1057,104 @@ mod tests {
 
         assert_eq!(checkpoints.len(), 2, "Should have two checkpoints");
         assert_eq!(checkpoints[1].author, "test-author-2");
+    }
+
+    #[test]
+    fn test_append_checkpoint_dedupes_equivalent_checkpoint() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+        let working_log = repo_storage
+            .working_log_for_base_commit("test-commit-sha")
+            .unwrap();
+
+        let checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
+            "same-diff".to_string(),
+            "test-author".to_string(),
+            vec![],
+        );
+
+        working_log
+            .append_checkpoint(&checkpoint)
+            .expect("first append should succeed");
+
+        let mut duplicate = checkpoint.clone();
+        duplicate.timestamp += 1;
+        duplicate.author = "different-display-author".to_string();
+        working_log
+            .append_checkpoint(&duplicate)
+            .expect("duplicate append should be a no-op");
+
+        let mut distinct = checkpoint.clone();
+        distinct.diff = "different-diff".to_string();
+        working_log
+            .append_checkpoint(&distinct)
+            .expect("distinct append should succeed");
+
+        let checkpoints = working_log
+            .read_all_checkpoints()
+            .expect("read checkpoints after duplicate append");
+        assert_eq!(checkpoints.len(), 2);
+        assert_eq!(checkpoints[0].diff, "same-diff");
+        assert_eq!(checkpoints[1].diff, "different-diff");
+    }
+
+    #[test]
+    fn test_append_checkpoint_serializes_concurrent_writers() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+        let working_log = repo_storage
+            .working_log_for_base_commit("test-commit-sha")
+            .unwrap();
+
+        let writer_count = 16;
+        let barrier = Arc::new(Barrier::new(writer_count));
+        let mut handles = Vec::new();
+
+        for i in 0..writer_count {
+            let working_log = working_log.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                let checkpoint = Checkpoint::new(
+                    CheckpointKind::Human,
+                    format!("test-diff-{i}"),
+                    format!("test-author-{i}"),
+                    vec![],
+                );
+                working_log
+                    .append_checkpoint(&checkpoint)
+                    .expect("append checkpoint");
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("writer thread should not panic");
+        }
+
+        let checkpoints = working_log
+            .read_all_checkpoints()
+            .expect("read checkpoints after concurrent append");
+        let authors: HashSet<_> = checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.author.as_str())
+            .collect();
+
+        assert_eq!(checkpoints.len(), writer_count);
+        for i in 0..writer_count {
+            let expected_author = format!("test-author-{i}");
+            assert!(
+                authors.contains(expected_author.as_str()),
+                "missing checkpoint from writer {i}"
+            );
+        }
     }
 
     #[test]

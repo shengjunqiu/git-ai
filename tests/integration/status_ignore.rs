@@ -174,6 +174,34 @@ fn test_status_default_ignores_affect_git_diff_and_ai_accepted() {
 }
 
 #[test]
+fn test_status_json_is_read_only() {
+    let repo = TestRepo::new();
+
+    write_file(&repo, "README.md", "# repo\n");
+    repo.stage_all_and_commit("initial").unwrap();
+
+    write_file(&repo, "README.md", "# repo\nnew ai line\n");
+    repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
+
+    let before = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("checkpoint read before status")
+        .len();
+
+    let _ = status_from_args(&repo, &["status", "--json"]);
+    let _ = status_from_args(&repo, &["status", "--json"]);
+
+    let after = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("checkpoint read after status")
+        .len();
+
+    assert_eq!(before, after, "status should not write checkpoints");
+}
+
+#[test]
 fn test_status_honors_uncommitted_root_gitattributes_linguist_generated() {
     let repo = TestRepo::new();
 

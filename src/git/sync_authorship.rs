@@ -229,9 +229,11 @@ fn is_missing_remote_notes_ref_error(error: &GitAiError) -> bool {
             || stderr_lower.contains("not our ref"))
 }
 /// Maximum number of fetch-merge-push attempts before giving up.
-/// On busy monorepos, concurrent pushers can cause non-fast-forward rejections
-/// even after a successful merge, so we retry the full cycle.
-const PUSH_NOTES_MAX_ATTEMPTS: usize = 3;
+/// Concurrent pushers can advance refs/notes/ai one at a time, so the retry
+/// budget needs to cover small bursts of developers finishing work together.
+const PUSH_NOTES_MAX_ATTEMPTS: usize = 8;
+const PUSH_NOTES_RETRY_BASE_DELAY_MS: u64 = 25;
+const PUSH_NOTES_RETRY_MAX_DELAY_MS: u64 = 400;
 
 // for use with post-push hook
 pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Result<(), GitAiError> {
@@ -261,6 +263,7 @@ pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Resu
                     // Another pusher updated remote notes between our merge and push.
                     // Retry the full fetch-merge-push cycle.
                     last_error = Some(e);
+                    std::thread::sleep(notes_push_retry_delay(attempt));
                     continue;
                 }
                 return Err(e);
@@ -330,7 +333,16 @@ fn is_non_fast_forward_error(error: &GitAiError) -> bool {
     let GitAiError::GitCliError { stderr, .. } = error else {
         return false;
     };
-    stderr.contains("non-fast-forward")
+    let stderr_lower = stderr.to_ascii_lowercase();
+    stderr_lower.contains("non-fast-forward")
+        || (stderr_lower.contains("cannot lock ref 'refs/notes/ai'")
+            && stderr_lower.contains("failed to update ref"))
+}
+
+fn notes_push_retry_delay(attempt: usize) -> std::time::Duration {
+    let multiplier = 1_u64 << attempt.min(4);
+    let delay_ms = (PUSH_NOTES_RETRY_BASE_DELAY_MS * multiplier).min(PUSH_NOTES_RETRY_MAX_DELAY_MS);
+    std::time::Duration::from_millis(delay_ms)
 }
 
 fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
@@ -471,5 +483,47 @@ mod tests {
             args: vec!["fetch".to_string(), "origin".to_string()],
         };
         assert!(!is_missing_remote_notes_ref_error(&err));
+    }
+
+    #[test]
+    fn notes_ref_creation_race_is_retryable() {
+        let err = GitAiError::GitCliError {
+            code: Some(1),
+            stderr: "remote: error: cannot lock ref 'refs/notes/ai': reference already exists\n\
+                     ! [remote rejected] refs/notes/ai -> refs/notes/ai (failed to update ref)"
+                .to_string(),
+            args: vec!["push".to_string(), "origin".to_string()],
+        };
+        assert!(is_non_fast_forward_error(&err));
+    }
+
+    #[test]
+    fn notes_ref_stale_expected_value_is_retryable() {
+        let err = GitAiError::GitCliError {
+            code: Some(1),
+            stderr: "remote: error: cannot lock ref 'refs/notes/ai': is at \
+                     0ccb2f4d697678124417b71e0d03809dc3023348 but expected \
+                     cb421690ab858c08a7d4114ced962bb009e2034a\n\
+                     ! [remote rejected] refs/notes/ai -> refs/notes/ai (failed to update ref)"
+                .to_string(),
+            args: vec!["push".to_string(), "origin".to_string()],
+        };
+        assert!(is_non_fast_forward_error(&err));
+    }
+
+    #[test]
+    fn notes_push_retry_delay_is_bounded() {
+        assert_eq!(
+            notes_push_retry_delay(0),
+            std::time::Duration::from_millis(25)
+        );
+        assert_eq!(
+            notes_push_retry_delay(1),
+            std::time::Duration::from_millis(50)
+        );
+        assert_eq!(
+            notes_push_retry_delay(10),
+            std::time::Duration::from_millis(400)
+        );
     }
 }
