@@ -1,0 +1,26 @@
+src/report/upload.rs
+  ce0da89509cb3227 179,182-183
+src/metrics/db.rs
+  ce0da89509cb3227 7,641-644,646-649,651-654
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "57386a7b086fc87e164110063cb496841c7ade6a",
+  "prompts": {
+    "ce0da89509cb3227": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b16-7714-7f53-9180-5cc31d13208e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 18,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/08df9dfce25ff575ca2745bf999da3263d27cec3faaa415a77a88dc65ae042e2"
+    }
+  }
+}
