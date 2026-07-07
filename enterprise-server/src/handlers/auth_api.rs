@@ -271,7 +271,7 @@ async fn register_user(
     .bind(org_id)
     .execute(&mut *tx)
     .await
-    .map_err(AppError::Database)?;
+    .map_err(map_user_insert_error)?;
 
     sqlx::query(
         "INSERT INTO org_members (user_id, org_id, department_id, role) \
@@ -295,6 +295,18 @@ async fn register_user(
         personal_org_id: None,
         default_org_id: org_id,
     })
+}
+
+fn map_user_insert_error(error: sqlx::Error) -> AppError {
+    if let sqlx::Error::Database(database_error) = &error {
+        if database_error.code().as_deref() == Some("23505")
+            && database_error.constraint() == Some("users_email_key")
+        {
+            return AppError::Conflict("Email already exists".into());
+        }
+    }
+
+    AppError::Database(error)
 }
 
 async fn resolve_register_scope(
@@ -624,5 +636,204 @@ mod tests {
             cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE).as_deref(),
             Some("session-token")
         );
+    }
+
+    struct TestDatabase {
+        state: AppState,
+        admin_pool: sqlx::PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match sqlx::postgres::PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping duplicate registration test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping duplicate registration test: could not create isolated database {db_name}: {error}"
+                );
+                return Ok(None);
+            }
+
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(6)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            let config = test_config(&test_url);
+            let redis = redis::Client::open(config.redis_url.clone())?;
+            let cas_store = crate::services::cas::CasStore::new(&config)?;
+            let state = AppState {
+                db: pool,
+                redis,
+                config,
+                cas_store,
+                rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+            };
+
+            Ok(Some(Self {
+                state,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.state.db.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_register_same_email_succeeds_once_and_conflicts_once() -> anyhow::Result<()>
+    {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (org_id, department_id) = insert_registration_scope(&db.state.db).await?;
+        let first_req = register_request("duplicate@example.com", org_id, department_id);
+        let second_req = register_request("Duplicate@Example.com", org_id, department_id);
+
+        let first = register_user(&db.state, &first_req);
+        let second = register_user(&db.state, &second_req);
+        let (first_result, second_result) = tokio::join!(first, second);
+
+        let successes = [&first_result, &second_result]
+            .iter()
+            .filter(|result| result.is_ok())
+            .count();
+        let conflicts = [first_result, second_result]
+            .into_iter()
+            .filter(|result| matches!(result, Err(AppError::Conflict(message)) if message == "Email already exists"))
+            .count();
+
+        assert_eq!(successes, 1);
+        assert_eq!(conflicts, 1);
+        assert_eq!(table_count(&db.state.db, "users").await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    fn register_request(email: &str, org_id: Uuid, department_id: Uuid) -> RegisterRequest {
+        RegisterRequest {
+            email: email.to_string(),
+            name: "Duplicate User".to_string(),
+            password: "correct-horse-battery".to_string(),
+            confirm_password: Some("correct-horse-battery".to_string()),
+            org_id: Some(org_id),
+            department_id: Some(department_id),
+            org_slug: None,
+            department_slug: None,
+            return_to: None,
+        }
+    }
+
+    async fn insert_registration_scope(pool: &sqlx::PgPool) -> anyhow::Result<(Uuid, Uuid)> {
+        let org_id = Uuid::new_v4();
+        let department_id = Uuid::new_v4();
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Registration Test Org")
+            .bind(format!("registration-test-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO organization_domains (org_id, domain, verified) VALUES ($1, $2, true)",
+        )
+        .bind(org_id)
+        .bind("example.com")
+        .execute(pool)
+        .await?;
+        sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
+            .bind(department_id)
+            .bind(org_id)
+            .bind("Engineering")
+            .bind(format!("engineering-{}", department_id.simple()))
+            .execute(pool)
+            .await?;
+
+        Ok((org_id, department_id))
+    }
+
+    async fn table_count(pool: &sqlx::PgPool, table: &str) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(pool)
+            .await?)
+    }
+
+    fn test_config(database_url: &str) -> crate::config::AppConfig {
+        crate::config::AppConfig {
+            database_url: database_url.to_string(),
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: "registration-test-secret".to_string(),
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_bucket: "git-ai-cas".to_string(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_region: "us-east-1".to_string(),
+            base_url: "http://localhost:8080".to_string(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_registration_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &sqlx::PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &sqlx::PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 }
