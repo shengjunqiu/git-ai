@@ -666,11 +666,19 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 }} else if (d.last_status_at) {{
                     parts.push(`最近状态 ${{fmtTimeAgo(d.last_status_at)}}`);
                 }}
+                if ((d.device_count || 0) > 1) parts.push(`${{d.device_count}} 台设备`);
                 if (d.cli_version) parts.push(`v${{d.cli_version}}`);
                 detailEl.textContent = parts.join(' · ') || '暂无同步记录';
                 const titleParts = [...parts];
                 if (d.hostname) titleParts.push(d.hostname);
                 if (d.os || d.arch) titleParts.push([d.os, d.arch].filter(Boolean).join('/'));
+                if (Array.isArray(d.devices) && d.devices.length > 1) {{
+                    titleParts.push(d.devices.map(device => {{
+                        const deviceName = device.hostname || device.device_key || 'unknown';
+                        const deviceStatus = device.status === 'logged_in' ? '已登录' : '已登出';
+                        return `${{deviceName}}: ${{deviceStatus}}`;
+                    }}).join(' / '));
+                }}
                 detailEl.title = titleParts.join(' · ');
             }} catch(e) {{
                 console.error(e);

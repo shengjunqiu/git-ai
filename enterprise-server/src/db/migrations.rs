@@ -48,6 +48,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "011_developer_client_status",
         include_str!("../../migrations/011_developer_client_status.sql"),
     ),
+    (
+        "012_developer_client_status_device_key",
+        include_str!("../../migrations/012_developer_client_status_device_key.sql"),
+    ),
 ];
 
 /// Run all database migrations

@@ -67,6 +67,7 @@ pub async fn current_client_status(
 
     Ok(Json(json!({
         "detected": true,
+        "device_key": status.device_key,
         "status": status.status,
         "status_label": status_label,
         "last_status_at": status.last_status_at,
@@ -75,5 +76,7 @@ pub async fn current_client_status(
         "os": status.os,
         "arch": status.arch,
         "hostname": status.hostname,
+        "device_count": status.device_count,
+        "devices": status.devices,
     })))
 }
