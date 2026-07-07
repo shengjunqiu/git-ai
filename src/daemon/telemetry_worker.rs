@@ -292,6 +292,7 @@ fn flush_metrics(events: &[MetricEvent]) {
 
     let using_default_api = api_base_url == crate::config::DEFAULT_API_BASE_URL;
     let should_upload = !using_default_api || client.is_logged_in() || client.has_api_key();
+    let mut uploaded_live_metrics = false;
 
     if !should_upload && !events.is_empty() {
         tracing::warn!(
@@ -307,7 +308,10 @@ fn flush_metrics(events: &[MetricEvent]) {
         let batch = MetricsBatch::new(chunk.to_vec());
         if should_upload {
             match upload_metrics_with_retry(&client, &batch, "daemon_telemetry") {
-                Ok(()) => continue,
+                Ok(()) => {
+                    uploaded_live_metrics = true;
+                    continue;
+                }
                 Err(e) => {
                     tracing::warn!(%e, "telemetry: metrics upload failed, storing in local DB");
                     store_metrics_in_db(chunk);
@@ -316,6 +320,10 @@ fn flush_metrics(events: &[MetricEvent]) {
             }
         }
         store_metrics_in_db(chunk);
+    }
+
+    if uploaded_live_metrics {
+        drain_stored_metrics_queue(&client);
     }
 }
 
@@ -337,6 +345,84 @@ fn store_metrics_in_db(events: &[MetricEvent]) {
         && let Ok(mut db_lock) = db.lock()
     {
         let _ = db_lock.insert_events(&event_jsons);
+    }
+}
+
+fn drain_stored_metrics_queue(client: &ApiClient) {
+    let db = match MetricsDatabase::global() {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!(%e, "telemetry: failed to open stored metrics queue");
+            return;
+        }
+    };
+
+    loop {
+        let batch = {
+            let db_lock = match db.lock() {
+                Ok(lock) => lock,
+                Err(e) => {
+                    tracing::warn!(%e, "telemetry: failed to lock stored metrics queue");
+                    break;
+                }
+            };
+            match db_lock.get_batch(MAX_METRICS_PER_ENVELOPE) {
+                Ok(batch) => batch,
+                Err(e) => {
+                    tracing::warn!(%e, "telemetry: failed to read stored metrics queue");
+                    break;
+                }
+            }
+        };
+
+        if batch.is_empty() {
+            break;
+        }
+
+        let mut events = Vec::new();
+        let mut record_ids = Vec::new();
+        let mut invalid_ids = Vec::new();
+        for record in batch {
+            match serde_json::from_str::<MetricEvent>(&record.event_json) {
+                Ok(event) => {
+                    events.push(event);
+                    record_ids.push(record.id);
+                }
+                Err(_) => invalid_ids.push(record.id),
+            }
+        }
+
+        if !invalid_ids.is_empty()
+            && let Ok(mut db_lock) = db.lock()
+        {
+            let _ = db_lock.delete_records(&invalid_ids);
+        }
+
+        if events.is_empty() {
+            continue;
+        }
+
+        let event_count = events.len();
+        let metrics_batch = MetricsBatch::new(events);
+        match upload_metrics_with_retry(client, &metrics_batch, "daemon_metrics_queue") {
+            Ok(()) => {
+                if let Ok(mut db_lock) = db.lock() {
+                    let _ = db_lock.delete_records(&record_ids);
+                }
+                tracing::info!(
+                    event_count,
+                    "telemetry: uploaded stored metrics queue batch"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    %e,
+                    event_count,
+                    "telemetry: stored metrics queue upload failed; records will retry later"
+                );
+                break;
+            }
+        }
     }
 }
 
