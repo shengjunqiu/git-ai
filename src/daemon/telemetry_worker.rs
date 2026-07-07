@@ -323,7 +323,7 @@ fn flush_metrics(events: &[MetricEvent]) {
     }
 
     if uploaded_live_metrics {
-        drain_stored_metrics_queue(&client);
+        let _ = drain_stored_metrics_queue(&client, "daemon_metrics_queue", true);
     }
 }
 
@@ -348,14 +348,35 @@ fn store_metrics_in_db(events: &[MetricEvent]) {
     }
 }
 
-fn drain_stored_metrics_queue(client: &ApiClient) {
+#[derive(Debug, Default, Clone)]
+struct StoredMetricsDrainSummary {
+    pending_before: usize,
+    uploaded: usize,
+    discarded_invalid: usize,
+    remaining: usize,
+    error: Option<String>,
+}
+
+fn drain_stored_metrics_queue(
+    client: &ApiClient,
+    operation: &str,
+    with_retry: bool,
+) -> StoredMetricsDrainSummary {
+    let mut summary = StoredMetricsDrainSummary::default();
     let db = match MetricsDatabase::global() {
         Ok(db) => db,
         Err(e) => {
             tracing::warn!(%e, "telemetry: failed to open stored metrics queue");
-            return;
+            summary.error = Some(e.to_string());
+            return summary;
         }
     };
+
+    summary.pending_before = db
+        .lock()
+        .ok()
+        .and_then(|db_lock| db_lock.count().ok())
+        .unwrap_or(0);
 
     loop {
         let batch = {
@@ -363,6 +384,7 @@ fn drain_stored_metrics_queue(client: &ApiClient) {
                 Ok(lock) => lock,
                 Err(e) => {
                     tracing::warn!(%e, "telemetry: failed to lock stored metrics queue");
+                    summary.error = Some(e.to_string());
                     break;
                 }
             };
@@ -370,6 +392,7 @@ fn drain_stored_metrics_queue(client: &ApiClient) {
                 Ok(batch) => batch,
                 Err(e) => {
                     tracing::warn!(%e, "telemetry: failed to read stored metrics queue");
+                    summary.error = Some(e.to_string());
                     break;
                 }
             }
@@ -396,6 +419,7 @@ fn drain_stored_metrics_queue(client: &ApiClient) {
             && let Ok(mut db_lock) = db.lock()
         {
             let _ = db_lock.delete_records(&invalid_ids);
+            summary.discarded_invalid += invalid_ids.len();
         }
 
         if events.is_empty() {
@@ -404,11 +428,17 @@ fn drain_stored_metrics_queue(client: &ApiClient) {
 
         let event_count = events.len();
         let metrics_batch = MetricsBatch::new(events);
-        match upload_metrics_with_retry(client, &metrics_batch, "daemon_metrics_queue") {
+        let upload_result = if with_retry {
+            upload_metrics_with_retry(client, &metrics_batch, operation)
+        } else {
+            client.upload_metrics(&metrics_batch).map(|_| ())
+        };
+        match upload_result {
             Ok(()) => {
                 if let Ok(mut db_lock) = db.lock() {
                     let _ = db_lock.delete_records(&record_ids);
                 }
+                summary.uploaded += event_count;
                 tracing::info!(
                     event_count,
                     "telemetry: uploaded stored metrics queue batch"
@@ -420,10 +450,18 @@ fn drain_stored_metrics_queue(client: &ApiClient) {
                     event_count,
                     "telemetry: stored metrics queue upload failed; records will retry later"
                 );
+                summary.error = Some(e.to_string());
                 break;
             }
         }
     }
+
+    summary.remaining = db
+        .lock()
+        .ok()
+        .and_then(|db_lock| db_lock.count().ok())
+        .unwrap_or(0);
+    summary
 }
 
 fn flush_sentry_and_posthog(
@@ -797,6 +835,11 @@ pub fn print_commit_upload_notice() {
     let daemon_available = crate::daemon::daemon_process_active()
         || crate::daemon::telemetry_handle::daemon_telemetry_available();
     eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
+    if diag.is_logged_in || diag.has_api_key {
+        if let Some(message) = retry_stored_metrics_notice() {
+            eprintln!("{}", message);
+        }
+    }
 }
 
 fn commit_upload_notice_message(
@@ -825,6 +868,61 @@ fn commit_upload_notice_message(
         "[git-ai] AI tracking upload queued to {}.",
         diag.api_base_url
     )
+}
+
+fn retry_stored_metrics_notice() -> Option<String> {
+    let context = ApiContext::new(None).with_timeout(10);
+    let client = ApiClient::new(context);
+    let summary = drain_stored_metrics_queue(&client, "commit_metrics_queue", false);
+    stored_metrics_retry_notice_message(&summary)
+}
+
+fn stored_metrics_retry_notice_message(summary: &StoredMetricsDrainSummary) -> Option<String> {
+    if summary.pending_before == 0
+        && summary.uploaded == 0
+        && summary.discarded_invalid == 0
+        && summary.error.is_none()
+    {
+        return None;
+    }
+
+    if summary.error.is_some() {
+        return Some(format!(
+            "[git-ai] Previous upload retry failed; {} event(s) remain queued for the next commit.",
+            summary.remaining
+        ));
+    }
+
+    let mut parts = Vec::new();
+    if summary.uploaded > 0 {
+        parts.push(format!(
+            "retried {} previous event(s) successfully",
+            summary.uploaded
+        ));
+    }
+    if summary.discarded_invalid > 0 {
+        parts.push(format!(
+            "discarded {} invalid queued event(s)",
+            summary.discarded_invalid
+        ));
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    if summary.remaining > 0 {
+        Some(format!(
+            "[git-ai] Previous upload retry: {}; {} event(s) still queued.",
+            parts.join(", "),
+            summary.remaining
+        ))
+    } else {
+        Some(format!(
+            "[git-ai] Previous upload retry: {}; queue is clear.",
+            parts.join(", ")
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -885,6 +983,63 @@ mod tests {
         assert_eq!(
             message,
             "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it."
+        );
+    }
+
+    #[test]
+    fn test_stored_metrics_retry_notice_is_empty_without_queue_activity() {
+        let summary = StoredMetricsDrainSummary::default();
+        assert!(stored_metrics_retry_notice_message(&summary).is_none());
+    }
+
+    #[test]
+    fn test_stored_metrics_retry_notice_reports_success() {
+        let summary = StoredMetricsDrainSummary {
+            pending_before: 3,
+            uploaded: 3,
+            discarded_invalid: 0,
+            remaining: 0,
+            error: None,
+        };
+        assert_eq!(
+            stored_metrics_retry_notice_message(&summary).as_deref(),
+            Some(
+                "[git-ai] Previous upload retry: retried 3 previous event(s) successfully; queue is clear."
+            )
+        );
+    }
+
+    #[test]
+    fn test_stored_metrics_retry_notice_reports_failure_and_remaining_queue() {
+        let summary = StoredMetricsDrainSummary {
+            pending_before: 5,
+            uploaded: 2,
+            discarded_invalid: 0,
+            remaining: 3,
+            error: Some("network timeout".to_string()),
+        };
+        assert_eq!(
+            stored_metrics_retry_notice_message(&summary).as_deref(),
+            Some(
+                "[git-ai] Previous upload retry failed; 3 event(s) remain queued for the next commit."
+            )
+        );
+    }
+
+    #[test]
+    fn test_stored_metrics_retry_notice_reports_invalid_records() {
+        let summary = StoredMetricsDrainSummary {
+            pending_before: 2,
+            uploaded: 1,
+            discarded_invalid: 1,
+            remaining: 0,
+            error: None,
+        };
+        assert_eq!(
+            stored_metrics_retry_notice_message(&summary).as_deref(),
+            Some(
+                "[git-ai] Previous upload retry: retried 1 previous event(s) successfully, discarded 1 invalid queued event(s); queue is clear."
+            )
         );
     }
 
