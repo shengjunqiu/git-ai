@@ -287,8 +287,11 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 </div>
 
                 <div class="chart-card">
-                    <div class="chart-title">AI 代码趋势（近 30 天）</div>
-                    <div class="chart-container"><canvas id="overview-trend-chart"></canvas></div>
+                    <div class="chart-title" id="overview-trend-title">AI 代码趋势（最近 30 天）</div>
+                    <div class="chart-container">
+                        <canvas id="overview-trend-chart"></canvas>
+                        <div id="overview-trend-empty" class="empty-state" style="display:none;padding:2rem"><p>暂无趋势数据</p></div>
+                    </div>
                 </div>
 
                 <div class="table-card">
@@ -539,7 +542,17 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             if (range === 'all') return '';
             const days = parseInt(range);
             const since = new Date(Date.now() - days * 86400000).toISOString();
-            return `&since=${{encodeURIComponent(since)}}`;
+            return `since=${{encodeURIComponent(since)}}`;
+        }}
+        function withTimeRange(url) {{
+            const params = getTimeRangeParams();
+            if (!params) return url;
+            return `${{url}}${{url.includes('?') ? '&' : '?'}}${{params}}`;
+        }}
+        function getTimeRangeLabel() {{
+            const range = document.getElementById('time-range')?.value || '30d';
+            if (range === 'all') return '全部时间';
+            return `最近 ${{parseInt(range)}} 天`;
         }}
 
         // --- Chart instances ---
@@ -550,8 +563,10 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         // --- Overview ---
         async function loadOverview() {{
+            const rangeLabel = getTimeRangeLabel();
+            document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${{rangeLabel}}）`;
             try {{
-                const r = await fetch('/api/v1/aggregate/summary');
+                const r = await fetch(withTimeRange('/api/v1/aggregate/summary'));
                 const d = await r.json();
                 document.getElementById('s-commits').textContent = fmt(d.total_commits);
                 document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
@@ -562,9 +577,11 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             }} catch(e) {{ console.error(e); }}
 
             try {{
-                const r = await fetch('/api/v1/aggregate/developers');
+                const r = await fetch(withTimeRange('/api/v1/aggregate/developers'));
                 const d = await r.json();
-                const top = (d.developers || []).slice(0, 5);
+                const top = [...(d.developers || [])]
+                    .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
+                    .slice(0, 5);
                 const maxLines = top.length ? Math.max(...top.map(x => x.total_added_lines || 0)) : 1;
                 document.getElementById('top-developers').innerHTML = top.map(dev => {{
                     const total = dev.total_added_lines || 0;
@@ -588,17 +605,29 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         async function loadOverviewTrend() {{
             try {{
-                const r = await fetch('/api/v1/aggregate/trends?metric=ai_lines&granularity=week');
+                const r = await fetch(withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=week'));
                 const d = await r.json();
                 const data = d.data || [];
-                if (data.length === 0) return;
+                const canvas = document.getElementById('overview-trend-chart');
+                const empty = document.getElementById('overview-trend-empty');
+                if (data.length === 0) {{
+                    if (overviewTrendChart) {{
+                        overviewTrendChart.destroy();
+                        overviewTrendChart = null;
+                    }}
+                    canvas.style.display = 'none';
+                    empty.style.display = 'block';
+                    return;
+                }}
+                canvas.style.display = 'block';
+                empty.style.display = 'none';
 
                 const labels = data.map(p => p.period);
                 const aiValues = data.map(p => p.ai_lines);
                 const humanValues = data.map(p => p.human_lines);
 
                 if (overviewTrendChart) overviewTrendChart.destroy();
-                const ctx = document.getElementById('overview-trend-chart').getContext('2d');
+                const ctx = canvas.getContext('2d');
                 overviewTrendChart = new Chart(ctx, {{
                     type: 'line',
                     data: {{
@@ -1388,6 +1417,8 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 #[derive(Debug, Deserialize)]
 pub struct AggregateQuery {
     pub org: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1496,6 +1527,7 @@ fn validate_normalized_repo_url(url_str: &str) -> Result<(), String> {
 pub async fn aggregate_summary(
     State(state): State<AppState>,
     auth: DashboardAuth,
+    Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -1507,10 +1539,14 @@ pub async fn aggregate_summary(
             COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0) as total_human_lines
         FROM metrics_events WHERE event_type = 1
           AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)"#
+          AND ($2::uuid IS NULL OR org_id = $2)
+          AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)"#
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1525,6 +1561,8 @@ pub async fn aggregate_summary(
         JOIN commit_stats cs ON cs.project_id = p.id
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
+          AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
           AND NOT EXISTS (
               SELECT 1 FROM metrics_events m
               WHERE m.event_type = 1
@@ -1535,6 +1573,8 @@ pub async fn aggregate_summary(
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1552,6 +1592,8 @@ pub async fn aggregate_summary(
               AND user_id IS NOT NULL
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
+              AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
 
             UNION ALL
 
@@ -1561,6 +1603,8 @@ pub async fn aggregate_summary(
             WHERE p.user_id IS NOT NULL
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
+              AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -1573,6 +1617,8 @@ pub async fn aggregate_summary(
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1581,10 +1627,14 @@ pub async fn aggregate_summary(
         FROM metrics_events
         WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
           AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)"#,
+          AND ($2::uuid IS NULL OR org_id = $2)
+          AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)"#,
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1596,6 +1646,8 @@ pub async fn aggregate_summary(
         WHERE p.remote_url_hash IS NOT NULL AND p.remote_url_hash != ''
           AND ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
+          AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
           AND NOT EXISTS (
               SELECT 1 FROM metrics_events m
               WHERE m.event_type = 1
@@ -1606,6 +1658,8 @@ pub async fn aggregate_summary(
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1966,6 +2020,7 @@ pub async fn aggregate_projects(
 pub async fn aggregate_developers(
     State(state): State<AppState>,
     auth: DashboardAuth,
+    Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
@@ -2001,6 +2056,8 @@ pub async fn aggregate_developers(
                   AND user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR user_id = $1)
                   AND ($2::uuid IS NULL OR org_id = $2)
+                  AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
                 GROUP BY user_id, org_id
 
                 UNION ALL
@@ -2017,6 +2074,8 @@ pub async fn aggregate_developers(
                 WHERE p.user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
+                  AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2055,6 +2114,8 @@ pub async fn aggregate_developers(
                   AND author_email != ''
                   AND ($1::uuid IS NULL OR user_id = $1)
                   AND ($2::uuid IS NULL OR org_id = $2)
+                  AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
 
                 UNION
 
@@ -2078,6 +2139,8 @@ pub async fn aggregate_developers(
                   AND cs.author != ''
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
+                  AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2105,10 +2168,12 @@ pub async fn aggregate_developers(
         LEFT JOIN departments d ON d.id = om.department_id AND d.org_id = om.org_id
         LEFT JOIN git_identities gi ON gi.user_id = ds.user_id
           AND gi.org_id IS NOT DISTINCT FROM ds.org_id
-        ORDER BY ds.total_commits DESC, u.name ASC"#
+        ORDER BY ds.ai_added_lines DESC, ds.total_commits DESC, u.name ASC"#
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(&query.since)
+    .bind(&query.until)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -2348,7 +2413,7 @@ pub async fn aggregate_trends(
             COALESCE(SUM(commits), 0)::bigint AS commits
         FROM (
             SELECT
-                DATE_TRUNC('{0}', created_at)::date AS period,
+                DATE_TRUNC('{0}', to_timestamp(timestamp))::date AS period,
                 COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
                 COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)::bigint AS human_lines,
                 COUNT(*)::bigint AS commits
@@ -2357,14 +2422,14 @@ pub async fn aggregate_trends(
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
               AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
-              AND ($5::timestamptz IS NULL OR created_at <= $5::timestamptz)
-            GROUP BY DATE_TRUNC('{0}', created_at)
+              AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) >= $4::timestamptz)
+              AND ($5::timestamptz IS NULL OR to_timestamp(timestamp) <= $5::timestamptz)
+            GROUP BY DATE_TRUNC('{0}', to_timestamp(timestamp))
 
             UNION ALL
 
             SELECT
-                DATE_TRUNC('{0}', cs.author_time::timestamptz)::date AS period,
+                DATE_TRUNC('{0}', NULLIF(cs.author_time, '')::timestamptz)::date AS period,
                 COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
                 COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0)::bigint AS human_lines,
                 COUNT(*)::bigint AS commits
@@ -2374,8 +2439,8 @@ pub async fn aggregate_trends(
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
               AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::timestamptz IS NULL OR cs.author_time::timestamptz >= $4::timestamptz)
-              AND ($5::timestamptz IS NULL OR cs.author_time::timestamptz <= $5::timestamptz)
+              AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $4::timestamptz)
+              AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $5::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -2383,7 +2448,7 @@ pub async fn aggregate_trends(
                     AND ($1::uuid IS NULL OR m.user_id = $1)
                     AND ($2::uuid IS NULL OR m.org_id = $2)
               )
-            GROUP BY DATE_TRUNC('{0}', cs.author_time::timestamptz)
+            GROUP BY DATE_TRUNC('{0}', NULLIF(cs.author_time, '')::timestamptz)
         ) combined
         GROUP BY period
         ORDER BY period"#, date_trunc)
