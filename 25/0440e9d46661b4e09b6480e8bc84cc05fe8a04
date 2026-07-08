@@ -1,0 +1,44 @@
+enterprise-server/src/handlers/cas.rs
+  a73676cfded0c055 6,10-11,25,29,33-93,98-99,102,108,110,119,123-143,157-199,208,414-415,451-575,581-589,595,626-638,713,759,761-763,766,793,805-806,810
+enterprise-server/.env.example
+  a73676cfded0c055 16-18
+docs/enterprise-server-deployment.md
+  a73676cfded0c055 203
+enterprise-server/src/handlers/report.rs
+  a73676cfded0c055 572
+enterprise-server/deploy/.env.example
+  a73676cfded0c055 24
+enterprise-server/src/config.rs
+  a73676cfded0c055 16,37,64
+enterprise-server/src/handlers/release.rs
+  a73676cfded0c055 897
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 799
+enterprise-server/src/auth/jwt.rs
+  a73676cfded0c055 122
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 663-666,672,677-678,682-685,705-707,712,716-735
+enterprise-server/src/handlers/oauth.rs
+  a73676cfded0c055 603
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "250440e9d46661b4e09b6480e8bc84cc05fe8a04",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 424,
+      "total_deletions": 118,
+      "accepted_lines": 699,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/6b837ceb7407513bcdb208b8281c5ca147f07d00f1f9d23a078df90663b9c420"
+    }
+  }
+}
