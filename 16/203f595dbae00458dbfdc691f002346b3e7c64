@@ -1,0 +1,30 @@
+enterprise-server/deploy/migrations/014_metrics_query_indexes.sql
+  a73676cfded0c055 1-16
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 903,922-924,942-945,954-973
+enterprise-server/migrations/014_metrics_query_indexes.sql
+  a73676cfded0c055 1-16
+enterprise-server/src/db/migrations.rs
+  a73676cfded0c055 59-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "16203f595dbae00458dbfdc691f002346b3e7c64",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 173,
+      "total_deletions": 8,
+      "accepted_lines": 65,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/3156953b46f4fdcacc1988934bc6c57a6356c85fdcbe8df8f1de05a2ba8cadd7"
+    }
+  }
+}
