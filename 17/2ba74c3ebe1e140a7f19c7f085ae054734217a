@@ -1,0 +1,28 @@
+scripts/benchmarks/enterprise/README.md
+  a73676cfded0c055 71-106
+docs/enterprise-auth-login-performance-task-plan.md
+  a73676cfded0c055 869-870,876,882,889,898-899,903-906,922-932
+scripts/benchmarks/enterprise/bench_auth_login.py
+  a73676cfded0c055 1-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "172ba74c3ebe1e140a7f19c7f085ae054734217a",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1396,
+      "total_deletions": 44,
+      "accepted_lines": 1588,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/37f9e96f8f0b69af9663e25f7eaa8022525a9a2ec31b771ed7c62b4f16e8855d"
+    }
+  }
+}
