@@ -517,23 +517,23 @@ git commit -m "Reuse auth org scope for metrics uploads"
 
 实现步骤：
 
-- [ ] 定义内部结构 `PreparedMetricRow`，存放 decode 和聚合后的字段。
-- [ ] 第一阶段遍历 events，只做 decode 和字段聚合，收集：
+- [x] 定义内部结构 `PreparedMetricRow`，存放 decode 和聚合后的字段。
+- [x] 第一阶段遍历 events，只做 decode 和字段聚合，收集：
   - `Vec<PreparedMetricRow>`
   - `Vec<MetricUploadError>`
-- [ ] 使用 `sqlx::QueryBuilder` 实现 `insert_metrics_chunk`。
-- [ ] 初始 chunk size 设置为 500。
-- [ ] 对成功 decode 的 rows 按 chunk insert。
-- [ ] 如果 chunk insert 失败，首版可以将 chunk 内所有事件记为 storage error。
-- [ ] 可选 fallback：chunk 失败时逐条 insert，用于定位坏行。
-- [ ] 保持接口 partial success 语义。
+- [x] 使用 `sqlx::QueryBuilder` 实现 `insert_metrics_chunk`。
+- [x] 初始 chunk size 设置为 500。
+- [x] 对成功 decode 的 rows 按 chunk insert。
+- [x] 如果 chunk insert 失败，首版将 chunk 内所有事件记为 storage error。
+- [x] 首版不启用逐条 fallback；后续如需要定位坏行，再单独加入诊断模式。
+- [x] 保持接口 partial success 语义。
 
 测试步骤：
 
-- [ ] 全部成功：batch N 条，落库 N 条。
-- [ ] 部分 decode 失败：成功行落库，失败行出现在 errors。
-- [ ] 模拟 DB insert 失败：返回 storage errors。
-- [ ] 原有 aggregate rollup 单元测试继续通过。
+- [x] 全部成功：batch N 条，落库 N 条。
+- [x] 部分 decode 失败：成功行落库，失败行出现在 errors。
+- [x] 模拟 DB insert 失败：返回 storage errors。
+- [x] 原有 aggregate rollup 单元测试继续通过。
 
 测试命令：
 
@@ -552,16 +552,16 @@ concurrency: 1, 5, 20
 
 记录：
 
-- [ ] rows/s
-- [ ] p50/p95/p99
-- [ ] DB CPU
-- [ ] DB active connection 数
+- [ ] rows/s：本阶段未跑外部 HTTP 压测，留到阶段 4 统一记录。
+- [ ] p50/p95/p99：本阶段未跑外部 HTTP 压测，留到阶段 4 统一记录。
+- [ ] DB CPU：本阶段未跑外部 HTTP 压测，留到阶段 4 统一记录。
+- [ ] DB active connection 数：本阶段未跑外部 HTTP 压测，留到阶段 4 统一记录。
 
 验收标准：
 
-- [ ] 100/500 条 batch 的总耗时明显低于逐条 insert。
-- [ ] partial success 行为不回退。
-- [ ] DB 错误不会被静默吞掉。
+- [x] 100/500 条 batch 的 DB 写入往返从 N 次降为 `ceil(N / 500)` 次；端到端耗时压测留到阶段 4 统一执行。
+- [x] partial success 行为不回退。
+- [x] DB 错误不会被静默吞掉。
 
 提交建议：
 
@@ -569,6 +569,26 @@ concurrency: 1, 5, 20
 git add enterprise-server/src/services/metrics.rs
 git commit -m "Bulk insert enterprise metrics events"
 ```
+
+阶段 2.2 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| `PreparedMetricRow` | 已实现，集中保存 decode 后的写库字段和原始 event index |
+| 批量 insert | 已实现，`insert_metrics_chunk` 使用 `sqlx::QueryBuilder` 写入 `metrics_events` |
+| chunk size | 已设置为 500，501 条事件测试覆盖跨 chunk 写入 |
+| decode partial success | 已保持，decode 失败只返回对应 index 的错误，成功事件仍落库 |
+| DB storage error | 已覆盖，chunk 写入失败时 chunk 内事件全部返回 storage error |
+| 外部压测 | 本阶段未执行，吞吐和 p95/p99 留到阶段 4 统一对比 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `rustfmt --edition 2024 --check src/services/metrics.rs` | 通过 |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test metrics` | 14 passed, 0 failed |
+| `cargo test` | 85 passed, 0 failed |
 
 ### 2.3 client status last_seen 更新降频
 
