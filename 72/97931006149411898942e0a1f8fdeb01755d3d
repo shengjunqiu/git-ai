@@ -1,0 +1,26 @@
+enterprise-server/src/handlers/dashboard.rs
+  a73676cfded0c055 1615-1652,1658-1660,1670-1671,1675-1676,1722-1723,1733-1734,1747-1748,1760-1761,1765-1766,2178-2180,2213-2214,2231-2232,2271-2272,2296-2297,2329-2330,2531-2532,2534-2540,2582-2583,2599-2600,2613-2619,2883-2884,2888-2926
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 820-821,828,835-836,858-859,868-889
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "7297931006149411898942e0a1f8fdeb01755d3d",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 347,
+      "total_deletions": 104,
+      "accepted_lines": 159,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/ebf911ed00fbdffeaba6f6c326f293d6e25a0f816d865f699e9df5fe1df084de"
+    }
+  }
+}
