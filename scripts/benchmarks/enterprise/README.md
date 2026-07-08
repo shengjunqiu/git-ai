@@ -102,7 +102,38 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
   --concurrency 50
 ```
 
-该脚本额外输出 HTTP status 统计，并单独列出 401、409、429。默认只要出现非预期错误就以非 0 退出；需要只采集错误率时可加 `--allow-errors`。
+该脚本额外输出 HTTP status 统计，并单独列出 401、409、429、500。默认只要出现非预期错误就以非 0 退出；需要只采集错误率时可加 `--allow-errors`。
+
+默认情况下脚本不设置 `X-Forwarded-For`，服务端会把未认证请求归到同一个 `anonymous` client，适合验证单 client 限流边界。模拟多人来源时使用 `--client-ip-mode`：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode oauth \
+  --requests 200 \
+  --concurrency 50 \
+  --client-ip-mode unique
+```
+
+可选模式：
+
+- `none`: 默认值，不设置 `X-Forwarded-For`。
+- `same`: 所有请求使用同一个 `X-Forwarded-For`，等价于单 IP。
+- `unique`: 每个 operation 使用不同 IP。
+- `pool`: 按 `--client-ip-pool-size` 轮换固定 IP 池。
+
+网页登录可使用用户池 CSV，文件支持带 header 的 `email,password` 列，或不带 header 的两列格式：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode login \
+  --login-users-file /tmp/bench-login-users.csv \
+  --requests 1000 \
+  --concurrency 50 \
+  --client-ip-mode pool \
+  --client-ip-pool-size 100
+```
+
+生产环境不要直接信任公网客户端传入的 `X-Forwarded-For`；这类多人模拟只适用于本地或可信反向代理后的压测。
 
 ## Dashboard 压测
 

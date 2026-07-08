@@ -1015,6 +1015,53 @@ OAuth 结果补充：
 - OAuth 50 并发未通过验收，直接原因是运行中容器仍按 `oauth limit=10` 执行。下一步应重建/重启 API 并显式设置 `RATE_LIMIT_OAUTH_MAX_REQUESTS=600`、`RATE_LIMIT_AUTH_MAX_REQUESTS=300` 后重跑 7.2。
 - 当前 benchmark 默认没有传 `X-Forwarded-For`，所有匿名请求会聚合成同一个 `anonymous` client。若要评估“多人同时登录/注册”，下一轮应扩展脚本支持多用户登录池和可选 client IP 分布。
 
+### 7.3 多 client 复测和问题处理记录
+
+执行日期：2026-07-08。
+
+本阶段先处理 7.2 暴露的“所有压测请求被聚合到同一个 `anonymous` client”问题：
+
+- [x] `bench_auth_login.py` 新增 `--client-ip-mode none|same|unique|pool`。
+- [x] `--client-ip-mode unique` 可以为每个 operation 设置不同 `X-Forwarded-For`。
+- [x] `--client-ip-mode pool` 可以按 `--client-ip-pool-size` 轮换固定 IP 池。
+- [x] 登录压测新增 `--login-users-file`，支持 `email,password` CSV 用户池。
+- [x] 错误统计新增 500 跟踪，并可通过 `--error-samples` 输出失败响应样本。
+
+本地尝试执行：
+
+```bash
+RATE_LIMIT_AUTH_MAX_REQUESTS=300 \
+RATE_LIMIT_AUTH_WINDOW_SECONDS=60 \
+RATE_LIMIT_OAUTH_MAX_REQUESTS=600 \
+RATE_LIMIT_OAUTH_WINDOW_SECONDS=60 \
+AUTH_PASSWORD_CONCURRENCY=8 \
+docker compose up -d --build api
+```
+
+该命令长时间无输出，后续 `docker compose ps` 和 `docker version` 也无响应；已中断前台命令。HTTP `/health` 和 `/ready` 仍正常，因此本轮先在现有 API 容器上复测多人来源行为，Docker daemon/compose 卡住作为本地环境问题另行处理。
+
+多人来源复测结果：
+
+| 场景 | 请求/并发 | client 模式 | 成功/错误 | HTTP 状态 | RPS | p50 | p95 | p99 | 结论 |
+| --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| OAuth device flow | 200 flows/50 | `unique` | 400/0 HTTP result | 200=200, 400=200, 429=0, 500=0 | 173.62 | device=111.78ms, token=108.89ms | device=291.22ms, token=158.03ms | device=315.93ms, token=194.62ms | 多 IP 后不再出现 OAuth 429；400 是预期 `authorization_pending`。 |
+| 登录 | 200/50 | `pool`, 100 IP | 200/0 | 200=200, 429=0, 500=0 | 20.89 | 997.90ms | 7146.67ms | 7477.70ms | 限流误伤消失，但 Argon2 verify 排队明显。 |
+| 注册 | 100/50 | `unique` | 100/0 | 201=100, 429=0, 500=0 | 50.53 | 826.29ms | 1235.54ms | 1379.73ms | 50 并发多人注册稳定，无 409/429/500。 |
+
+压测后旁路健康检查：
+
+- `/health`: `4.194ms`
+- `/ready`: `5.489ms`
+
+处理结论：
+
+- 上轮 OAuth 50 并发大面积 429 的主要原因是测试流量被识别为同一个 client；多人 IP 模式下 200 flows/50 并发没有 429。
+- 单 client 下仍应触发 OAuth/auth 限流，这是预期保护；多人容量测试必须显式使用 `--client-ip-mode unique` 或真实反向代理注入的可信 client IP。
+- 登录 200/50 多人样本 p95 达到 `7.1s`，下一个性能瓶颈是 Argon2 verify 的并发队列。需要继续评估 `AUTH_PASSWORD_CONCURRENCY` 在当前 CPU 下的最优值，或引入登录失败/成功的更细分指标。
+- 注册 100/50 多人样本 p95 `1.24s`，当前可作为本地 50 并发注册的保守参考。
+- 生产环境必须确保 `X-Forwarded-For` 只来自可信反向代理；应用不能信任公网客户端直接传入的该 header。
+- Docker daemon/compose 当前不稳定，尚未完成 API 重建确认。后续应先恢复 Docker，再重建 API 验证运行环境确实加载最新 auth/OAuth 限流默认值。
+
 ## 阶段 8: 上线和回滚
 
 ### 8.1 上线顺序

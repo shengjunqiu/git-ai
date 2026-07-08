@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import ipaddress
 import json
 import os
 import time
@@ -21,6 +23,7 @@ from _common import (
     http_request,
     normalize_base_url,
     positive_int,
+    print_sample_errors,
     print_summaries,
     run_concurrent,
     summarize,
@@ -29,7 +32,14 @@ from _common import (
 
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-TRACKED_STATUSES = (401, 409, 429)
+TRACKED_STATUSES = (401, 409, 429, 500)
+
+
+def client_ip_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {"none", "same", "unique", "pool"}:
+        raise argparse.ArgumentTypeError("client IP mode must be none, same, unique, or pool")
+    return normalized
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +78,32 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print error statistics but exit 0 even when requests fail.",
     )
+    parser.add_argument(
+        "--error-samples",
+        type=int,
+        default=env_int("BENCH_ERROR_SAMPLES", 5),
+        help="Number of sample errors to print when errors occur. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--client-ip-mode",
+        type=client_ip_mode,
+        default=client_ip_mode(os.environ.get("BENCH_CLIENT_IP_MODE", "none")),
+        help=(
+            "How to set X-Forwarded-For for rate-limit tests: none preserves existing behavior, "
+            "same simulates one IP, unique simulates one IP per operation, pool rotates a fixed IP pool."
+        ),
+    )
+    parser.add_argument(
+        "--client-ip-base",
+        default=os.environ.get("BENCH_CLIENT_IP_BASE", "10.72.0.1"),
+        help="Base IPv4 address used by --client-ip-mode same, unique, or pool.",
+    )
+    parser.add_argument(
+        "--client-ip-pool-size",
+        type=positive_int,
+        default=env_int("BENCH_CLIENT_IP_POOL_SIZE", 256),
+        help="Number of IPs to rotate when --client-ip-mode pool is used.",
+    )
 
     parser.add_argument(
         "--login-email",
@@ -81,6 +117,11 @@ def parse_args() -> argparse.Namespace:
             os.environ.get("BENCH_PASSWORD", "correct-horse-battery"),
         ),
         help="Existing user password for --mode login.",
+    )
+    parser.add_argument(
+        "--login-users-file",
+        default=os.environ.get("BENCH_LOGIN_USERS_FILE"),
+        help="CSV file for --mode login with email,password columns. Overrides single login email.",
     )
 
     parser.add_argument(
@@ -133,6 +174,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def require_login_config(args: argparse.Namespace) -> None:
+    if args.login_users_file:
+        return
     if not args.login_email:
         raise SystemExit("--login-email or BENCH_LOGIN_EMAIL is required for --mode login")
 
@@ -144,6 +187,75 @@ def require_register_config(args: argparse.Namespace) -> None:
         raise SystemExit(
             "--department-id/--department-slug or BENCH_DEPARTMENT_ID/BENCH_DEPARTMENT_SLUG is required"
         )
+
+
+def request_headers(args: argparse.Namespace, index: int) -> dict[str, str]:
+    headers = api_headers()
+    client_ip = client_ip_for_index(args, index)
+    if client_ip:
+        headers["X-Forwarded-For"] = client_ip
+    return headers
+
+
+def client_ip_for_index(args: argparse.Namespace, index: int) -> str | None:
+    if args.client_ip_mode == "none":
+        return None
+
+    try:
+        base_ip = ipaddress.IPv4Address(args.client_ip_base)
+    except ipaddress.AddressValueError as exc:
+        raise SystemExit(f"--client-ip-base must be a valid IPv4 address: {exc}") from exc
+
+    if args.client_ip_mode == "same":
+        offset = 0
+    elif args.client_ip_mode == "unique":
+        offset = index
+    else:
+        offset = index % args.client_ip_pool_size
+
+    try:
+        return str(base_ip + offset)
+    except ipaddress.AddressValueError as exc:
+        raise SystemExit(
+            "--client-ip-base plus generated offset exceeds the IPv4 address range"
+        ) from exc
+
+
+def load_login_credentials(args: argparse.Namespace) -> list[tuple[str, str]]:
+    require_login_config(args)
+    if not args.login_users_file:
+        return [(args.login_email, args.login_password)]
+
+    credentials: list[tuple[str, str]] = []
+    with open(args.login_users_file, newline="", encoding="utf-8") as handle:
+        sample = handle.read(4096)
+        handle.seek(0)
+        try:
+            has_header = csv.Sniffer().has_header(sample) if sample.strip() else False
+        except csv.Error:
+            has_header = False
+        if has_header:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                email = (row.get("email") or row.get("login_email") or "").strip()
+                password = (row.get("password") or row.get("login_password") or "").strip()
+                if email and password:
+                    credentials.append((email, password))
+        else:
+            reader = csv.reader(handle)
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                email = row[0].strip()
+                password = row[1].strip()
+                if email and password:
+                    credentials.append((email, password))
+
+    if not credentials:
+        raise SystemExit(
+            "--login-users-file must contain at least one email,password credential row"
+        )
+    return credentials
 
 
 def unique_email(args: argparse.Namespace, index: int) -> str:
@@ -186,21 +298,21 @@ def validate_register_response(parsed: Any) -> str | None:
 
 
 def run_login(args: argparse.Namespace, base_url: str) -> tuple[list[RequestResult], float]:
-    require_login_config(args)
+    credentials = load_login_credentials(args)
     url = build_url(base_url, "/auth/login")
-    headers = api_headers()
-    payload = {
-        "email": args.login_email,
-        "password": args.login_password,
-    }
 
-    def work(_: int) -> RequestResult:
+    def work(index: int) -> RequestResult:
+        email, password = credentials[index % len(credentials)]
+        payload = {
+            "email": email,
+            "password": password,
+        }
         return timed_json_request(
             "auth_login",
             lambda: http_request(
                 "POST",
                 url,
-                headers=headers,
+                headers=request_headers(args, index),
                 payload=payload,
                 timeout_s=args.timeout,
             ),
@@ -213,7 +325,6 @@ def run_login(args: argparse.Namespace, base_url: str) -> tuple[list[RequestResu
 def run_register(args: argparse.Namespace, base_url: str) -> tuple[list[RequestResult], float]:
     require_register_config(args)
     url = build_url(base_url, "/auth/register")
-    headers = api_headers()
 
     def work(index: int) -> RequestResult:
         return timed_json_request(
@@ -221,7 +332,7 @@ def run_register(args: argparse.Namespace, base_url: str) -> tuple[list[RequestR
             lambda: http_request(
                 "POST",
                 url,
-                headers=headers,
+                headers=request_headers(args, index),
                 payload=register_payload(args, index),
                 timeout_s=args.timeout,
             ),
@@ -231,8 +342,8 @@ def run_register(args: argparse.Namespace, base_url: str) -> tuple[list[RequestR
     return run_concurrent(args.requests, args.concurrency, work)
 
 
-def timed_oauth_flow(args: argparse.Namespace, base_url: str) -> list[RequestResult]:
-    headers = api_headers()
+def timed_oauth_flow(args: argparse.Namespace, base_url: str, index: int) -> list[RequestResult]:
+    headers = request_headers(args, index)
     device_url = build_url(base_url, "/worker/oauth/device/code")
     token_url = build_url(base_url, "/worker/oauth/token")
     results: list[RequestResult] = []
@@ -327,7 +438,7 @@ def run_oauth(args: argparse.Namespace, base_url: str) -> tuple[list[RequestResu
     return run_concurrent_flows(
         args.requests,
         args.concurrency,
-        lambda _: timed_oauth_flow(args, base_url),
+        lambda index: timed_oauth_flow(args, base_url, index),
     )
 
 
@@ -391,6 +502,9 @@ def main() -> None:
 
     print_summaries(title, summarize(results, elapsed_s))
     print_status_counts(results)
+
+    if args.allow_errors and args.error_samples > 0:
+        print_sample_errors(results, args.error_samples)
 
     if not args.allow_errors:
         exit_if_failed(results)
