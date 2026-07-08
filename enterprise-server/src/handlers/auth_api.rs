@@ -244,21 +244,15 @@ async fn register_user(
     }
 
     crate::services::passwords::validate_password_strength(&req.password)?;
-    let (org_id, department_id) = resolve_register_scope(state, req).await?;
-
-    crate::services::registration::validate_org_domain(&state.db, &email, org_id).await?;
-    crate::services::registration::validate_department(&state.db, org_id, department_id).await?;
-
-    let email_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE lower(email) = lower($1))")
-            .bind(&email)
-            .fetch_one(&state.db)
-            .await
-            .map_err(AppError::Database)?;
-
-    if email_exists {
-        return Err(AppError::Conflict("Email already exists".into()));
-    }
+    let scope = crate::services::registration::resolve_and_validate_registration_scope(
+        &state.db,
+        &email,
+        req.org_id,
+        req.org_slug.as_deref(),
+        req.department_id,
+        req.department_slug.as_deref(),
+    )
+    .await?;
 
     let user_id = Uuid::new_v4();
     let password_hash = crate::services::passwords::hash_password_blocking(
@@ -278,7 +272,7 @@ async fn register_user(
     .bind(&email)
     .bind(&name)
     .bind(&password_hash)
-    .bind(org_id)
+    .bind(scope.org_id)
     .execute(&mut *tx)
     .await
     .map_err(map_user_insert_error)?;
@@ -290,8 +284,8 @@ async fn register_user(
          DO UPDATE SET department_id = EXCLUDED.department_id",
     )
     .bind(user_id)
-    .bind(org_id)
-    .bind(department_id)
+    .bind(scope.org_id)
+    .bind(scope.department_id)
     .execute(&mut *tx)
     .await
     .map_err(AppError::Database)?;
@@ -303,62 +297,23 @@ async fn register_user(
         email,
         name,
         personal_org_id: None,
-        default_org_id: org_id,
+        default_org_id: scope.org_id,
     })
 }
 
 fn map_user_insert_error(error: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(database_error) = &error {
         if database_error.code().as_deref() == Some("23505")
-            && database_error.constraint() == Some("users_email_key")
+            && matches!(
+                database_error.constraint(),
+                Some("users_email_key" | "idx_users_email_lower")
+            )
         {
             return AppError::Conflict("Email already exists".into());
         }
     }
 
     AppError::Database(error)
-}
-
-async fn resolve_register_scope(
-    state: &AppState,
-    req: &RegisterRequest,
-) -> Result<(Uuid, Uuid), AppError> {
-    let org_id = match req.org_id {
-        Some(org_id) => org_id,
-        None => {
-            let org_slug = req
-                .org_slug
-                .as_deref()
-                .ok_or_else(|| AppError::BadRequest("Organization is required".into()))?
-                .trim();
-            if org_slug.is_empty() {
-                return Err(AppError::BadRequest("Organization is required".into()));
-            }
-            crate::services::registration::find_org_id_by_slug(&state.db, org_slug).await?
-        }
-    };
-
-    let department_id = match req.department_id {
-        Some(department_id) => department_id,
-        None => {
-            let department_slug = req
-                .department_slug
-                .as_deref()
-                .ok_or_else(|| AppError::BadRequest("Department is required".into()))?
-                .trim();
-            if department_slug.is_empty() {
-                return Err(AppError::BadRequest("Department is required".into()));
-            }
-            crate::services::registration::find_department_id_by_slug(
-                &state.db,
-                org_id,
-                department_slug,
-            )
-            .await?
-        }
-    };
-
-    Ok((org_id, department_id))
 }
 
 fn parse_register_request(headers: &HeaderMap, body: &Bytes) -> Result<RegisterRequest, AppError> {
@@ -722,9 +677,11 @@ mod tests {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
         };
-        let (org_id, department_id) = insert_registration_scope(&db.state.db).await?;
-        let first_req = register_request("duplicate@example.com", org_id, department_id);
-        let second_req = register_request("Duplicate@Example.com", org_id, department_id);
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let first_req =
+            register_request("duplicate@example.com", scope.org_id, scope.department_id);
+        let second_req =
+            register_request("Duplicate@Example.com", scope.org_id, scope.department_id);
 
         let first = register_user(&db.state, &first_req);
         let second = register_user(&db.state, &second_req);
@@ -747,6 +704,88 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn register_with_slug_scope_succeeds() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let req = register_slug_request("slug-user@example.com", &scope);
+
+        let response = register_user(&db.state, &req).await?;
+
+        assert_eq!(response.default_org_id, scope.org_id);
+        assert_eq!(table_count(&db.state.db, "users").await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn register_rejects_email_domain_outside_org() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let req = register_request("outsider@other.com", scope.org_id, scope.department_id);
+
+        let result = register_user(&db.state, &req).await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::Forbidden(message))
+                if message == "Email domain is not allowed for this organization"
+        ));
+        assert_eq!(table_count(&db.state.db, "users").await?, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn register_rejects_unknown_org_slug() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let mut req = register_slug_request("unknown-org@example.com", &scope);
+        req.org_slug = Some("missing-org".to_string());
+
+        let result = register_user(&db.state, &req).await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::BadRequest(message))
+                if message == "Organization 'missing-org' is not configured for registration"
+        ));
+        assert_eq!(table_count(&db.state.db, "users").await?, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn register_rejects_unknown_department_slug() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let mut req = register_slug_request("unknown-department@example.com", &scope);
+        req.department_slug = Some("missing-department".to_string());
+
+        let result = register_user(&db.state, &req).await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::BadRequest(message))
+                if message == "Department 'missing-department' is not configured for registration"
+        ));
+        assert_eq!(table_count(&db.state.db, "users").await?, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     fn register_request(email: &str, org_id: Uuid, department_id: Uuid) -> RegisterRequest {
         RegisterRequest {
             email: email.to_string(),
@@ -761,14 +800,39 @@ mod tests {
         }
     }
 
-    async fn insert_registration_scope(pool: &sqlx::PgPool) -> anyhow::Result<(Uuid, Uuid)> {
+    fn register_slug_request(email: &str, scope: &RegistrationScopeFixture) -> RegisterRequest {
+        RegisterRequest {
+            email: email.to_string(),
+            name: "Slug User".to_string(),
+            password: "correct-horse-battery".to_string(),
+            confirm_password: Some("correct-horse-battery".to_string()),
+            org_id: None,
+            department_id: None,
+            org_slug: Some(scope.org_slug.clone()),
+            department_slug: Some(scope.department_slug.clone()),
+            return_to: None,
+        }
+    }
+
+    struct RegistrationScopeFixture {
+        org_id: Uuid,
+        department_id: Uuid,
+        org_slug: String,
+        department_slug: String,
+    }
+
+    async fn insert_registration_scope(
+        pool: &sqlx::PgPool,
+    ) -> anyhow::Result<RegistrationScopeFixture> {
         let org_id = Uuid::new_v4();
         let department_id = Uuid::new_v4();
+        let org_slug = format!("registration-test-{}", org_id.simple());
+        let department_slug = format!("engineering-{}", department_id.simple());
 
         sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
             .bind(org_id)
             .bind("Registration Test Org")
-            .bind(format!("registration-test-{}", org_id.simple()))
+            .bind(&org_slug)
             .execute(pool)
             .await?;
         sqlx::query(
@@ -782,11 +846,16 @@ mod tests {
             .bind(department_id)
             .bind(org_id)
             .bind("Engineering")
-            .bind(format!("engineering-{}", department_id.simple()))
+            .bind(&department_slug)
             .execute(pool)
             .await?;
 
-        Ok((org_id, department_id))
+        Ok(RegistrationScopeFixture {
+            org_id,
+            department_id,
+            org_slug,
+            department_slug,
+        })
     }
 
     async fn table_count(pool: &sqlx::PgPool, table: &str) -> anyhow::Result<i64> {

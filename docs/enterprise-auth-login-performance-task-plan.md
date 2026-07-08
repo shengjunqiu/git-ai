@@ -708,24 +708,24 @@ git commit -m "Run enterprise password hashing on blocking workers"
 
 实现步骤：
 
-- [ ] 新增服务函数，例如：
+- [x] 新增服务函数，例如：
 
 ```rust
 resolve_and_validate_registration_scope(pool, email, org_id/org_slug, department_id/department_slug)
 ```
 
-- [ ] 用一个 SQL 同时确认：
+- [x] 用一个 SQL 同时确认：
   - org 存在。
   - org domain verified。
   - department 存在并属于 org。
-- [ ] 保留清晰错误信息。
-- [ ] 对已传 UUID 和 slug 两种路径都覆盖。
+- [x] 保留清晰错误信息。
+- [x] 对已传 UUID 和 slug 两种路径都覆盖。
 
 验收标准：
 
-- [ ] 注册前置校验 DB 往返减少。
-- [ ] org/domain/department 错误仍返回正确错误。
-- [ ] 现有注册表单行为不变。
+- [x] 注册前置校验 DB 往返减少。
+- [x] org/domain/department 错误仍返回正确错误。
+- [x] 现有注册表单行为不变。
 
 ### 5.2 移除邮箱 exists 预查询，依赖唯一索引
 
@@ -735,23 +735,23 @@ resolve_and_validate_registration_scope(pool, email, org_id/org_slug, department
 
 实现步骤：
 
-- [ ] 删除注册中的：
+- [x] 删除注册中的：
 
 ```sql
 SELECT EXISTS(SELECT 1 FROM users WHERE lower(email) = lower($1))
 ```
 
-- [ ] 直接执行 insert。
-- [ ] 通过 `idx_users_email_lower` 或现有唯一约束捕获冲突。
-- [ ] 更新 `map_user_insert_error`，兼容：
+- [x] 直接执行 insert。
+- [x] 通过 `idx_users_email_lower` 或现有唯一约束捕获冲突。
+- [x] 更新 `map_user_insert_error`，兼容：
   - `users_email_key`
   - `idx_users_email_lower`
 
 验收标准：
 
-- [ ] 重复邮箱注册返回 conflict。
-- [ ] 并发同邮箱注册仍只有一个成功。
-- [ ] 注册成功路径减少一次 DB 查询。
+- [x] 重复邮箱注册返回 conflict。
+- [x] 并发同邮箱注册仍只有一个成功。
+- [x] 注册成功路径减少一次 DB 查询。
 
 测试命令：
 
@@ -768,6 +768,15 @@ cargo test
 git add enterprise-server/src/services/registration.rs enterprise-server/src/handlers/auth_api.rs docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Reduce enterprise registration database round trips"
 ```
+
+### 5.3 执行记录
+
+- [x] 已新增 `resolve_and_validate_registration_scope`，用一次 SQL 同时解析 org、department 并校验邮箱域名。
+- [x] 已将注册 handler 切换到合并 scope 校验，移除本地 `resolve_register_scope`。
+- [x] 已删除注册前的邮箱 exists 预查询，重复邮箱改为依赖唯一约束返回 conflict。
+- [x] `map_user_insert_error` 已同时识别 `users_email_key` 和 `idx_users_email_lower`。
+- [x] 已补充 slug 注册成功、邮箱域名不匹配、未知 org slug、未知 department slug 测试。
+- [x] 验证通过：`cargo test auth_api`、`cargo test registration`、`cargo test`、`cargo check`、定向 `rustfmt --check`、`git diff --check`。
 
 ## 阶段 6: 登录审计写入异步化
 
