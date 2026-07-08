@@ -1,0 +1,56 @@
+enterprise-server/src/handlers/report.rs
+  a73676cfded0c055 474,481,862
+enterprise-server/src/main.rs
+  a73676cfded0c055 69,78
+enterprise-server/deploy/.env.example
+  a73676cfded0c055 17-19
+enterprise-server/deploy/README.md
+  a73676cfded0c055 210-219
+enterprise-server/src/handlers/release.rs
+  a73676cfded0c055 613,620,900
+enterprise-server/src/config.rs
+  a73676cfded0c055 17,33,72,120-123,216,226,234,252,268,286
+enterprise-server/.env.example
+  a73676cfded0c055 19-21
+enterprise-server/src/services/passwords.rs
+  a73676cfded0c055 3-4,6-7,43-73,104-129
+enterprise-server/deploy/docker-compose.yml
+  a73676cfded0c055 23-24,26
+enterprise-server/docker-compose.yml
+  a73676cfded0c055 16-17,19
+enterprise-server/src/handlers/cas.rs
+  a73676cfded0c055 262,269,716
+enterprise-server/src/handlers/oauth.rs
+  a73676cfded0c055 419,426,606
+enterprise-server/src/routes.rs
+  a73676cfded0c055 14-28
+enterprise-server/src/auth/jwt.rs
+  a73676cfded0c055 123
+docs/enterprise-auth-login-performance-task-plan.md
+  a73676cfded0c055 571-573,579-580,584-585,596,600,617-620,624-626,636,644,652-653,666-669,678-686
+enterprise-server/src/services/rate_limit.rs
+  a73676cfded0c055 458
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 150-156,264-268,694,701,812
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "266c9d36cb9f40eaa41ac2f74b581a3311396f2b",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 302,
+      "total_deletions": 120,
+      "accepted_lines": 586,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/ec13fae1ae94fcd4ea79c95b0e4c22bdecc841b996a960e5efda25aba2f31339"
+    }
+  }
+}
