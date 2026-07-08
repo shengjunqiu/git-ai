@@ -1,0 +1,26 @@
+enterprise-server/src/services/client_status.rs
+  a73676cfded0c055 136-154,359-370,432-516,554-582
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 604-608,623-624,633-649
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "99c772fea232d5620797b89eb1c493d35ff85040",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 17,
+      "accepted_lines": 172,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/5495e726bb6efe83de685e68742537913b4e6ebd6e36f9b016d39e2047fcc989"
+    }
+  }
+}
