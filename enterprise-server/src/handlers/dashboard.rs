@@ -1649,16 +1649,58 @@ fn parse_epoch_filters(
     ))
 }
 
-/// GET /api/v1/aggregate/summary — Global aggregate summary
-pub async fn aggregate_summary(
-    State(state): State<AppState>,
-    auth: DashboardAuth,
-    Query(query): Query<AggregateQuery>,
-) -> Result<Json<Value>, AppError> {
-    let (user_filter, org_filter) = build_data_filters(&auth.0);
-    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
+type SummaryMetricRow = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
+type TrendMetricRow = (chrono::NaiveDate, Option<i64>, Option<i64>, Option<i64>);
+type ToolMetricRow = (
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
+type AgentMetricRow = (
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
 
-    let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+async fn fetch_metrics_summary_row(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+    since_ts: Option<i64>,
+    until_ts: Option<i64>,
+) -> Result<SummaryMetricRow, AppError> {
+    if use_rollups {
+        return sqlx::query_as(
+            r#"SELECT
+                COALESCE(SUM(commits), 0)::bigint as total_commits,
+                COALESCE(SUM(total_lines), 0)::bigint as total_code_lines,
+                COALESCE(SUM(ai_lines), 0)::bigint as total_ai_lines,
+                COALESCE(SUM(human_lines), 0)::bigint as total_human_lines
+            FROM metrics_daily_rollups
+            WHERE tool_model = ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::bigint IS NULL OR day >= (to_timestamp($3) AT TIME ZONE 'UTC')::date)
+              AND ($4::bigint IS NULL OR day <= (to_timestamp($4) AT TIME ZONE 'UTC')::date)"#,
+        )
+        .bind(user_filter)
+        .bind(org_filter)
+        .bind(since_ts)
+        .bind(until_ts)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::Database(e));
+    }
+
+    sqlx::query_as(
         r#"SELECT
             COUNT(*) as total_commits,
             COALESCE(SUM(git_diff_added_lines), 0) as total_code_lines,
@@ -1668,15 +1710,394 @@ pub async fn aggregate_summary(
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
           AND ($3::bigint IS NULL OR timestamp >= $3)
-          AND ($4::bigint IS NULL OR timestamp <= $4)"#
+          AND ($4::bigint IS NULL OR timestamp <= $4)"#,
     )
     .bind(user_filter)
     .bind(org_filter)
     .bind(since_ts)
     .bind(until_ts)
-    .fetch_one(&state.db)
+    .fetch_one(pool)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(|e| AppError::Database(e))
+}
+
+async fn fetch_total_developers(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+    since_ts: Option<i64>,
+    until_ts: Option<i64>,
+    since_text: &Option<String>,
+    until_text: &Option<String>,
+) -> Result<i64, AppError> {
+    let metrics_source = if use_rollups {
+        r#"SELECT user_id
+            FROM metrics_daily_rollups
+            WHERE tool_model = ''
+              AND user_id <> '00000000-0000-0000-0000-000000000000'::uuid
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::bigint IS NULL OR day >= (to_timestamp($3) AT TIME ZONE 'UTC')::date)
+              AND ($4::bigint IS NULL OR day <= (to_timestamp($4) AT TIME ZONE 'UTC')::date)"#
+    } else {
+        r#"SELECT user_id
+            FROM metrics_events
+            WHERE event_type = 1
+              AND user_id IS NOT NULL
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::bigint IS NULL OR timestamp >= $3)
+              AND ($4::bigint IS NULL OR timestamp <= $4)"#
+    };
+
+    sqlx::query_scalar::<_, i64>(&format!(
+        r#"SELECT COUNT(DISTINCT user_id)::bigint
+        FROM (
+            {metrics_source}
+
+            UNION ALL
+
+            SELECT p.user_id
+            FROM projects p
+            JOIN commit_stats cs ON cs.project_id = p.id
+            WHERE p.user_id IS NOT NULL
+              AND ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+              AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
+              AND NOT EXISTS (
+                  SELECT 1 FROM metrics_events m
+                  WHERE m.event_type = 1
+                    AND m.commit_sha = cs.sha
+                    AND ($1::uuid IS NULL OR m.user_id = $1)
+                    AND ($2::uuid IS NULL OR m.org_id = $2)
+              )
+        ) combined
+        WHERE user_id IS NOT NULL"#
+    ))
+    .bind(user_filter)
+    .bind(org_filter)
+    .bind(since_ts)
+    .bind(until_ts)
+    .bind(since_text)
+    .bind(until_text)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::Database(e))
+}
+
+async fn fetch_metrics_project_urls(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+    since_ts: Option<i64>,
+    until_ts: Option<i64>,
+) -> Result<Vec<String>, AppError> {
+    if use_rollups {
+        return sqlx::query_scalar::<_, String>(
+            r#"SELECT DISTINCT repo_url
+            FROM metrics_daily_rollups
+            WHERE tool_model = '' AND repo_url != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::bigint IS NULL OR day >= (to_timestamp($3) AT TIME ZONE 'UTC')::date)
+              AND ($4::bigint IS NULL OR day <= (to_timestamp($4) AT TIME ZONE 'UTC')::date)"#,
+        )
+        .bind(user_filter)
+        .bind(org_filter)
+        .bind(since_ts)
+        .bind(until_ts)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AppError::Database(e));
+    }
+
+    sqlx::query_scalar::<_, String>(
+        r#"SELECT DISTINCT repo_url
+        FROM metrics_events
+        WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+          AND ($1::uuid IS NULL OR user_id = $1)
+          AND ($2::uuid IS NULL OR org_id = $2)
+          AND ($3::bigint IS NULL OR timestamp >= $3)
+          AND ($4::bigint IS NULL OR timestamp <= $4)"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .bind(since_ts)
+    .bind(until_ts)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Database(e))
+}
+
+async fn fetch_trend_rows(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+    org_slug: &Option<String>,
+    since_ts: Option<i64>,
+    until_ts: Option<i64>,
+    since_text: &Option<String>,
+    until_text: &Option<String>,
+    date_trunc: &str,
+) -> Result<Vec<TrendMetricRow>, AppError> {
+    let metrics_source = if use_rollups {
+        format!(
+            r#"SELECT
+                DATE_TRUNC('{0}', day::timestamp)::date AS period,
+                COALESCE(SUM(ai_lines), 0)::bigint AS ai_lines,
+                COALESCE(SUM(human_lines), 0)::bigint AS human_lines,
+                COALESCE(SUM(commits), 0)::bigint AS commits
+            FROM metrics_daily_rollups
+            WHERE tool_model = ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+              AND ($4::bigint IS NULL OR day >= (to_timestamp($4) AT TIME ZONE 'UTC')::date)
+              AND ($5::bigint IS NULL OR day <= (to_timestamp($5) AT TIME ZONE 'UTC')::date)
+            GROUP BY DATE_TRUNC('{0}', day::timestamp)"#,
+            date_trunc
+        )
+    } else {
+        format!(
+            r#"SELECT
+                DATE_TRUNC('{0}', to_timestamp(timestamp) AT TIME ZONE 'UTC')::date AS period,
+                COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
+                COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)::bigint AS human_lines,
+                COUNT(*)::bigint AS commits
+            FROM metrics_events
+            WHERE event_type = 1
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+              AND ($4::bigint IS NULL OR timestamp >= $4)
+              AND ($5::bigint IS NULL OR timestamp <= $5)
+            GROUP BY DATE_TRUNC('{0}', to_timestamp(timestamp) AT TIME ZONE 'UTC')"#,
+            date_trunc
+        )
+    };
+
+    let sql = format!(
+        r#"SELECT
+            period,
+            COALESCE(SUM(ai_lines), 0)::bigint AS ai_lines,
+            COALESCE(SUM(human_lines), 0)::bigint AS human_lines,
+            COALESCE(SUM(commits), 0)::bigint AS commits
+        FROM (
+            {metrics_source}
+
+            UNION ALL
+
+            SELECT
+                DATE_TRUNC('{0}', cs.author_time_at AT TIME ZONE 'UTC')::date AS period,
+                COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
+                COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0)::bigint AS human_lines,
+                COUNT(*)::bigint AS commits
+            FROM projects p
+            JOIN commit_stats cs ON cs.project_id = p.id
+            WHERE cs.author_time_at IS NOT NULL
+              AND ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
+              AND ($6::timestamptz IS NULL OR cs.author_time_at >= $6::timestamptz)
+              AND ($7::timestamptz IS NULL OR cs.author_time_at <= $7::timestamptz)
+              AND NOT EXISTS (
+                  SELECT 1 FROM metrics_events m
+                  WHERE m.event_type = 1
+                    AND m.commit_sha = cs.sha
+                    AND ($1::uuid IS NULL OR m.user_id = $1)
+                    AND ($2::uuid IS NULL OR m.org_id = $2)
+              )
+            GROUP BY DATE_TRUNC('{0}', cs.author_time_at AT TIME ZONE 'UTC')
+        ) combined
+        GROUP BY period
+        ORDER BY period"#,
+        date_trunc
+    );
+
+    sqlx::query_as(&sql)
+        .bind(user_filter)
+        .bind(org_filter)
+        .bind(org_slug)
+        .bind(since_ts)
+        .bind(until_ts)
+        .bind(since_text)
+        .bind(until_text)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AppError::Database(e))
+}
+
+async fn fetch_metrics_tool_rows(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+) -> Result<Vec<ToolMetricRow>, AppError> {
+    if use_rollups {
+        return sqlx::query_as(
+            r#"SELECT
+                tool_model,
+                COALESCE(SUM(ai_lines), 0)::bigint AS ai_additions,
+                COALESCE(SUM(mixed_lines), 0)::bigint AS mixed_additions,
+                COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+                COALESCE(SUM(ai_lines), 0)::bigint AS total_ai_additions,
+                0::bigint AS total_ai_deletions
+            FROM metrics_daily_rollups
+            WHERE tool_model != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+            GROUP BY tool_model
+            ORDER BY SUM(ai_lines) DESC"#,
+        )
+        .bind(user_filter)
+        .bind(org_filter)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AppError::Database(e));
+    }
+
+    sqlx::query_as(
+        r#"SELECT
+            pair.tool_model,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions
+        FROM metrics_events m
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS pair(tool_model, ord)
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
+        WHERE m.event_type = 1
+          AND pair.tool_model != 'all'
+          AND pair.tool_model != ''
+          AND ($1::uuid IS NULL OR m.user_id = $1)
+          AND ($2::uuid IS NULL OR m.org_id = $2)
+        GROUP BY pair.tool_model
+        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Database(e))
+}
+
+async fn fetch_metrics_agent_rows(
+    pool: &sqlx::PgPool,
+    use_rollups: bool,
+    user_filter: Option<Uuid>,
+    org_filter: Option<Uuid>,
+    org_slug: &Option<String>,
+) -> Result<Vec<AgentMetricRow>, AppError> {
+    if use_rollups {
+        return sqlx::query_as(
+            r#"SELECT
+                tool_model,
+                COALESCE(SUM(ai_lines), 0)::bigint AS ai_additions,
+                COALESCE(SUM(mixed_lines), 0)::bigint AS mixed_additions,
+                COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+                COALESCE(SUM(ai_lines), 0)::bigint AS total_ai_additions,
+                0::bigint AS total_ai_deletions,
+                COALESCE(SUM(commits), 0)::bigint AS commits
+            FROM metrics_daily_rollups
+            WHERE tool_model != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY tool_model
+            ORDER BY SUM(ai_lines) DESC"#,
+        )
+        .bind(user_filter)
+        .bind(org_filter)
+        .bind(org_slug)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AppError::Database(e));
+    }
+
+    sqlx::query_as(
+        r#"SELECT
+            pair.tool_model,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions,
+            COUNT(DISTINCT m.id)::bigint AS commits
+        FROM metrics_events m
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS pair(tool_model, ord)
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
+        LEFT JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
+        WHERE m.event_type = 1
+          AND pair.tool_model != 'all'
+          AND pair.tool_model != ''
+          AND ($1::uuid IS NULL OR m.user_id = $1)
+          AND ($2::uuid IS NULL OR m.org_id = $2)
+          AND ($3::text IS NULL OR m.org_id = (SELECT id FROM organizations WHERE slug = $3))
+        GROUP BY pair.tool_model
+        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#,
+    )
+    .bind(user_filter)
+    .bind(org_filter)
+    .bind(org_slug)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Database(e))
+}
+
+/// GET /api/v1/aggregate/summary — Global aggregate summary
+pub async fn aggregate_summary(
+    State(state): State<AppState>,
+    auth: DashboardAuth,
+    Query(query): Query<AggregateQuery>,
+) -> Result<Json<Value>, AppError> {
+    let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
+
+    let row = fetch_metrics_summary_row(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
+        since_ts,
+        until_ts,
+    )
+    .await?;
 
     let report_row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
@@ -1710,63 +2131,26 @@ pub async fn aggregate_summary(
     let total_code = row.1.unwrap_or(0) + report_row.1.unwrap_or(0);
     let total_ai = row.2.unwrap_or(0) + report_row.2.unwrap_or(0);
     let total_human = row.3.unwrap_or(0) + report_row.3.unwrap_or(0);
-    let total_developers: i64 = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(DISTINCT user_id)::bigint
-        FROM (
-            SELECT user_id
-            FROM metrics_events
-            WHERE event_type = 1
-              AND user_id IS NOT NULL
-              AND ($1::uuid IS NULL OR user_id = $1)
-              AND ($2::uuid IS NULL OR org_id = $2)
-              AND ($3::bigint IS NULL OR timestamp >= $3)
-              AND ($4::bigint IS NULL OR timestamp <= $4)
-
-            UNION ALL
-
-            SELECT p.user_id
-            FROM projects p
-            JOIN commit_stats cs ON cs.project_id = p.id
-            WHERE p.user_id IS NOT NULL
-              AND ($1::uuid IS NULL OR p.user_id = $1)
-              AND ($2::uuid IS NULL OR p.org_id = $2)
-              AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
-              AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
-              AND NOT EXISTS (
-                  SELECT 1 FROM metrics_events m
-                  WHERE m.event_type = 1
-                    AND m.commit_sha = cs.sha
-                    AND ($1::uuid IS NULL OR m.user_id = $1)
-                    AND ($2::uuid IS NULL OR m.org_id = $2)
-              )
-        ) combined
-        WHERE user_id IS NOT NULL"#,
+    let total_developers = fetch_total_developers(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
+        since_ts,
+        until_ts,
+        &query.since,
+        &query.until,
     )
-    .bind(user_filter)
-    .bind(org_filter)
-    .bind(since_ts)
-    .bind(until_ts)
-    .bind(&query.since)
-    .bind(&query.until)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-    let metrics_project_urls: Vec<String> = sqlx::query_scalar::<_, String>(
-        r#"SELECT DISTINCT repo_url
-        FROM metrics_events
-        WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
-          AND ($3::bigint IS NULL OR timestamp >= $3)
-          AND ($4::bigint IS NULL OR timestamp <= $4)"#,
+    .await?;
+    let metrics_project_urls = fetch_metrics_project_urls(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
+        since_ts,
+        until_ts,
     )
-    .bind(user_filter)
-    .bind(org_filter)
-    .bind(since_ts)
-    .bind(until_ts)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    .await?;
 
     let report_project_hashes: Vec<String> = sqlx::query_scalar::<_, String>(
         r#"SELECT DISTINCT p.remote_url_hash
@@ -2395,46 +2779,14 @@ pub async fn aggregate_tools(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    // From metrics_events: expand tool_model_pairs and PosEncoded arrays by matching ordinality.
-    let metrics_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"SELECT
-            pair.tool_model,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions
-        FROM metrics_events m
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS pair(tool_model, ord)
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
-        WHERE m.event_type = 1
-          AND pair.tool_model != 'all'
-          AND ($1::uuid IS NULL OR m.user_id = $1)
-          AND ($2::uuid IS NULL OR m.org_id = $2)
-        GROUP BY pair.tool_model
-        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#
+    // From committed metrics events or daily rollups.
+    let metrics_rows = fetch_metrics_tool_rows(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
     )
-    .bind(user_filter)
-    .bind(org_filter)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    .await?;
 
     // Also get Checkpoint events (type 4) which have tool/model directly
     let checkpoint_rows: Vec<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
@@ -2562,64 +2914,19 @@ pub async fn aggregate_trends(
         _ => "week",
     };
 
-    let rows: Vec<(chrono::NaiveDate, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        &format!(r#"SELECT
-            period,
-            COALESCE(SUM(ai_lines), 0)::bigint AS ai_lines,
-            COALESCE(SUM(human_lines), 0)::bigint AS human_lines,
-            COALESCE(SUM(commits), 0)::bigint AS commits
-        FROM (
-            SELECT
-                DATE_TRUNC('{0}', to_timestamp(timestamp))::date AS period,
-                COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
-                COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)::bigint AS human_lines,
-                COUNT(*)::bigint AS commits
-            FROM metrics_events
-            WHERE event_type = 1
-              AND ($1::uuid IS NULL OR user_id = $1)
-              AND ($2::uuid IS NULL OR org_id = $2)
-              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::bigint IS NULL OR timestamp >= $4)
-              AND ($5::bigint IS NULL OR timestamp <= $5)
-            GROUP BY DATE_TRUNC('{0}', to_timestamp(timestamp))
-
-            UNION ALL
-
-            SELECT
-                DATE_TRUNC('{0}', cs.author_time_at)::date AS period,
-                COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
-                COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0)::bigint AS human_lines,
-                COUNT(*)::bigint AS commits
-            FROM projects p
-            JOIN commit_stats cs ON cs.project_id = p.id
-            WHERE cs.author_time_at IS NOT NULL
-              AND ($1::uuid IS NULL OR p.user_id = $1)
-              AND ($2::uuid IS NULL OR p.org_id = $2)
-              AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($6::timestamptz IS NULL OR cs.author_time_at >= $6::timestamptz)
-              AND ($7::timestamptz IS NULL OR cs.author_time_at <= $7::timestamptz)
-              AND NOT EXISTS (
-                  SELECT 1 FROM metrics_events m
-                  WHERE m.event_type = 1
-                    AND m.commit_sha = cs.sha
-                    AND ($1::uuid IS NULL OR m.user_id = $1)
-                    AND ($2::uuid IS NULL OR m.org_id = $2)
-              )
-            GROUP BY DATE_TRUNC('{0}', cs.author_time_at)
-        ) combined
-        GROUP BY period
-        ORDER BY period"#, date_trunc)
+    let rows = fetch_trend_rows(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
+        &query.org,
+        since_ts,
+        until_ts,
+        &query.since,
+        &query.until,
+        date_trunc,
     )
-    .bind(user_filter)
-    .bind(org_filter)
-    .bind(&query.org)
-    .bind(since_ts)
-    .bind(until_ts)
-    .bind(&query.since)
-    .bind(&query.until)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    .await?;
 
     let data: Vec<Value> = rows
         .iter()
@@ -2701,49 +3008,15 @@ pub async fn aggregate_agent_comparison(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    // From metrics events (real-time): expand tool_model_pairs and PosEncoded arrays by matching ordinality.
-    let metrics_rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"SELECT
-            pair.tool_model,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions,
-            COUNT(DISTINCT m.id)::bigint AS commits
-        FROM metrics_events m
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS pair(tool_model, ord)
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
-        WHERE m.event_type = 1
-          AND pair.tool_model != 'all'
-          AND ($1::uuid IS NULL OR m.user_id = $1)
-          AND ($2::uuid IS NULL OR m.org_id = $2)
-          AND ($3::text IS NULL OR m.org_id = (SELECT id FROM organizations WHERE slug = $3))
-        GROUP BY pair.tool_model
-        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#
+    // From committed metrics events or daily rollups.
+    let metrics_rows = fetch_metrics_agent_rows(
+        &state.db,
+        state.config.dashboard_use_rollups,
+        user_filter,
+        org_filter,
+        &query.org,
     )
-    .bind(user_filter)
-    .bind(org_filter)
-    .bind(&query.org)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    .await?;
 
     let mut comparisons: Vec<Value> = Vec::new();
 
@@ -2892,6 +3165,9 @@ pub fn build_data_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
+    use uuid::Uuid;
 
     #[test]
     fn parse_epoch_seconds_param_accepts_rfc3339() {
@@ -2922,5 +3198,274 @@ mod tests {
             parse_epoch_seconds_param("since", Some("not-a-date")),
             Err(AppError::BadRequest(_))
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn summary_rollup_matches_metrics_detail_path() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+        insert_dashboard_metrics_fixture(&db.pool, user_id, org_id).await?;
+
+        let detail = fetch_metrics_summary_row(&db.pool, false, Some(user_id), Some(org_id), None, None).await?;
+        let rollup = fetch_metrics_summary_row(&db.pool, true, Some(user_id), Some(org_id), None, None).await?;
+        assert_eq!(detail, (Some(2), Some(70), Some(30), Some(40)));
+        assert_eq!(rollup, detail);
+
+        let detail_developers =
+            fetch_total_developers(&db.pool, false, Some(user_id), Some(org_id), None, None, &None, &None).await?;
+        let rollup_developers =
+            fetch_total_developers(&db.pool, true, Some(user_id), Some(org_id), None, None, &None, &None).await?;
+        assert_eq!(detail_developers, 1);
+        assert_eq!(rollup_developers, detail_developers);
+
+        let mut detail_projects =
+            fetch_metrics_project_urls(&db.pool, false, Some(user_id), Some(org_id), None, None).await?;
+        let mut rollup_projects =
+            fetch_metrics_project_urls(&db.pool, true, Some(user_id), Some(org_id), None, None).await?;
+        detail_projects.sort();
+        rollup_projects.sort();
+        assert_eq!(rollup_projects, detail_projects);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn trend_and_tool_rollups_match_metrics_detail_path() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+        insert_dashboard_metrics_fixture(&db.pool, user_id, org_id).await?;
+
+        let detail_trends =
+            fetch_trend_rows(&db.pool, false, Some(user_id), Some(org_id), &None, None, None, &None, &None, "day")
+                .await?;
+        let rollup_trends =
+            fetch_trend_rows(&db.pool, true, Some(user_id), Some(org_id), &None, None, None, &None, &None, "day")
+                .await?;
+        assert_eq!(rollup_trends, detail_trends);
+
+        let detail_tools = fetch_metrics_tool_rows(&db.pool, false, Some(user_id), Some(org_id)).await?;
+        let rollup_tools = fetch_metrics_tool_rows(&db.pool, true, Some(user_id), Some(org_id)).await?;
+        assert_eq!(detail_tools, rollup_tools);
+        assert_eq!(rollup_tools[0].0, "codex::gpt-5");
+        assert_eq!(rollup_tools[0].1, Some(9));
+        assert_eq!(rollup_tools[0].2, Some(3));
+        assert_eq!(rollup_tools[0].3, Some(5));
+
+        let detail_agents =
+            fetch_metrics_agent_rows(&db.pool, false, Some(user_id), Some(org_id), &None).await?;
+        let rollup_agents =
+            fetch_metrics_agent_rows(&db.pool, true, Some(user_id), Some(org_id), &None).await?;
+        assert_eq!(rollup_agents, detail_agents);
+        assert_eq!(rollup_agents[0].6, Some(2));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    struct TestDatabase {
+        pool: PgPool,
+        admin_pool: PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping dashboard database test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping dashboard database test: could not create isolated database {db_name}: {error}"
+                );
+                admin_pool.close().await;
+                return Ok(None);
+            }
+
+            let pool = PgPoolOptions::new()
+                .max_connections(4)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            Ok(Some(Self {
+                pool,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.pool.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid)> {
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Dashboard Test Org")
+            .bind(format!("dashboard-test-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("Dashboard Test User")
+            .bind(org_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(org_id)
+            .bind("member")
+            .execute(pool)
+            .await?;
+
+        Ok((user_id, org_id))
+    }
+
+    async fn insert_dashboard_metrics_fixture(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+    ) -> anyhow::Result<()> {
+        insert_dashboard_metric_row(pool, user_id, org_id, 1_700_000_000, "repo-a", "abc1", 30, 20, 5, 2, 3).await?;
+        insert_dashboard_metric_row(pool, user_id, org_id, 1_700_086_400, "repo-b", "abc2", 40, 10, 4, 1, 2).await?;
+        Ok(())
+    }
+
+    async fn insert_dashboard_metric_row(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        timestamp: i64,
+        repo_url: &str,
+        commit_sha: &str,
+        total_lines: i32,
+        total_ai_lines: i32,
+        tool_ai_lines: i32,
+        tool_mixed_lines: i32,
+        tool_accepted: i32,
+    ) -> anyhow::Result<()> {
+        let raw_values = serde_json::json!({
+            "3": ["all", "codex::gpt-5"],
+            "4": [tool_mixed_lines, tool_mixed_lines],
+            "5": [total_ai_lines, tool_ai_lines],
+            "6": [tool_accepted, tool_accepted],
+            "7": [total_ai_lines, tool_ai_lines],
+            "8": [0, 0],
+        });
+        let tool_model_pairs = serde_json::json!(["all", "codex::gpt-5"]);
+
+        sqlx::query(
+            r#"INSERT INTO metrics_events (
+                event_type, timestamp, user_id, org_id, repo_url, commit_sha,
+                human_additions, ai_additions, mixed_additions, ai_accepted,
+                git_diff_added_lines, tool_model_pairs, raw_values
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
+        )
+        .bind(1_i16)
+        .bind(timestamp)
+        .bind(user_id)
+        .bind(org_id)
+        .bind(repo_url)
+        .bind(commit_sha)
+        .bind(total_lines - total_ai_lines)
+        .bind(total_ai_lines)
+        .bind(tool_mixed_lines)
+        .bind(tool_accepted)
+        .bind(total_lines)
+        .bind(&tool_model_pairs)
+        .bind(&raw_values)
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO metrics_daily_rollups (
+                day, org_id, user_id, repo_url, tool_model,
+                commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
+            ) VALUES
+            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, '', 1, $5, $6, $7, $8, $9),
+            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, 'codex::gpt-5', 1, 0, $10, 0, $11, $12)"#,
+        )
+        .bind(timestamp)
+        .bind(org_id)
+        .bind(user_id)
+        .bind(repo_url)
+        .bind(i64::from(total_lines))
+        .bind(i64::from(total_ai_lines))
+        .bind(i64::from(total_lines - total_ai_lines))
+        .bind(i64::from(tool_mixed_lines))
+        .bind(i64::from(tool_accepted))
+        .bind(i64::from(tool_ai_lines))
+        .bind(i64::from(tool_mixed_lines))
+        .bind(i64::from(tool_accepted))
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_dashboard_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 }

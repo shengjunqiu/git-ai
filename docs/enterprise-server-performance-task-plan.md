@@ -1178,20 +1178,31 @@ git commit -m "Write daily metrics rollups"
 涉及文件：
 
 - `enterprise-server/src/handlers/dashboard.rs`
-- `enterprise-server/src/config.rs`
+- `enterprise-server/src/config.rs`（配置字段已在 3.4 落地，本阶段使用该字段）
 
 实现步骤：
 
-- [ ] 在 `AppConfig` 增加 `dashboard_use_rollups: bool`。
-- [ ] 默认先设为 `false`，生产验证后再切为 `true`。
-- [ ] 为 `aggregate_summary` 增加 rollup 查询路径。
-- [ ] 为 `aggregate_trends` 增加 rollup 查询路径。
-- [ ] 为 `aggregate_tools` 或 `aggregate_agent_comparison` 增加 rollup 查询路径。
-- [ ] 保留明细查询 fallback。
-- [ ] 增加测试对比：
+- [x] 在 `AppConfig` 增加 `dashboard_use_rollups: bool`。
+- [x] 默认先设为 `false`，生产验证后再切为 `true`。
+- [x] 为 `aggregate_summary` 增加 rollup 查询路径。
+- [x] 为 `aggregate_trends` 增加 rollup 查询路径。
+- [x] 为 `aggregate_tools` 和 `aggregate_agent_comparison` 增加 rollup 查询路径。
+- [x] 保留明细查询 fallback。
+- [x] 增加测试对比：
   - rollup enabled 的结果
   - 明细查询结果
   - 两者一致
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| 开关 | `DASHBOARD_USE_ROLLUPS=false` 仍为默认值，生产可灰度设为 `true` |
+| summary | metrics 明细部分可切到 `metrics_daily_rollups`，report fallback 继续合并 |
+| trends | metrics 趋势部分可切到 rollup，日期聚合统一按 UTC day/week/month |
+| tools | committed-event per-tool 统计可切到 rollup；report stats 和 checkpoint/agentusage 明细保留 |
+| agent comparison | committed-event per-tool 统计可切到 rollup；report stats 保留 |
+| 回退 | 关闭 `DASHBOARD_USE_ROLLUPS` 即恢复明细查询 |
 
 测试命令：
 
@@ -1211,14 +1222,23 @@ cargo test
 
 验收标准：
 
-- [ ] rollup enabled 时 dashboard 常用接口 p95 明显下降。
-- [ ] 查询结果与明细路径一致。
-- [ ] 可通过配置快速回退到明细查询。
+- [ ] rollup enabled 时 dashboard 常用接口 p95 明显下降。留到阶段 4 压测验证。
+- [x] 查询结果与明细路径一致。
+- [x] 可通过配置快速回退到明细查询。
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test dashboard` | 6 passed, 0 failed |
+| `cargo test` | 102 passed, 0 failed |
+| `git diff --check` | 通过 |
 
 提交建议：
 
 ```bash
-git add enterprise-server/src/handlers/dashboard.rs enterprise-server/src/config.rs enterprise-server/.env.example enterprise-server/deploy/.env.example
+git add docs/enterprise-server-performance-task-plan.md enterprise-server/src/handlers/dashboard.rs
 git commit -m "Read dashboard aggregates from rollups"
 ```
 
