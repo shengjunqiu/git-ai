@@ -133,8 +133,25 @@ pub async fn touch_last_seen(
                 WHEN developer_client_status.status <> 'logged_in' THEN now()
                 ELSE developer_client_status.last_status_at
             END,
-            last_seen_at = now(),
-            updated_at = now()"#,
+            last_seen_at = CASE
+                WHEN developer_client_status.status <> 'logged_in'
+                    OR developer_client_status.last_seen_at IS NULL
+                    OR developer_client_status.last_seen_at < now() - interval '60 seconds'
+                THEN now()
+                ELSE developer_client_status.last_seen_at
+            END,
+            updated_at = now()
+        WHERE developer_client_status.status <> 'logged_in'
+            OR developer_client_status.last_seen_at IS NULL
+            OR developer_client_status.last_seen_at < now() - interval '60 seconds'
+            OR (
+                EXCLUDED.org_id IS NOT NULL
+                AND developer_client_status.org_id IS DISTINCT FROM EXCLUDED.org_id
+            )
+            OR (
+                EXCLUDED.distinct_id IS NOT NULL
+                AND developer_client_status.distinct_id IS DISTINCT FROM EXCLUDED.distinct_id
+            )"#,
     )
     .bind(user_id)
     .bind(device_key)
@@ -339,14 +356,18 @@ mod tests {
         let status = get_status(&db.pool, user_id).await?.expect("status row");
         assert_eq!(status.status, "logged_in");
         assert_eq!(status.device_count, 2);
-        assert!(status
-            .devices
-            .iter()
-            .any(|device| device.device_key == "device-a"));
-        assert!(status
-            .devices
-            .iter()
-            .any(|device| device.device_key == "device-b"));
+        assert!(
+            status
+                .devices
+                .iter()
+                .any(|device| device.device_key == "device-a")
+        );
+        assert!(
+            status
+                .devices
+                .iter()
+                .any(|device| device.device_key == "device-b")
+        );
 
         db.cleanup().await?;
         Ok(())
@@ -408,6 +429,91 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn touch_last_seen_throttles_recent_logged_in_updates() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        touch_last_seen(&db.pool, user_id, Some(org_id), Some("device-a".into())).await?;
+        let first = client_status_row(&db.pool, user_id, "device-a").await?;
+
+        touch_last_seen(&db.pool, user_id, Some(org_id), Some("device-a".into())).await?;
+        let second = client_status_row(&db.pool, user_id, "device-a").await?;
+
+        assert_eq!(second.status, "logged_in");
+        assert_eq!(second.last_status_at, first.last_status_at);
+        assert_eq!(second.last_seen_at, first.last_seen_at);
+        assert_eq!(second.updated_at, first.updated_at);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn touch_last_seen_updates_after_throttle_window() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        touch_last_seen(&db.pool, user_id, Some(org_id), Some("device-a".into())).await?;
+        sqlx::query(
+            "UPDATE developer_client_status
+             SET last_seen_at = now() - interval '61 seconds',
+                 updated_at = now() - interval '61 seconds'
+             WHERE user_id = $1 AND device_key = $2",
+        )
+        .bind(user_id)
+        .bind("device-a")
+        .execute(&db.pool)
+        .await?;
+
+        let stale = client_status_row(&db.pool, user_id, "device-a").await?;
+        touch_last_seen(&db.pool, user_id, Some(org_id), Some("device-a".into())).await?;
+        let refreshed = client_status_row(&db.pool, user_id, "device-a").await?;
+
+        assert_eq!(refreshed.status, "logged_in");
+        assert_eq!(refreshed.last_status_at, stale.last_status_at);
+        assert!(refreshed.last_seen_at > stale.last_seen_at);
+        assert!(refreshed.updated_at > stale.updated_at);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn touch_last_seen_restores_logged_in_after_logout() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        record_status(
+            &db.pool,
+            user_id,
+            Some(org_id),
+            ClientStatus::LoggedOut,
+            metadata("device-a", "host-a"),
+        )
+        .await?;
+        let logged_out = client_status_row(&db.pool, user_id, "device-a").await?;
+
+        touch_last_seen(&db.pool, user_id, Some(org_id), Some("device-a".into())).await?;
+        let logged_in = client_status_row(&db.pool, user_id, "device-a").await?;
+        let status = get_status(&db.pool, user_id).await?.expect("status row");
+
+        assert_eq!(logged_out.status, "logged_out");
+        assert_eq!(logged_in.status, "logged_in");
+        assert!(logged_in.last_status_at >= logged_out.last_status_at);
+        assert!(logged_in.last_seen_at.is_some());
+        assert_eq!(status.status, "logged_in");
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     fn metadata(distinct_id: &str, hostname: &str) -> ClientStatusMetadata {
         ClientStatusMetadata {
             distinct_id: Some(distinct_id.to_string()),
@@ -443,6 +549,37 @@ mod tests {
             .await?;
 
         Ok((user_id, org_id))
+    }
+
+    #[derive(Debug)]
+    struct ClientStatusRow {
+        status: String,
+        last_status_at: DateTime<Utc>,
+        last_seen_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
+    }
+
+    async fn client_status_row(
+        pool: &PgPool,
+        user_id: Uuid,
+        device_key: &str,
+    ) -> anyhow::Result<ClientStatusRow> {
+        let (status, last_status_at, last_seen_at, updated_at) = sqlx::query_as(
+            r#"SELECT status, last_status_at, last_seen_at, updated_at
+               FROM developer_client_status
+               WHERE user_id = $1 AND device_key = $2"#,
+        )
+        .bind(user_id)
+        .bind(device_key)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(ClientStatusRow {
+            status,
+            last_status_at,
+            last_seen_at,
+            updated_at,
+        })
     }
 
     async fn table_count(pool: &PgPool, table: &str) -> anyhow::Result<i64> {

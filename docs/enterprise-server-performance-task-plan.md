@@ -601,11 +601,11 @@ git commit -m "Bulk insert enterprise metrics events"
 
 实现步骤：
 
-- [ ] 在 `touch_last_seen` 的 upsert 中加入 60 秒节流语义。
-- [ ] 当现有 `last_seen_at` 小于 `now() - interval '60 seconds'` 时才更新。
-- [ ] 如果当前状态不是 `logged_in`，仍应更新为 `logged_in`。
-- [ ] 不要影响显式 login/logout 的 `record_status`。
-- [ ] 增加测试：
+- [x] 在 `touch_last_seen` 的 upsert 中加入 60 秒节流语义。
+- [x] 当现有 `last_seen_at` 小于 `now() - interval '60 seconds'` 时才更新。
+- [x] 如果当前状态不是 `logged_in`，仍应更新为 `logged_in`。
+- [x] 不要影响显式 login/logout 的 `record_status`。
+- [x] 增加测试：
   - 连续两次 `touch_last_seen`，第二次不更新 `last_seen_at`。
   - 超过节流窗口后会更新。
   - logout 后 metrics touch 会恢复 logged_in。
@@ -620,8 +620,8 @@ cargo test
 
 验收标准：
 
-- [ ] 高频 metrics 上传不再每次更新 status 行。
-- [ ] dashboard 当前用户 CLI 状态显示仍正确。
+- [x] 高频 metrics 上传不再每次更新 status 行。
+- [x] dashboard 当前用户 CLI 状态显示仍正确。
 
 提交建议：
 
@@ -629,6 +629,24 @@ cargo test
 git add enterprise-server/src/services/client_status.rs
 git commit -m "Throttle client last seen updates"
 ```
+
+阶段 2.3 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| 60 秒节流 | 已实现，`touch_last_seen` 在 `ON CONFLICT DO UPDATE` 上增加 `WHERE`，节流窗口内且元数据不变时不写 status 行 |
+| `last_seen_at` 更新条件 | 已实现，仅未登录、`last_seen_at` 为空或超过 60 秒时刷新 |
+| logout 恢复登录 | 已实现，当前状态不是 `logged_in` 时仍更新 `status`、`last_status_at` 和 `last_seen_at` |
+| 显式 login/logout | 未改动 `record_status`，保持原语义 |
+| dashboard 状态 | `get_status` 测试覆盖 touch 后仍汇总为 `logged_in` |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `rustfmt --edition 2024 --check src/services/client_status.rs` | 通过 |
+| `cargo test client_status` | 5 passed, 0 failed |
+| `cargo test` | 88 passed, 0 failed |
 
 ### 2.4 CAS batch 有界并发
 
