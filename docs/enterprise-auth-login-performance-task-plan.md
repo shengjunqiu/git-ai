@@ -491,16 +491,16 @@ git commit -m "Make enterprise auth rate limits configurable"
 
 实现步骤：
 
-- [ ] 新增迁移：
+- [x] 新增迁移：
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower
     ON users (lower(email));
 ```
 
-- [ ] 同步复制到 deploy migrations。
-- [ ] 在 `src/db/migrations.rs` 注册 `018_users_lower_email_index`。
-- [ ] 评估生产是否需要独立运维脚本使用 `CREATE INDEX CONCURRENTLY`。
+- [x] 同步复制到 deploy migrations。
+- [x] 在 `src/db/migrations.rs` 注册 `018_users_lower_email_index`。
+- [x] 评估生产是否需要独立运维脚本使用 `CREATE INDEX CONCURRENTLY`。
 
 注意：
 
@@ -526,9 +526,9 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "\di idx_us
 
 验收标准：
 
-- [ ] migration 可重复执行。
-- [ ] `idx_users_email_lower` 存在。
-- [ ] 登录查询和注册查重继续通过测试。
+- [x] migration 可重复执行。
+- [x] `idx_users_email_lower` 存在。
+- [x] 登录查询和注册查重继续通过测试。
 
 提交建议：
 
@@ -536,6 +536,15 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "\di idx_us
 git add enterprise-server/migrations/018_users_lower_email_index.sql enterprise-server/deploy/migrations/018_users_lower_email_index.sql enterprise-server/src/db/migrations.rs docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Index enterprise users by normalized email"
 ```
+
+### 3.2 执行记录
+
+- [x] 已新增 `018_users_lower_email_index`，本地和部署迁移 SQL 内容一致。
+- [x] 已在迁移 runner 中注册 018，并在迁移测试里断言 `idx_users_email_lower` 存在。
+- [x] 已执行本地迁移，确认 018 成功应用。
+- [x] 已用 `psql \di idx_users_email_lower` 确认索引存在于 `public.users`。
+- [x] 生产评估：中小表可直接使用应用迁移；如果生产 `users` 表已很大，应先在维护窗口手动执行 `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email_lower ON users (lower(email));`，再让应用迁移幂等跳过。
+- [x] 验证通过：`cargo test db::migrations`、`cargo test auth_api`、`cargo test`、`diff -u migrations/018_users_lower_email_index.sql deploy/migrations/018_users_lower_email_index.sql`、`cargo run -- --migrate`、`docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "\di idx_users_email_lower"`。
 
 ## 阶段 4: Argon2 密码计算移出 Tokio worker
 

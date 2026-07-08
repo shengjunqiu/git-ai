@@ -72,6 +72,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "017_metrics_tool_model_events",
         include_str!("../../migrations/017_metrics_tool_model_events.sql"),
     ),
+    (
+        "018_users_lower_email_index",
+        include_str!("../../migrations/018_users_lower_email_index.sql"),
+    ),
 ];
 
 /// Run all database migrations
@@ -206,6 +210,18 @@ mod tests {
             .fetch_one(&test_pool)
             .await?;
         assert_eq!(applied_count as usize, MIGRATIONS.len());
+
+        let lower_email_index_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'idx_users_email_lower'
+            )",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(lower_email_index_exists);
 
         test_pool.close().await;
         drop_database(&admin_pool, &db_name).await?;
