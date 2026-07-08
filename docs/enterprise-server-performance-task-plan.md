@@ -1490,9 +1490,9 @@ git commit -m "Stabilize enterprise metrics rollup validation"
 
 步骤：
 
-- [ ] 在本地/测试环境启用 `pg_stat_statements`。
-- [ ] 为生产部署文档增加启用说明。
-- [ ] 增加慢查询查看 SQL：
+- [x] 在本地/测试环境启用 `pg_stat_statements`。
+- [x] 为生产部署文档增加启用说明。
+- [x] 增加慢查询查看 SQL：
 
 ```sql
 SELECT
@@ -1506,7 +1506,7 @@ ORDER BY mean_exec_time DESC
 LIMIT 20;
 ```
 
-- [ ] 增加连接状态查看 SQL：
+- [x] 增加连接状态查看 SQL：
 
 ```sql
 SELECT state, COUNT(*)
@@ -1517,8 +1517,38 @@ GROUP BY state;
 
 验收标准：
 
-- [ ] 压测后能看到最慢查询。
-- [ ] PR 或发布记录中包含慢查询截图/文本摘要。
+- [x] 压测后能看到最慢查询。
+- [x] PR 或发布记录中包含慢查询截图/文本摘要。
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| compose | 本地和 deploy `docker-compose.yml` 的 Postgres 已增加 `shared_preload_libraries=pg_stat_statements` 与 `pg_stat_statements.track=all` |
+| SQL | 已新增 `scripts/benchmarks/enterprise/postgres_observability.sql`，包含 extension 创建、配置检查、慢查询、总耗时查询、连接状态和长时间 active query |
+| 部署文档 | `enterprise-server/deploy/README.md` 已新增 Postgres 慢查询观测章节，说明重启、创建 extension、查询慢 SQL 和连接状态 |
+| 压测 README | `scripts/benchmarks/enterprise/README.md` 已新增压测后执行观测 SQL 的命令 |
+| 本地验证 | `docker compose up -d --force-recreate postgres` 后确认 `shared_preload_libraries=pg_stat_statements`、`pg_stat_statements.track=all`、extension 版本 `1.10` |
+| 慢查询样例 | 10 万级压测后可见 dashboard 明细路径慢查询：developer stats mean 792.00ms、trends detail mean 436.06ms、developer count distinct mean 435.24ms |
+| 连接状态样例 | 观测 SQL 输出 `active=1`、`idle=4`，无超过 1 秒的 active query |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `docker compose up -d --force-recreate postgres` | 通过，Postgres 按新 command 重建 |
+| `docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ..."` | 通过，preload/track 配置生效 |
+| `docker compose exec -T postgres psql -U gitai -d gitai_enterprise < ../scripts/benchmarks/enterprise/postgres_observability.sql` | 通过，输出慢查询和连接状态 |
+| `docker compose config --quiet` | 通过 |
+| `JWT_SECRET=test-secret-at-least-32-characters POSTGRES_PASSWORD=test-password docker compose -f deploy/docker-compose.yml config --quiet` | 通过 |
+| `git diff --check` | 通过 |
+
+提交建议：
+
+```bash
+git add docs/enterprise-server-performance-task-plan.md enterprise-server/docker-compose.yml enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/README.md scripts/benchmarks/enterprise/README.md scripts/benchmarks/enterprise/postgres_observability.sql
+git commit -m "Add enterprise Postgres observability queries"
+```
 
 ## 阶段 5: 上线和回滚
 

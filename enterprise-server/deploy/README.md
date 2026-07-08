@@ -146,6 +146,59 @@ SELECT key_prefix, name FROM api_keys WHERE revoked_at IS NULL;
 
 建议通过 API 接口创建新的 API Key，以便获取明文密钥。
 
+## Postgres 慢查询观测
+
+部署包的 `docker-compose.yml` 已为 PostgreSQL 启用：
+
+```text
+shared_preload_libraries=pg_stat_statements
+pg_stat_statements.track=all
+```
+
+首次启用或修改该配置后需要重启 PostgreSQL：
+
+```bash
+docker compose restart postgres
+docker compose restart api
+```
+
+在目标数据库中创建 extension：
+
+```bash
+docker compose exec postgres psql -U ${POSTGRES_USER:-gitai} -d ${POSTGRES_DB:-gitai_enterprise} \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+```
+
+压测后查看最慢查询：
+
+```sql
+SELECT
+    calls,
+    ROUND(mean_exec_time::numeric, 2) AS mean_exec_ms,
+    ROUND(max_exec_time::numeric, 2) AS max_exec_ms,
+    ROUND(total_exec_time::numeric, 2) AS total_exec_ms,
+    rows,
+    LEFT(REGEXP_REPLACE(query, '\s+', ' ', 'g'), 240) AS query
+FROM pg_stat_statements
+WHERE dbid = (
+    SELECT oid FROM pg_database WHERE datname = current_database()
+)
+ORDER BY mean_exec_time DESC
+LIMIT 20;
+```
+
+查看连接状态：
+
+```sql
+SELECT COALESCE(state, 'unknown') AS state, COUNT(*) AS connections
+FROM pg_stat_activity
+WHERE datname = current_database()
+GROUP BY COALESCE(state, 'unknown')
+ORDER BY state;
+```
+
+仓库中的 `scripts/benchmarks/enterprise/postgres_observability.sql` 包含完整检查 SQL，可在压测后执行并保存输出到发布记录或 PR。
+
 ## 故障排查
 
 ### API 启动失败

@@ -86,3 +86,22 @@ python3 scripts/benchmarks/enterprise/bench_dashboard.py \
 - `/api/v1/aggregate/tools`
 
 可以用 `BENCH_ORG` 或 `--org` 指定组织 slug。对比 rollup 前后性能时，分别在服务端设置 `DASHBOARD_USE_ROLLUPS=false` 和 `DASHBOARD_USE_ROLLUPS=true` 后运行同一组命令。
+
+## Postgres 观测
+
+本地和部署 compose 已配置 `shared_preload_libraries=pg_stat_statements`。修改该配置后需要重启 Postgres，再创建 extension：
+
+```bash
+docker compose restart postgres
+docker compose exec postgres psql -U gitai -d gitai_enterprise \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+```
+
+压测后执行：
+
+```bash
+docker compose exec -T postgres psql -U gitai -d gitai_enterprise \
+  < scripts/benchmarks/enterprise/postgres_observability.sql
+```
+
+输出包含 `pg_stat_statements` 配置、按平均耗时排序的慢查询、按总耗时排序的查询，以及当前连接状态。
