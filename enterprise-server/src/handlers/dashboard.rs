@@ -1612,6 +1612,43 @@ fn validate_normalized_repo_url(url_str: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn parse_epoch_seconds_param(name: &str, value: Option<&str>) -> Result<Option<i64>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(Some(dt.timestamp()));
+    }
+
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let dt = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is a valid time")
+            .and_utc();
+        return Ok(Some(dt.timestamp()));
+    }
+
+    Err(AppError::BadRequest(format!(
+        "{} must be an RFC3339 timestamp or YYYY-MM-DD date",
+        name
+    )))
+}
+
+fn parse_epoch_filters(
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<(Option<i64>, Option<i64>), AppError> {
+    Ok((
+        parse_epoch_seconds_param("since", since)?,
+        parse_epoch_seconds_param("until", until)?,
+    ))
+}
+
 /// GET /api/v1/aggregate/summary — Global aggregate summary
 pub async fn aggregate_summary(
     State(state): State<AppState>,
@@ -1619,6 +1656,7 @@ pub async fn aggregate_summary(
     Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
 
     let row: (Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
         r#"SELECT
@@ -1629,13 +1667,13 @@ pub async fn aggregate_summary(
         FROM metrics_events WHERE event_type = 1
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
-          AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
-          AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)"#
+          AND ($3::bigint IS NULL OR timestamp >= $3)
+          AND ($4::bigint IS NULL OR timestamp <= $4)"#
     )
     .bind(user_filter)
     .bind(org_filter)
-    .bind(&query.since)
-    .bind(&query.until)
+    .bind(since_ts)
+    .bind(until_ts)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1681,8 +1719,8 @@ pub async fn aggregate_summary(
               AND user_id IS NOT NULL
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
-              AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
-              AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
+              AND ($3::bigint IS NULL OR timestamp >= $3)
+              AND ($4::bigint IS NULL OR timestamp <= $4)
 
             UNION ALL
 
@@ -1692,8 +1730,8 @@ pub async fn aggregate_summary(
             WHERE p.user_id IS NOT NULL
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
-              AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
-              AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
+              AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
+              AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -1706,6 +1744,8 @@ pub async fn aggregate_summary(
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(since_ts)
+    .bind(until_ts)
     .bind(&query.since)
     .bind(&query.until)
     .fetch_one(&state.db)
@@ -1717,13 +1757,13 @@ pub async fn aggregate_summary(
         WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
           AND ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
-          AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
-          AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)"#,
+          AND ($3::bigint IS NULL OR timestamp >= $3)
+          AND ($4::bigint IS NULL OR timestamp <= $4)"#,
     )
     .bind(user_filter)
     .bind(org_filter)
-    .bind(&query.since)
-    .bind(&query.until)
+    .bind(since_ts)
+    .bind(until_ts)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -2136,6 +2176,7 @@ pub async fn aggregate_developers(
     Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
 
     let rows: Vec<(
         Uuid,
@@ -2169,8 +2210,8 @@ pub async fn aggregate_developers(
                   AND user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR user_id = $1)
                   AND ($2::uuid IS NULL OR org_id = $2)
-                  AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
-                  AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
+                  AND ($3::bigint IS NULL OR timestamp >= $3)
+                  AND ($4::bigint IS NULL OR timestamp <= $4)
                 GROUP BY user_id, org_id
 
                 UNION ALL
@@ -2187,8 +2228,8 @@ pub async fn aggregate_developers(
                 WHERE p.user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
-                  AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
+                  AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
+                  AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2227,8 +2268,8 @@ pub async fn aggregate_developers(
                   AND author_email != ''
                   AND ($1::uuid IS NULL OR user_id = $1)
                   AND ($2::uuid IS NULL OR org_id = $2)
-                  AND ($3::timestamptz IS NULL OR to_timestamp(timestamp) >= $3::timestamptz)
-                  AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) <= $4::timestamptz)
+                  AND ($3::bigint IS NULL OR timestamp >= $3)
+                  AND ($4::bigint IS NULL OR timestamp <= $4)
 
                 UNION
 
@@ -2252,8 +2293,8 @@ pub async fn aggregate_developers(
                   AND cs.author != ''
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
-                  AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
+                  AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
+                  AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2285,6 +2326,8 @@ pub async fn aggregate_developers(
     )
     .bind(user_filter)
     .bind(org_filter)
+    .bind(since_ts)
+    .bind(until_ts)
     .bind(&query.since)
     .bind(&query.until)
     .fetch_all(&state.db)
@@ -2491,6 +2534,7 @@ pub async fn aggregate_trends(
     Query(query): Query<TrendsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
 
     let metric = query.metric.as_deref().unwrap_or("ai_ratio");
     let granularity = query.granularity.as_deref().unwrap_or("week");
@@ -2535,8 +2579,8 @@ pub async fn aggregate_trends(
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
               AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::timestamptz IS NULL OR to_timestamp(timestamp) >= $4::timestamptz)
-              AND ($5::timestamptz IS NULL OR to_timestamp(timestamp) <= $5::timestamptz)
+              AND ($4::bigint IS NULL OR timestamp >= $4)
+              AND ($5::bigint IS NULL OR timestamp <= $5)
             GROUP BY DATE_TRUNC('{0}', to_timestamp(timestamp))
 
             UNION ALL
@@ -2552,8 +2596,8 @@ pub async fn aggregate_trends(
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
               AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $4::timestamptz)
-              AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $5::timestamptz)
+              AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $6::timestamptz)
+              AND ($7::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $7::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -2569,6 +2613,8 @@ pub async fn aggregate_trends(
     .bind(user_filter)
     .bind(org_filter)
     .bind(&query.org)
+    .bind(since_ts)
+    .bind(until_ts)
     .bind(&query.since)
     .bind(&query.until)
     .fetch_all(&state.db)
@@ -2840,5 +2886,41 @@ pub fn build_data_filters(
     } else {
         // Non-admin sees only their own data within their organization
         (Some(auth.user_id), auth.org_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_epoch_seconds_param_accepts_rfc3339() {
+        let parsed = parse_epoch_seconds_param("since", Some("2024-01-01T00:00:00Z")).unwrap();
+
+        assert_eq!(parsed, Some(1_704_067_200));
+    }
+
+    #[test]
+    fn parse_epoch_seconds_param_accepts_date() {
+        let parsed = parse_epoch_seconds_param("until", Some("2024-01-02")).unwrap();
+
+        assert_eq!(parsed, Some(1_704_153_600));
+    }
+
+    #[test]
+    fn parse_epoch_seconds_param_ignores_empty_values() {
+        assert_eq!(parse_epoch_seconds_param("since", None).unwrap(), None);
+        assert_eq!(
+            parse_epoch_seconds_param("since", Some("  ")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_epoch_seconds_param_rejects_invalid_values() {
+        assert!(matches!(
+            parse_epoch_seconds_param("since", Some("not-a-date")),
+            Err(AppError::BadRequest(_))
+        ));
     }
 }

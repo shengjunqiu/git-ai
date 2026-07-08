@@ -817,23 +817,23 @@ git commit -m "Bulk upsert enterprise report stats"
 
 实现步骤：
 
-- [ ] 搜索所有 `to_timestamp(timestamp)`。
-- [ ] 在 Rust 查询处理处将 `since/until` 转成 epoch 秒：
+- [x] 搜索所有 `to_timestamp(timestamp)`。
+- [x] 在 Rust 查询处理处将 `since/until` 转成 epoch 秒：
 
 ```rust
 let since_ts = query.since.map(|dt| dt.timestamp());
 let until_ts = query.until.map(|dt| dt.timestamp());
 ```
 
-- [ ] SQL 改成：
+- [x] SQL 改成：
 
 ```sql
 AND ($3::bigint IS NULL OR timestamp >= $3)
 AND ($4::bigint IS NULL OR timestamp <= $4)
 ```
 
-- [ ] 保留 `DATE_TRUNC` 分组场景中必要的 timestamp 转换，但 WHERE 过滤优先用 bigint。
-- [ ] 增加测试确认 since/until 过滤结果不变。
+- [x] 保留 `DATE_TRUNC` 分组场景中必要的 timestamp 转换，但 WHERE 过滤优先用 bigint。
+- [x] 增加测试确认 since/until 过滤结果不变。
 
 测试命令：
 
@@ -855,8 +855,8 @@ WHERE event_type = 1
 
 验收标准：
 
-- [ ] 查询结果与改前一致。
-- [ ] 大数据量下 WHERE 条件能使用 timestamp 相关索引。
+- [x] 查询结果与改前一致。
+- [ ] 大数据量下 WHERE 条件能使用 timestamp 相关索引：本阶段已移除 WHERE 中的 `to_timestamp(timestamp)` 包装，生产量级 `EXPLAIN` 留到阶段 4 统一验证。
 
 提交建议：
 
@@ -864,6 +864,29 @@ WHERE event_type = 1
 git add enterprise-server/src/handlers/dashboard.rs
 git commit -m "Use epoch filters for dashboard metrics queries"
 ```
+
+阶段 3.1 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| dashboard 时间参数解析 | 已新增 `parse_epoch_filters`，支持 RFC3339 和 `YYYY-MM-DD`，空值保持无过滤 |
+| `aggregate_summary` | metrics_events 分支改为 `timestamp >= $n::bigint` / `timestamp <= $n::bigint` |
+| `aggregate_developers` | metrics_events 分支改为 epoch 秒比较，report 分支继续使用 `commit_stats.author_time` 的 timestamptz 比较 |
+| `aggregate_trends` | WHERE 过滤改为 epoch 秒比较，保留 `DATE_TRUNC(... to_timestamp(timestamp))` 仅用于分组 |
+| `lifecycle.rs` | 已检查，无 `to_timestamp(timestamp)` WHERE 过滤模式，未修改 |
+| 单元测试 | 已新增时间参数解析测试，覆盖 RFC3339、日期、空值和非法值 |
+| 外部 EXPLAIN | 未执行，缺少生产量级样本数据；阶段 4 压测/基线回归时统一验证 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test dashboard` | 4 passed, 0 failed |
+| `cargo test lifecycle` | 命令通过，0 matched |
+| `cargo test parse_epoch_seconds_param` | 4 passed, 0 failed |
+| `cargo test` | 97 passed, 0 failed |
+| `cargo fmt --check` | 未通过，输出为仓库既有多文件格式差异，本阶段未扩大格式化范围 |
 
 ### 3.2 增加 metrics/dashboard 组合索引
 
