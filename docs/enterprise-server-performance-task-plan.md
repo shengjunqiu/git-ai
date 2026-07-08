@@ -986,14 +986,14 @@ git commit -m "Add dashboard metrics query indexes"
 
 实现步骤：
 
-- [ ] 新增字段：
+- [x] 新增字段：
 
 ```sql
 ALTER TABLE commit_stats
 ADD COLUMN IF NOT EXISTS author_time_at TIMESTAMPTZ;
 ```
 
-- [ ] 回填可解析的历史数据：
+- [x] 回填可解析的历史数据：
 
 ```sql
 UPDATE commit_stats
@@ -1003,16 +1003,16 @@ WHERE author_time_at IS NULL
   AND author_time != '';
 ```
 
-- [ ] 增加索引：
+- [x] 增加索引：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_commit_stats_project_author_time_at
     ON commit_stats(project_id, author_time_at);
 ```
 
-- [ ] report 上传时写入 `author_time_at`。
-- [ ] dashboard report 聚合使用 `author_time_at` 过滤和分组。
-- [ ] 对无法解析的 author_time 保持 null，不让上传失败，除非数据模型已明确要求 ISO 时间。
+- [x] report 上传时写入 `author_time_at`。
+- [x] dashboard report 聚合使用 `author_time_at` 过滤和分组。
+- [x] 对无法解析的 author_time 保持 null，不让上传失败，除非数据模型已明确要求 ISO 时间。
 
 测试命令：
 
@@ -1025,9 +1025,9 @@ cargo test
 
 验收标准：
 
-- [ ] 新上传 report 的 `author_time_at` 正确。
-- [ ] 历史数据可回填。
-- [ ] dashboard report 时间过滤结果与原来一致。
+- [x] 新上传 report 的 `author_time_at` 正确。
+- [x] 历史数据可回填。
+- [x] dashboard report 时间过滤结果与原来一致：对可解析 RFC3339/ISO author_time 与旧 cast 语义一致；无法解析数据按本阶段设计保持 null，避免查询期 cast 失败。
 
 提交建议：
 
@@ -1035,6 +1035,29 @@ cargo test
 git add enterprise-server/migrations/015_commit_stats_author_time_at.sql enterprise-server/deploy/migrations/015_commit_stats_author_time_at.sql enterprise-server/src/db/migrations.rs enterprise-server/src/handlers/report.rs enterprise-server/src/handlers/dashboard.rs
 git commit -m "Store structured commit author times"
 ```
+
+阶段 3.3 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| 结构化字段 | 已新增 `commit_stats.author_time_at TIMESTAMPTZ` |
+| 历史回填 | 已用 ISO/RFC3339 形态正则保护后回填，避免历史脏数据导致 migration cast 失败 |
+| 索引 | 已新增 `idx_commit_stats_project_author_time_at(project_id, author_time_at)` |
+| report 写入 | 已在 commit stats bulk upsert 中同时写入/更新 `author_time_at`；解析失败写 NULL，不阻断上传 |
+| dashboard 查询 | report fallback 的 summary/developer/trends 时间过滤和 trends 分组已改用 `author_time_at` |
+| deploy 迁移 | 已同步新增 `enterprise-server/deploy/migrations/015_commit_stats_author_time_at.sql` |
+| 程序化迁移注册 | 已在 `enterprise-server/src/db/migrations.rs` 注册 `015_commit_stats_author_time_at` |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test report` | 6 passed, 0 failed |
+| `cargo test dashboard` | 4 passed, 0 failed |
+| `cargo test db::migrations` | 1 passed, 0 failed |
+| `cargo test` | 99 passed, 0 failed |
+| `rustfmt --edition 2024 --check src/db/migrations.rs src/handlers/report.rs` | 通过 |
 
 ### 3.4 设计并落地 metrics daily rollup 表
 

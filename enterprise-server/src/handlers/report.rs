@@ -99,6 +99,7 @@ struct PreparedCommitStat {
     sha: String,
     author: String,
     author_time: String,
+    author_time_at: Option<chrono::DateTime<chrono::Utc>>,
     subject: String,
     has_authorship_note: bool,
     git_diff_added_lines: i64,
@@ -113,6 +114,17 @@ struct PreparedCommitStat {
     time_waiting_for_ai: i64,
 }
 
+fn parse_commit_author_time(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 impl PreparedCommitStat {
     fn from_commit(commit: &ReportCommit) -> Option<Self> {
         let sha = commit.sha.trim();
@@ -125,6 +137,7 @@ impl PreparedCommitStat {
             sha: sha.to_string(),
             author: commit.author.clone(),
             author_time: commit.author_time.clone(),
+            author_time_at: parse_commit_author_time(&commit.author_time),
             subject: commit.subject.clone(),
             has_authorship_note: commit.has_authorship_note,
             git_diff_added_lines: stats.git_diff_added_lines.unwrap_or(0),
@@ -241,7 +254,7 @@ async fn upsert_commit_stats_chunk(
 ) -> Result<(), AppError> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO commit_stats (
-            project_id, sha, author, author_time, subject, has_authorship_note,
+            project_id, sha, author, author_time, author_time_at, subject, has_authorship_note,
             git_diff_added_lines, git_diff_deleted_lines, ai_additions, human_additions,
             mixed_additions, unknown_additions, ai_accepted, total_ai_additions,
             total_ai_deletions, time_waiting_for_ai
@@ -254,6 +267,7 @@ async fn upsert_commit_stats_chunk(
             .push_bind(&row.sha)
             .push_bind(&row.author)
             .push_bind(&row.author_time)
+            .push_bind(row.author_time_at)
             .push_bind(&row.subject)
             .push_bind(row.has_authorship_note)
             .push_bind(row.git_diff_added_lines)
@@ -272,6 +286,7 @@ async fn upsert_commit_stats_chunk(
         r#" ON CONFLICT (project_id, sha) DO UPDATE SET
             author = EXCLUDED.author,
             author_time = EXCLUDED.author_time,
+            author_time_at = EXCLUDED.author_time_at,
             subject = EXCLUDED.subject,
             has_authorship_note = EXCLUDED.has_authorship_note,
             git_diff_added_lines = EXCLUDED.git_diff_added_lines,
@@ -569,6 +584,7 @@ mod tests {
         let commit_row: (
             String,
             String,
+            Option<chrono::DateTime<chrono::Utc>>,
             bool,
             i64,
             i64,
@@ -580,7 +596,7 @@ mod tests {
             i64,
             i64,
         ) = sqlx::query_as(
-            "SELECT author, subject, has_authorship_note, \
+            "SELECT author, subject, author_time_at, has_authorship_note, \
                     git_diff_added_lines::bigint, git_diff_deleted_lines::bigint, \
                     ai_additions::bigint, human_additions::bigint, mixed_additions::bigint, \
                     unknown_additions::bigint, ai_accepted::bigint, \
@@ -591,22 +607,26 @@ mod tests {
         .bind("same-sha")
         .fetch_one(&db.state.db)
         .await?;
+        assert_eq!(commit_row.0, "Second Author");
+        assert_eq!(commit_row.1, "second subject");
         assert_eq!(
-            commit_row,
+            commit_row.2.map(|dt| dt.timestamp()),
+            parse_commit_author_time("2026-07-07T00:00:00Z").map(|dt| dt.timestamp())
+        );
+        assert!(commit_row.3);
+        assert_eq!(
             (
-                "Second Author".into(),
-                "second subject".into(),
-                true,
-                21,
-                22,
-                23,
-                24,
-                25,
-                26,
-                27,
-                28,
-                29,
-            )
+                commit_row.4,
+                commit_row.5,
+                commit_row.6,
+                commit_row.7,
+                commit_row.8,
+                commit_row.9,
+                commit_row.10,
+                commit_row.11,
+                commit_row.12,
+            ),
+            (21, 22, 23, 24, 25, 26, 27, 28, 29)
         );
 
         let tool_row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
@@ -622,6 +642,19 @@ mod tests {
 
         db.cleanup().await?;
         Ok(())
+    }
+
+    #[test]
+    fn parse_commit_author_time_accepts_rfc3339() {
+        let parsed = parse_commit_author_time("2026-07-07T00:00:00Z");
+
+        assert_eq!(parsed.map(|dt| dt.timestamp()), Some(1_783_382_400));
+    }
+
+    #[test]
+    fn parse_commit_author_time_returns_none_for_invalid_values() {
+        assert_eq!(parse_commit_author_time(""), None);
+        assert_eq!(parse_commit_author_time("not-a-timestamp"), None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

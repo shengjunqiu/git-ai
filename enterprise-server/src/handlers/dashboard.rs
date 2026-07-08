@@ -1688,8 +1688,8 @@ pub async fn aggregate_summary(
         JOIN commit_stats cs ON cs.project_id = p.id
         WHERE ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
-          AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
-          AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
+          AND ($3::timestamptz IS NULL OR cs.author_time_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR cs.author_time_at <= $4::timestamptz)
           AND NOT EXISTS (
               SELECT 1 FROM metrics_events m
               WHERE m.event_type = 1
@@ -1730,8 +1730,8 @@ pub async fn aggregate_summary(
             WHERE p.user_id IS NOT NULL
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
-              AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
-              AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
+              AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+              AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -1775,8 +1775,8 @@ pub async fn aggregate_summary(
         WHERE p.remote_url_hash IS NOT NULL AND p.remote_url_hash != ''
           AND ($1::uuid IS NULL OR p.user_id = $1)
           AND ($2::uuid IS NULL OR p.org_id = $2)
-          AND ($3::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $3::timestamptz)
-          AND ($4::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $4::timestamptz)
+          AND ($3::timestamptz IS NULL OR cs.author_time_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR cs.author_time_at <= $4::timestamptz)
           AND NOT EXISTS (
               SELECT 1 FROM metrics_events m
               WHERE m.event_type = 1
@@ -2228,8 +2228,8 @@ pub async fn aggregate_developers(
                 WHERE p.user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
-                  AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
+                  AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+                  AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2293,8 +2293,8 @@ pub async fn aggregate_developers(
                   AND cs.author != ''
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($5::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $5::timestamptz)
-                  AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $6::timestamptz)
+                  AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+                  AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -2586,18 +2586,18 @@ pub async fn aggregate_trends(
             UNION ALL
 
             SELECT
-                DATE_TRUNC('{0}', NULLIF(cs.author_time, '')::timestamptz)::date AS period,
+                DATE_TRUNC('{0}', cs.author_time_at)::date AS period,
                 COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines,
                 COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0)::bigint AS human_lines,
                 COUNT(*)::bigint AS commits
             FROM projects p
             JOIN commit_stats cs ON cs.project_id = p.id
-            WHERE cs.author_time IS NOT NULL AND cs.author_time != ''
+            WHERE cs.author_time_at IS NOT NULL
               AND ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
               AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($6::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz >= $6::timestamptz)
-              AND ($7::timestamptz IS NULL OR NULLIF(cs.author_time, '')::timestamptz <= $7::timestamptz)
+              AND ($6::timestamptz IS NULL OR cs.author_time_at >= $6::timestamptz)
+              AND ($7::timestamptz IS NULL OR cs.author_time_at <= $7::timestamptz)
               AND NOT EXISTS (
                   SELECT 1 FROM metrics_events m
                   WHERE m.event_type = 1
@@ -2605,7 +2605,7 @@ pub async fn aggregate_trends(
                     AND ($1::uuid IS NULL OR m.user_id = $1)
                     AND ($2::uuid IS NULL OR m.org_id = $2)
               )
-            GROUP BY DATE_TRUNC('{0}', NULLIF(cs.author_time, '')::timestamptz)
+            GROUP BY DATE_TRUNC('{0}', cs.author_time_at)
         ) combined
         GROUP BY period
         ORDER BY period"#, date_trunc)

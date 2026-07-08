@@ -60,6 +60,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "014_metrics_query_indexes",
         include_str!("../../migrations/014_metrics_query_indexes.sql"),
     ),
+    (
+        "015_commit_stats_author_time_at",
+        include_str!("../../migrations/015_commit_stats_author_time_at.sql"),
+    ),
 ];
 
 /// Run all database migrations
