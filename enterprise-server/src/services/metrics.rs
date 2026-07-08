@@ -4,7 +4,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::metrics::{DecodedMetricEvent, MetricEvent, MetricUploadError, MetricsUploadResponse};
+use crate::models::metrics::{
+    DecodedMetricEvent, MetricEvent, MetricUploadError, MetricsUploadResponse,
+};
 use crate::pos_encoded::decode_event;
 
 /// Process a batch of metrics events
@@ -12,6 +14,7 @@ pub async fn process_metrics_batch(
     pool: &PgPool,
     events: Vec<MetricEvent>,
     user_id: Option<Uuid>,
+    org_id: Option<Uuid>,
     distinct_id: Option<String>,
 ) -> MetricsUploadResponse {
     let mut errors = Vec::new();
@@ -19,7 +22,7 @@ pub async fn process_metrics_batch(
     for (idx, event) in events.iter().enumerate() {
         match decode_event(event) {
             Ok(decoded) => {
-                if let Err(e) = store_event(pool, &decoded, user_id, &distinct_id).await {
+                if let Err(e) = store_event(pool, &decoded, user_id, org_id, &distinct_id).await {
                     tracing::warn!("Failed to store metrics event at index {}: {}", idx, e);
                     errors.push(MetricUploadError {
                         index: idx,
@@ -45,16 +48,9 @@ async fn store_event(
     pool: &PgPool,
     event: &DecodedMetricEvent,
     user_id: Option<Uuid>,
+    org_id: Option<Uuid>,
     distinct_id: &Option<String>,
 ) -> Result<(), AppError> {
-    let org_id = if let Some(uid) = user_id {
-        crate::services::org_scope::preferred_org_scope(pool, uid)
-            .await?
-            .map(|scope| scope.org_id)
-    } else {
-        None
-    };
-
     let ai_additions_total = aggregate_rollup(
         event.ai_additions.as_deref(),
         event.tool_model_pairs.as_deref(),
@@ -197,7 +193,9 @@ fn aggregate_by_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_by_tool, aggregate_rollup, aggregate_unknown_additions};
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+    use std::collections::HashMap;
 
     #[test]
     fn aggregate_rollup_prefers_all_rollup() {
@@ -257,5 +255,208 @@ mod tests {
                 "cursor::claude-sonnet": 144,
             }))
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_batch_uses_supplied_org_id() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event()],
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        let stored_org_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT org_id FROM metrics_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(stored_org_id, Some(org_id));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_batch_preserves_null_org_id_when_not_supplied() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, _org_id) = insert_test_identity(&db.pool).await?;
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event()],
+            Some(user_id),
+            None,
+            Some("metrics-test-device".into()),
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        let stored_org_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT org_id FROM metrics_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(stored_org_id, None);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    struct TestDatabase {
+        pool: PgPool,
+        admin_pool: PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping metrics database test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping metrics database test: could not create isolated database {db_name}: {error}"
+                );
+                admin_pool.close().await;
+                return Ok(None);
+            }
+
+            let pool = PgPoolOptions::new()
+                .max_connections(4)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            Ok(Some(Self {
+                pool,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.pool.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid)> {
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Metrics Test Org")
+            .bind(format!("metrics-test-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("Metrics Test User")
+            .bind(org_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(org_id)
+            .bind("member")
+            .execute(pool)
+            .await?;
+
+        Ok((user_id, org_id))
+    }
+
+    fn committed_metric_event() -> MetricEvent {
+        let mut values = HashMap::new();
+        values.insert("0".into(), serde_json::json!(10));
+        values.insert("1".into(), serde_json::json!(2));
+        values.insert("2".into(), serde_json::json!(30));
+        values.insert("3".into(), serde_json::json!(["all", "codex::gpt-5"]));
+        values.insert("5".into(), serde_json::json!([20, 5]));
+
+        let mut attrs = HashMap::new();
+        attrs.insert("0".into(), serde_json::json!("1.3.2"));
+        attrs.insert(
+            "1".into(),
+            serde_json::json!("https://example.com/repo.git"),
+        );
+        attrs.insert("2".into(), serde_json::json!("dev@example.com"));
+        attrs.insert("3".into(), serde_json::json!("abc123"));
+
+        MetricEvent {
+            t: 1_700_000_000,
+            e: 1,
+            v: values,
+            a: attrs,
+        }
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_metrics_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 }

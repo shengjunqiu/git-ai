@@ -455,14 +455,14 @@ git commit -m "Limit enterprise upload batch sizes"
 
 实现步骤：
 
-- [ ] 修改 `process_metrics_batch` 签名，增加 `org_id: Option<Uuid>`。
-- [ ] 在 `upload_metrics` 中传入 `auth.0.org_id`。
-- [ ] 修改 `store_event` 签名，接收 `org_id`。
-- [ ] 删除 `store_event` 内部的 `preferred_org_scope(pool, uid)` 调用。
-- [ ] 确认落库时使用传入的 org_id。
-- [ ] 增加测试覆盖：
-  - 有 org_id 时 metrics_events.org_id 正确。
-  - 无 org_id 时 org_id 为 null。
+- [x] 修改 `process_metrics_batch` 签名，增加 `org_id: Option<Uuid>`。
+- [x] 在 `upload_metrics` 中传入 `auth.0.org_id`。
+- [x] 修改 `store_event` 签名，接收 `org_id`。
+- [x] 删除 `store_event` 内部的 `preferred_org_scope(pool, uid)` 调用。
+- [x] 确认落库时使用传入的 org_id。
+- [x] 增加测试覆盖：
+  - [x] 有 org_id 时 metrics_events.org_id 正确。
+  - [x] 无 org_id 时 org_id 为 null。
 
 测试命令：
 
@@ -474,9 +474,9 @@ cargo test
 
 验收标准：
 
-- [ ] metrics 上传不再每事件查询 org scope。
-- [ ] 现有 metrics 聚合字段测试通过。
-- [ ] 100 条 event batch 的 DB 往返明显减少。
+- [x] metrics 上传不再每事件查询 org scope。
+- [x] 现有 metrics 聚合字段测试通过。
+- [x] 100 条 event batch 可减少约 100 次 org scope 查询往返；逐条 insert 往返保留到 2.2 处理。
 
 提交建议：
 
@@ -484,6 +484,28 @@ cargo test
 git add enterprise-server/src/handlers/metrics.rs enterprise-server/src/services/metrics.rs
 git commit -m "Reuse auth org scope for metrics uploads"
 ```
+
+### 阶段 2.1 执行记录
+
+执行日期：2026-07-08
+
+实现结果：
+
+| 任务 | 结果 |
+| --- | --- |
+| `upload_metrics` 传递认证上下文 org scope | 已实现；调用 `process_metrics_batch` 时传入 `auth.0.org_id` |
+| `process_metrics_batch` 接收 org_id | 已实现；函数签名新增 `org_id: Option<Uuid>` |
+| `store_event` 移除每事件 org scope 查询 | 已实现；删除内部 `preferred_org_scope(pool, uid)` 调用，直接使用调用方传入的 org_id |
+| org_id 落库测试 | 已覆盖；有 org_id 时写入对应 org，无 org_id 时保持 null |
+
+验证命令：
+
+| 命令 | 结果 |
+| --- | --- |
+| `rustfmt --edition 2024 --check src/services/metrics.rs src/handlers/metrics.rs` | 通过 |
+| `cargo check` | 通过；仅有既有 unused/dead_code warning |
+| `cargo test metrics` | 10 passed, 0 failed |
+| `cargo test` | 81 passed, 0 failed |
 
 ### 2.2 metrics 批量 insert
 

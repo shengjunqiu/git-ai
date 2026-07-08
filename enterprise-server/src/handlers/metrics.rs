@@ -34,6 +34,7 @@ pub async fn upload_metrics(
         &state.db,
         batch.events,
         Some(auth.0.user_id),
+        auth.0.org_id,
         distinct_id.clone(),
     )
     .await;
