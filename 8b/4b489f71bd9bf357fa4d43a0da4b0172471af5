@@ -1,0 +1,50 @@
+enterprise-server/src/handlers/release.rs
+  a73676cfded0c055 900-913
+enterprise-server/src/handlers/cas.rs
+  a73676cfded0c055 716-729
+enterprise-server/deploy/.env.example
+  a73676cfded0c055 21-36
+enterprise-server/deploy/docker-compose.yml
+  a73676cfded0c055 25,28-44
+enterprise-server/src/handlers/oauth.rs
+  a73676cfded0c055 606-619
+docs/enterprise-auth-login-performance-task-plan.md
+  a73676cfded0c055 376-381,384-387,394-396,398-399,402,404-405,418-419,423-425,435-441,460-462,471-478
+enterprise-server/src/services/rate_limit.rs
+  a73676cfded0c055 10,23,43-44,64-84,134-135,138-140,144-146,158-162,210,212-218,220-226,228-234,236-242,244-258,260-266,270-273,314,382-478
+enterprise-server/deploy/README.md
+  a73676cfded0c055 175-209
+enterprise-server/src/config.rs
+  a73676cfded0c055 3-17,34-48,72-85,98-102,119-174,181-294
+enterprise-server/docker-compose.yml
+  a73676cfded0c055 18,21-37
+enterprise-server/src/auth/jwt.rs
+  a73676cfded0c055 125-138
+enterprise-server/.env.example
+  a73676cfded0c055 23-38
+enterprise-server/src/handlers/report.rs
+  a73676cfded0c055 862-875
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 802-815
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "8b4b489f71bd9bf357fa4d43a0da4b0172471af5",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1535,
+      "total_deletions": 694,
+      "accepted_lines": 6924,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/b51b0eff7044a4bb03175dfdd470eef658f6c1b3a9dc8d2a5af5005a527a4270"
+    }
+  }
+}
