@@ -197,11 +197,23 @@ JWT_SECRET=<随机长密钥>
 POSTGRES_PASSWORD=<强数据库密码>
 BASE_URL=https://git-ai.example.com
 API_PORT=8080
+DATABASE_MAX_CONNECTIONS=20
+DATABASE_MIN_CONNECTIONS=1
+DATABASE_ACQUIRE_TIMEOUT_SECONDS=5
 
 S3_ACCESS_KEY=<强随机值>
 S3_SECRET_KEY=<强随机值>
 S3_BUCKET=git-ai-cas
 ```
+
+数据库连接池需要按 Postgres 容量和 API 实例数设置，不要简单把单实例连接数调大。建议从下面公式开始：
+
+```text
+DATABASE_MAX_CONNECTIONS =
+  floor((Postgres max_connections - 预留连接数) / API 实例数)
+```
+
+例如 Postgres `max_connections=200`，为运维、迁移和后台任务预留 40 个连接，部署 4 个 API 实例时，每个 API 实例建议不超过 40 个连接。`DATABASE_MIN_CONNECTIONS` 通常保持 `1`，`DATABASE_ACQUIRE_TIMEOUT_SECONDS` 可先保持 `5`，在压测中观察 pool acquire timeout 后再调整。
 
 ### 4. 加载镜像
 

@@ -10,6 +10,8 @@ use crate::models::cas::CasUploadRequest;
 use crate::pos_encoded::validate_hex_hash;
 use crate::routes::AppState;
 
+const MAX_CAS_UPLOAD_OBJECTS: usize = 100;
+
 /// POST /worker/cas/upload — Batch upload CAS objects
 pub async fn upload_cas(
     State(state): State<AppState>,
@@ -17,6 +19,8 @@ pub async fn upload_cas(
     headers: HeaderExtractor,
     Json(req): Json<CasUploadRequest>,
 ) -> Result<Json<Value>, AppError> {
+    validate_cas_batch_size(req.objects.len())?;
+
     tracing::info!(
         "CAS upload: {} objects, author_identity={:?}",
         req.objects.len(),
@@ -58,6 +62,17 @@ pub async fn upload_cas(
     })))
 }
 
+fn validate_cas_batch_size(object_count: usize) -> Result<(), AppError> {
+    if object_count > MAX_CAS_UPLOAD_OBJECTS {
+        return Err(AppError::BadRequest(format!(
+            "Maximum {} CAS objects per batch",
+            MAX_CAS_UPLOAD_OBJECTS
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +85,15 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use uuid::Uuid;
+
+    #[test]
+    fn validates_cas_batch_size() {
+        assert!(validate_cas_batch_size(MAX_CAS_UPLOAD_OBJECTS).is_ok());
+        assert!(matches!(
+            validate_cas_batch_size(MAX_CAS_UPLOAD_OBJECTS + 1),
+            Err(AppError::BadRequest(_))
+        ));
+    }
 
     struct TestDatabase {
         state: AppState,
@@ -407,6 +431,9 @@ mod tests {
     fn test_config(database_url: &str) -> crate::config::AppConfig {
         crate::config::AppConfig {
             database_url: database_url.to_string(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
             redis_url: "redis://127.0.0.1:6379".to_string(),
             jwt_secret: "cas-test-secret".to_string(),
             s3_endpoint: "http://localhost:9000".to_string(),

@@ -59,7 +59,7 @@ pub fn generate_refresh_token() -> String {
 
 /// Hash a refresh token for storage
 pub fn hash_token(token: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
@@ -109,6 +109,9 @@ mod tests {
     fn test_create_and_validate_token() {
         let config = AppConfig {
             database_url: String::new(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
             redis_url: String::new(),
             jwt_secret: "test-secret-key".into(),
             s3_endpoint: String::new(),

@@ -884,6 +884,9 @@ mod tests {
     fn test_config(database_url: &str) -> crate::config::AppConfig {
         crate::config::AppConfig {
             database_url: database_url.to_string(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
             redis_url: "redis://127.0.0.1:6379".to_string(),
             jwt_secret: "release-test-secret".to_string(),
             s3_endpoint: "http://localhost:9000".to_string(),

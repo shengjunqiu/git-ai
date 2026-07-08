@@ -3,8 +3,11 @@ use axum::response::Json;
 use serde_json::Value;
 
 use crate::auth::middleware::{AuthExtractor, HeaderExtractor};
+use crate::error::AppError;
 use crate::models::metrics::MetricsBatch;
 use crate::routes::AppState;
+
+const MAX_METRICS_BATCH_EVENTS: usize = 500;
 
 /// POST /worker/metrics/upload — Batch upload metrics events
 ///
@@ -15,7 +18,9 @@ pub async fn upload_metrics(
     auth: AuthExtractor,
     headers: HeaderExtractor,
     Json(batch): Json<MetricsBatch>,
-) -> Json<Value> {
+) -> Result<Json<Value>, AppError> {
+    validate_metrics_batch_size(batch.events.len())?;
+
     let event_count = batch.events.len();
 
     tracing::info!(
@@ -53,7 +58,32 @@ pub async fn upload_metrics(
         response.errors.len(),
     );
 
-    Json(serde_json::to_value(response).unwrap_or_else(|_| {
-        serde_json::json!({ "errors": [] })
-    }))
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({ "errors": [] })),
+    ))
+}
+
+fn validate_metrics_batch_size(event_count: usize) -> Result<(), AppError> {
+    if event_count > MAX_METRICS_BATCH_EVENTS {
+        return Err(AppError::BadRequest(format!(
+            "Maximum {} events per batch",
+            MAX_METRICS_BATCH_EVENTS
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_metrics_batch_size() {
+        assert!(validate_metrics_batch_size(MAX_METRICS_BATCH_EVENTS).is_ok());
+        assert!(matches!(
+            validate_metrics_batch_size(MAX_METRICS_BATCH_EVENTS + 1),
+            Err(AppError::BadRequest(_))
+        ));
+    }
 }

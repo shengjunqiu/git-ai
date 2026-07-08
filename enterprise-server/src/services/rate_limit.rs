@@ -2,6 +2,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -46,11 +47,19 @@ pub mod tiers {
 
 /// Redis-backed fixed-window rate limiter.
 /// Falls back to in-memory counters when Redis is unavailable.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RateLimiter {
-    redis: Option<redis::Client>,
+    redis: Option<redis::aio::ConnectionManager>,
     /// Per-tier counters: tier_name -> (key -> (count, window_start))
     counters: Arc<RwLock<HashMap<String, HashMap<String, (u32, Instant)>>>>,
+}
+
+impl fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("redis", &self.redis.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl RateLimiter {
@@ -61,9 +70,29 @@ impl RateLimiter {
         }
     }
 
-    pub fn with_redis(redis: redis::Client) -> Self {
+    pub async fn with_redis(redis: redis::Client) -> Self {
+        let redis =
+            match tokio::time::timeout(Duration::from_secs(1), redis.get_connection_manager())
+                .await
+            {
+                Ok(Ok(manager)) => Some(manager),
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        "Redis rate limit unavailable at startup; using in-memory counters: {}",
+                        error
+                    );
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Redis rate limit connection timed out at startup; using in-memory counters"
+                    );
+                    None
+                }
+            };
+
         Self {
-            redis: Some(redis),
+            redis,
             counters: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -88,13 +117,13 @@ impl RateLimiter {
 
     async fn check_redis(
         &self,
-        redis: &redis::Client,
+        redis: &redis::aio::ConnectionManager,
         tier: &str,
         key: &str,
         limit: RateLimitTier,
     ) -> Result<i64, redis::RedisError> {
         let redis_key = redis_rate_limit_key(tier, key, limit.window_seconds);
-        let mut connection = redis.get_multiplexed_async_connection().await?;
+        let mut connection = redis.clone();
         redis::Script::new(REDIS_RATE_LIMIT_SCRIPT)
             .key(redis_key)
             .arg(limit.window_seconds.max(1))
@@ -182,6 +211,10 @@ fn current_window_start(window_seconds: u64) -> u64 {
     (now / window_seconds) * window_seconds
 }
 
+fn should_bypass_rate_limit(path: &str) -> bool {
+    matches!(path, "/health" | "/ready")
+}
+
 /// Determine rate limit tier from request path
 fn tier_for_path(path: &str) -> (&'static str, RateLimitTier) {
     if path.starts_with("/worker/metrics") {
@@ -235,6 +268,10 @@ pub async fn rate_limit_middleware(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = request.uri().path().to_string();
+    if should_bypass_rate_limit(&path) {
+        return Ok(next.run(request).await);
+    }
+
     let (tier_name, tier_limit) = tier_for_path(&path);
     let client_key = extract_client_key(&request);
 
@@ -269,8 +306,8 @@ mod tests {
         let Some(client) = redis_test_client().await? else {
             return Ok(());
         };
-        let first = RateLimiter::with_redis(client.clone());
-        let second = RateLimiter::with_redis(client);
+        let first = RateLimiter::with_redis(client.clone()).await;
+        let second = RateLimiter::with_redis(client).await;
         let limit = RateLimitTier::new(1, 60);
         let key = format!("redis-shared-{}", Uuid::new_v4());
 
@@ -284,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn redis_failure_falls_back_to_in_memory_limit() -> anyhow::Result<()> {
         let client = redis::Client::open("redis://127.0.0.1:1/")?;
-        let limiter = RateLimiter::with_redis(client);
+        let limiter = RateLimiter::with_redis(client).await;
         let limit = RateLimitTier::new(1, 60);
         let key = format!("redis-fallback-{}", Uuid::new_v4());
 
@@ -293,6 +330,14 @@ mod tests {
 
         assert!(matches!(result, Err(AppError::RateLimited(_))));
         Ok(())
+    }
+
+    #[test]
+    fn health_and_readiness_bypass_rate_limits() {
+        assert!(should_bypass_rate_limit("/health"));
+        assert!(should_bypass_rate_limit("/ready"));
+        assert!(!should_bypass_rate_limit("/worker/metrics/upload"));
+        assert!(!should_bypass_rate_limit("/api/admin/users/list"));
     }
 
     async fn redis_test_client() -> anyhow::Result<Option<redis::Client>> {

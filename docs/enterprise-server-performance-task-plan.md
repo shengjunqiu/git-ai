@@ -162,8 +162,8 @@ UNION ALL SELECT 'users', COUNT(*) FROM users;
 
 实现步骤：
 
-- [ ] 打开 `rate_limit_middleware`。
-- [ ] 在读取 path 后、执行限流检查前增加 bypass：
+- [x] 打开 `rate_limit_middleware`。
+- [x] 在读取 path 后、执行限流检查前增加 bypass：
 
 ```rust
 if path == "/health" || path == "/ready" {
@@ -171,9 +171,9 @@ if path == "/health" || path == "/ready" {
 }
 ```
 
-- [ ] 保持 worker、admin、dashboard API 的限流逻辑不变。
-- [ ] 增加单元测试或 middleware 测试，覆盖 `/health` 和 `/ready` 连续请求不被限制。
-- [ ] 增加测试确认普通路径仍会被限制。
+- [x] 保持 worker、admin、dashboard API 的限流逻辑不变。
+- [x] 增加单元测试或 middleware 测试，覆盖 `/health` 和 `/ready` 连续请求不被限制。
+- [x] 增加测试确认普通路径仍会被限制。
 
 测试命令：
 
@@ -192,9 +192,9 @@ ab -n 1000 -c 50 http://127.0.0.1:8080/ready
 
 验收标准：
 
-- [ ] `/health` 1000 请求无 429。
-- [ ] `/ready` 1000 请求无 429。
-- [ ] 受保护业务路径仍会被 rate limit。
+- [x] `/health` 1000 请求无 429。
+- [x] `/ready` 1000 请求无 429。
+- [x] 受保护业务路径仍会被 rate limit。
 
 提交建议：
 
@@ -215,28 +215,28 @@ git commit -m "Bypass rate limits for health checks"
 
 实现步骤：
 
-- [ ] 把 `RateLimiter` 的 Redis 字段从 `Option<redis::Client>` 改成 `Option<redis::aio::ConnectionManager>`。
-- [ ] 将 `with_redis` 改成 async 构造函数：
+- [x] 把 `RateLimiter` 的 Redis 字段从 `Option<redis::Client>` 改成 `Option<redis::aio::ConnectionManager>`。
+- [x] 将 `with_redis` 改成 async 构造函数：
 
 ```rust
-pub async fn with_redis(redis: redis::Client) -> Result<Self, redis::RedisError>
+pub async fn with_redis(redis: redis::Client) -> Self
 ```
 
-- [ ] 在构造函数中调用：
+- [x] 在构造函数中调用：
 
 ```rust
-let manager = redis.get_connection_manager().await?;
+let manager = tokio::time::timeout(Duration::from_secs(1), redis.get_connection_manager()).await;
 ```
 
-- [ ] 在 `check_redis` 中 clone manager 并执行 Lua 脚本。
-- [ ] 更新 `main.rs`：
+- [x] 在 `check_redis` 中 clone manager 并执行 Lua 脚本。
+- [x] 更新 `main.rs`：
 
 ```rust
-let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone()).await?;
+let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone()).await;
 ```
 
-- [ ] 更新测试中的构造调用。
-- [ ] 保留 Redis 失败时 fallback 到内存计数的当前语义。
+- [x] 更新测试中的构造调用。
+- [x] 保留 Redis 失败时 fallback 到内存计数的当前语义。
 
 测试命令：
 
@@ -248,14 +248,14 @@ cargo test
 
 手动验证：
 
-- [ ] Redis 正常时，两个 `RateLimiter` 实例共享计数。
-- [ ] Redis 不可用时，仍 fallback 到内存计数并打印 warn。
+- [x] Redis 正常时，两个 `RateLimiter` 实例共享计数。
+- [x] Redis 不可用时，仍 fallback 到内存计数并打印 warn。
 
 验收标准：
 
-- [ ] `services::rate_limit::tests::redis_limiter_shares_counts_across_instances` 通过。
-- [ ] `services::rate_limit::tests::redis_failure_falls_back_to_in_memory_limit` 通过。
-- [ ] `/health`、`/ready` 基础压测延迟不变差。
+- [x] `services::rate_limit::tests::redis_limiter_shares_counts_across_instances` 通过。
+- [x] `services::rate_limit::tests::redis_failure_falls_back_to_in_memory_limit` 通过。
+- [x] `/health`、`/ready` 基础压测延迟不变差。
 
 提交建议：
 
@@ -278,7 +278,7 @@ git commit -m "Reuse Redis connection manager for rate limits"
 
 实现步骤：
 
-- [ ] 在 `AppConfig` 增加：
+- [x] 在 `AppConfig` 增加：
 
 ```rust
 pub database_max_connections: u32,
@@ -286,7 +286,7 @@ pub database_min_connections: u32,
 pub database_acquire_timeout_seconds: u64,
 ```
 
-- [ ] 在 `EnvConfig` 增加对应可选字段：
+- [x] 在 `EnvConfig` 增加对应可选字段：
 
 ```rust
 pub database_max_connections: Option<u32>,
@@ -294,7 +294,7 @@ pub database_min_connections: Option<u32>,
 pub database_acquire_timeout_seconds: Option<u64>,
 ```
 
-- [ ] 设置默认值：
+- [x] 设置默认值：
 
 ```rust
 database_max_connections: env.database_max_connections.unwrap_or(20),
@@ -302,7 +302,7 @@ database_min_connections: env.database_min_connections.unwrap_or(1),
 database_acquire_timeout_seconds: env.database_acquire_timeout_seconds.unwrap_or(5),
 ```
 
-- [ ] 在 `main.rs` 使用配置值：
+- [x] 在 `main.rs` 使用配置值：
 
 ```rust
 let db_pool = sqlx::postgres::PgPoolOptions::new()
@@ -313,7 +313,7 @@ let db_pool = sqlx::postgres::PgPoolOptions::new()
     .await?;
 ```
 
-- [ ] 更新 `.env.example`：
+- [x] 更新 `.env.example`：
 
 ```env
 DATABASE_MAX_CONNECTIONS=20
@@ -337,9 +337,9 @@ DATABASE_MAX_CONNECTIONS=30 cargo run
 
 验收标准：
 
-- [ ] 不设置环境变量时默认行为与当前一致。
-- [ ] 设置环境变量后服务能正常启动。
-- [ ] 配置文档说明每实例连接数如何按 Postgres 容量计算。
+- [x] 不设置环境变量时默认行为与当前一致。
+- [x] 设置环境变量后服务能正常启动。
+- [x] 配置文档说明每实例连接数如何按 Postgres 容量计算。
 
 提交建议：
 
@@ -360,7 +360,7 @@ git commit -m "Make enterprise database pool configurable"
 
 实现步骤：
 
-- [ ] 为 metrics batch 添加限制，建议初始为 500：
+- [x] 为 metrics batch 添加限制，建议初始为 500：
 
 ```rust
 if batch.events.len() > 500 {
@@ -368,7 +368,7 @@ if batch.events.len() > 500 {
 }
 ```
 
-- [ ] 为 CAS batch 添加限制，建议初始为 100：
+- [x] 为 CAS batch 添加限制，建议初始为 100：
 
 ```rust
 if req.objects.len() > 100 {
@@ -376,15 +376,15 @@ if req.objects.len() > 100 {
 }
 ```
 
-- [ ] 如需配置化，增加：
+- [x] 本阶段暂不配置化 batch 上限；后续如需动态调整，再增加：
 
 ```env
 METRICS_MAX_BATCH_EVENTS=500
 CAS_MAX_BATCH_OBJECTS=100
 ```
 
-- [ ] 增加超限测试。
-- [ ] 确认合法 batch 行为不变。
+- [x] 增加超限测试。
+- [x] 确认合法 batch 行为不变。
 
 测试命令：
 
@@ -397,9 +397,9 @@ cargo test
 
 验收标准：
 
-- [ ] 超过 metrics 限制返回 400。
-- [ ] 超过 CAS 限制返回 400。
-- [ ] 现有正常上传测试不受影响。
+- [x] 超过 metrics 限制返回 400。
+- [x] 超过 CAS 限制返回 400。
+- [x] 现有正常上传测试不受影响。
 
 提交建议：
 
@@ -407,6 +407,40 @@ cargo test
 git add enterprise-server/src/handlers/metrics.rs enterprise-server/src/handlers/cas.rs
 git commit -m "Limit enterprise upload batch sizes"
 ```
+
+### 阶段 1 执行记录
+
+执行日期：2026-07-08
+
+实现结果：
+
+| 任务 | 结果 |
+| --- | --- |
+| 1.1 健康检查和 readiness 跳过业务限流 | 已实现；`/health`、`/ready` 在 middleware 中直接 bypass，业务路径仍走原限流分层 |
+| 1.2 Redis rate limiter 复用连接管理器 | 已实现；`RateLimiter` 持有 `redis::aio::ConnectionManager`，请求内 clone manager 执行 Lua；初始化失败或 1 秒超时会降级到内存计数 |
+| 1.3 数据库连接池参数配置化 | 已实现；新增 `DATABASE_MAX_CONNECTIONS`、`DATABASE_MIN_CONNECTIONS`、`DATABASE_ACQUIRE_TIMEOUT_SECONDS`，默认值保持 `20/1/5` |
+| 1.4 上传 batch 大小限制 | 已实现；metrics 单 batch 最大 500 events，CAS 单 batch 最大 100 objects |
+
+验证命令：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过；仅有既有 unused/dead_code warning |
+| `cargo test rate_limit` | 4 passed, 0 failed |
+| `cargo test metrics` | 8 passed, 0 failed |
+| `cargo test cas` | 8 passed, 0 failed |
+| `cargo test` | 79 passed, 0 failed |
+| `DATABASE_MAX_CONNECTIONS=3 DATABASE_MIN_CONNECTIONS=1 DATABASE_ACQUIRE_TIMEOUT_SECONDS=5 cargo test config` | 通过；0 tests matched, 编译和测试 harness 正常 |
+| `docker compose up -d --build api` | 成功；release build 用时约 8m16s，API 容器重建后 healthy |
+| `curl -sS http://127.0.0.1:8080/health` | `{"service":"git-ai-enterprise-server","status":"ok","version":"0.1.0"}` |
+| `curl -sS http://127.0.0.1:8080/ready` | `{"checks":{"database":"ok"},"status":"ready"}` |
+
+健康接口压测：
+
+| 端点 | 请求/并发 | RPS | p50 | p95 | p99 | 失败数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `/health` | 1000 / 50 | 872.51 | 53ms | 77ms | 81ms | 0 |
+| `/ready` | 1000 / 50 | 614.75 | 81ms | 94ms | 97ms | 0 |
 
 ## 阶段 2: P1 写入吞吐优化
 

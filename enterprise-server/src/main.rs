@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 mod auth;
@@ -33,8 +34,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("git_ai_enterprise_server=debug,tower_http=debug")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("git_ai_enterprise_server=debug,tower_http=debug")
+            }),
         )
         .init();
 
@@ -43,7 +45,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database pool
     let db_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(config.database_max_connections)
+        .min_connections(config.database_min_connections)
+        .acquire_timeout(Duration::from_secs(config.database_acquire_timeout_seconds))
         .connect(&config.database_url)
         .await?;
 
@@ -61,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     let cas_store = services::cas::CasStore::new(&config)?;
 
     // Initialize rate limiter
-    let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone());
+    let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone()).await;
 
     // Build application state
     let state = crate::routes::AppState {
