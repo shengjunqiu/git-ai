@@ -866,27 +866,27 @@ git commit -m "Write enterprise auth audit logs asynchronously"
 
 实现步骤：
 
-- [ ] 使用 Python stdlib 实现脚本，保持与现有 benchmark 脚本风格一致。
-- [ ] 支持网页登录压测：
+- [x] 使用 Python stdlib 实现脚本，保持与现有 benchmark 脚本风格一致。
+- [x] 支持网页登录压测：
 
 ```text
 POST /auth/login
 ```
 
-- [ ] 支持注册压测：
+- [x] 支持注册压测：
 
 ```text
 POST /auth/register
 ```
 
-- [ ] 支持 OAuth device flow 压测：
+- [x] 支持 OAuth device flow 压测：
 
 ```text
 POST /worker/oauth/device/code
 POST /worker/oauth/token
 ```
 
-- [ ] 输出：
+- [x] 输出：
   - requests
   - concurrency
   - success
@@ -895,15 +895,15 @@ POST /worker/oauth/token
   - p50
   - p95
   - p99
-- [ ] 支持唯一邮箱生成，避免注册冲突干扰性能结果。
-- [ ] 对 401/409/429 单独统计。
+- [x] 支持唯一邮箱生成，避免注册冲突干扰性能结果。
+- [x] 对 401/409/429 单独统计。
 
 验收标准：
 
-- [ ] 脚本 `--help` 可用。
-- [ ] 登录压测可以使用已有测试用户。
-- [ ] 注册压测不会重复使用同一邮箱。
-- [ ] OAuth 压测能区分 pending 和 rate limited。
+- [x] 脚本 `--help` 可用。
+- [x] 登录压测可以使用已有测试用户。
+- [x] 注册压测不会重复使用同一邮箱。
+- [x] OAuth 压测能区分 pending 和 rate limited。
 
 验证命令：
 
@@ -918,6 +918,17 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py --help
 git add scripts/benchmarks/enterprise/bench_auth_login.py scripts/benchmarks/enterprise/README.md docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Add enterprise auth login benchmark script"
 ```
+
+### 7.1 执行记录
+
+- [x] 已新增 `bench_auth_login.py`，只依赖 Python 标准库和现有 `_common.py`。
+- [x] 支持 `--mode login`，对 `/auth/login` 发送 JSON 登录请求，可用 `BENCH_LOGIN_EMAIL` 和 `BENCH_LOGIN_PASSWORD` 指定已有测试用户。
+- [x] 支持 `--mode register`，按请求 index 生成唯一邮箱，可用 org/department UUID 或 slug。
+- [x] 支持 `--mode oauth`，每个 flow 依次请求 `/worker/oauth/device/code` 和 `/worker/oauth/token`。
+- [x] OAuth token 的 `authorization_pending` 作为预期成功分类，429 作为 rate limited 单独分类。
+- [x] 输出现有 benchmark CSV 摘要，并额外输出 HTTP status counts 和 401/409/429 tracked counts。
+- [x] 已更新 enterprise benchmark README。
+- [x] 验证通过：`python3 -m py_compile scripts/benchmarks/enterprise/bench_auth_login.py`、`python3 scripts/benchmarks/enterprise/bench_auth_login.py --help`。
 
 ### 7.2 执行优化前后对比
 

@@ -68,6 +68,42 @@ python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
 
 该脚本每个请求都会构造新的 committed event batch，并检查服务端返回的 `errors` 数组。如果出现 partial success，也会按失败处理。
 
+## 注册、登录和 OAuth 压测
+
+网页登录压测使用已有测试用户：
+
+```bash
+BENCH_LOGIN_EMAIL=bench@example.com \
+BENCH_LOGIN_PASSWORD=correct-horse-battery \
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode login \
+  --requests 1000 \
+  --concurrency 30
+```
+
+注册压测会为每个请求生成唯一邮箱，避免重复邮箱冲突干扰结果。邮箱域名必须已经在目标组织里验证通过：
+
+```bash
+BENCH_EMAIL_DOMAIN=example.com \
+BENCH_ORG_ID=00000000-0000-0000-0000-000000000000 \
+BENCH_DEPARTMENT_ID=00000000-0000-0000-0000-000000000000 \
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode register \
+  --requests 500 \
+  --concurrency 30
+```
+
+也可以用 `BENCH_ORG_SLUG` 和 `BENCH_DEPARTMENT_SLUG` 代替 UUID。OAuth device flow 压测会先请求 device code，再立即请求 token；未授权设备返回的 `authorization_pending` 会被按预期成功分类，429 会单独统计：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode oauth \
+  --requests 1000 \
+  --concurrency 50
+```
+
+该脚本额外输出 HTTP status 统计，并单独列出 401、409、429。默认只要出现非预期错误就以非 0 退出；需要只采集错误率时可加 `--allow-errors`。
+
 ## Dashboard 压测
 
 ```bash
