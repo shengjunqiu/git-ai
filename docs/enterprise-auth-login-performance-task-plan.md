@@ -373,27 +373,36 @@ git commit -m "Enable enterprise rollup configuration"
 建议新增配置：
 
 ```env
-RATE_LIMIT_AUTH_MAX_REQUESTS=300
-RATE_LIMIT_AUTH_WINDOW_SECONDS=60
-RATE_LIMIT_OAUTH_MAX_REQUESTS=600
-RATE_LIMIT_OAUTH_WINDOW_SECONDS=60
-RATE_LIMIT_DEFAULT_MAX_REQUESTS=300
-RATE_LIMIT_DEFAULT_WINDOW_SECONDS=60
 RATE_LIMIT_METRICS_MAX_REQUESTS=60
 RATE_LIMIT_METRICS_WINDOW_SECONDS=60
+RATE_LIMIT_CAS_UPLOAD_MAX_REQUESTS=30
+RATE_LIMIT_CAS_UPLOAD_WINDOW_SECONDS=60
+RATE_LIMIT_CAS_READ_MAX_REQUESTS=100
+RATE_LIMIT_CAS_READ_WINDOW_SECONDS=60
+RATE_LIMIT_OAUTH_MAX_REQUESTS=600
+RATE_LIMIT_OAUTH_WINDOW_SECONDS=60
+RATE_LIMIT_AUTH_MAX_REQUESTS=300
+RATE_LIMIT_AUTH_WINDOW_SECONDS=60
+RATE_LIMIT_ADMIN_MAX_REQUESTS=30
+RATE_LIMIT_ADMIN_WINDOW_SECONDS=60
+RATE_LIMIT_DEFAULT_MAX_REQUESTS=300
+RATE_LIMIT_DEFAULT_WINDOW_SECONDS=60
 ```
 
 实现步骤：
 
-- [ ] 在 `AppConfig` 增加上述限流字段。
-- [ ] 在 `EnvConfig` 增加可选字段。
-- [ ] 保持兼容默认值：
+- [x] 在 `AppConfig` 增加上述限流字段。
+- [x] 在 `EnvConfig` 增加可选字段。
+- [x] 保持兼容默认值：
   - metrics: `60/60`
+  - cas_upload: `30/60`
+  - cas_read: `100/60`
   - oauth: 从 `10/60` 提升到 `600/60`
   - auth: 新增 `300/60`
+  - admin: `30/60`
   - default: 从 `120/60` 提升到 `300/60`
-- [ ] 将 `tiers::OAUTH`、`tiers::DEFAULT` 等硬编码常量改为从 `AppConfig` 生成。
-- [ ] 新增 `auth` tier：
+- [x] 将 `tiers::OAUTH`、`tiers::DEFAULT` 等硬编码常量改为从 `AppConfig` 生成。
+- [x] 新增 `auth` tier：
 
 ```text
 /auth/register
@@ -406,14 +415,14 @@ RATE_LIMIT_METRICS_WINDOW_SECONDS=60
 /verify
 ```
 
-- [ ] 保持 `/worker/metrics/*` 仍走 metrics tier。
-- [ ] 保持 `/health`、`/ready` 继续 bypass。
+- [x] 保持 `/worker/metrics/*` 仍走 metrics tier。
+- [x] 保持 `/health`、`/ready` 继续 bypass。
 
 验收标准：
 
-- [ ] 认证路径不再落入 default tier。
-- [ ] OAuth 轮询不会因 10/min 限制导致多人同时 `git-ai login` 很快 429。
-- [ ] metrics 上传限流保持原行为，避免误放大写入压力。
+- [x] 认证路径不再落入 default tier。
+- [x] OAuth 轮询不会因 10/min 限制导致多人同时 `git-ai login` 很快 429。
+- [x] metrics 上传限流保持原行为，避免误放大写入压力。
 
 ### 2.2 增加限流测试
 
@@ -423,13 +432,13 @@ RATE_LIMIT_METRICS_WINDOW_SECONDS=60
 
 测试覆盖：
 
-- [ ] `/worker/oauth/device/code` 使用 oauth tier。
-- [ ] `/worker/oauth/token` 使用 oauth tier。
-- [ ] `/auth/login` 使用 auth tier。
-- [ ] `/auth/register` 使用 auth tier。
-- [ ] `/worker/metrics/upload` 使用 metrics tier。
-- [ ] `/health` 和 `/ready` bypass。
-- [ ] 环境变量能覆盖默认值。
+- [x] `/worker/oauth/device/code` 使用 oauth tier。
+- [x] `/worker/oauth/token` 使用 oauth tier。
+- [x] `/auth/login` 使用 auth tier。
+- [x] `/auth/register` 使用 auth tier。
+- [x] `/worker/metrics/upload` 使用 metrics tier。
+- [x] `/health` 和 `/ready` bypass。
+- [x] 环境变量能覆盖默认值。
 
 验证命令：
 
@@ -448,9 +457,9 @@ RATE_LIMIT_OAUTH_MAX_REQUESTS=3 RATE_LIMIT_OAUTH_WINDOW_SECONDS=60 cargo test ra
 
 验收标准：
 
-- [ ] 单元测试覆盖各路径 tier。
-- [ ] 配置缺省时行为稳定。
-- [ ] 配置覆盖时生效。
+- [x] 单元测试覆盖各路径 tier。
+- [x] 配置缺省时行为稳定。
+- [x] 配置覆盖时生效。
 
 提交建议：
 
@@ -458,6 +467,15 @@ RATE_LIMIT_OAUTH_MAX_REQUESTS=3 RATE_LIMIT_OAUTH_WINDOW_SECONDS=60 cargo test ra
 git add enterprise-server/src/config.rs enterprise-server/src/services/rate_limit.rs enterprise-server/.env.example enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Make enterprise auth rate limits configurable"
 ```
+
+### 2.3 执行记录
+
+- [x] 已完成限流配置化，`metrics`、`cas_upload`、`cas_read`、`oauth`、`auth`、`admin`、`default` 均可通过环境变量调整。
+- [x] 已将 `/auth/*`、`/login`、`/logout`、`/verify` 归入 `auth` tier，避免注册/网页登录继续落入 default tier。
+- [x] 已将 `/worker/oauth/*` 默认从 `10/60` 提升到 `600/60`，降低多人同时 CLI 登录被 429 的概率。
+- [x] 已保持 `/worker/metrics/*` 默认 `60/60`，避免误放大 metrics 写入压力。
+- [x] 已将本地和部署版 compose、`.env.example`、部署 README 更新为可配置限流。
+- [x] 验证通过：`cargo test rate_limit`、`cargo test config`、`cargo test`、`cargo check`、`docker compose config --quiet`、`JWT_SECRET=test-secret-at-least-32-characters POSTGRES_PASSWORD=test-password docker compose -f deploy/docker-compose.yml config --quiet`、`git diff --check`。
 
 ## 阶段 3: 用户邮箱登录索引优化
 

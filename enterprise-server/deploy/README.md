@@ -172,6 +172,41 @@ docker compose up -d --force-recreate api
 
 如 metrics 写入压力异常，可临时设置 `METRICS_WRITE_ROLLUPS=false` 并重启 API；这只会关闭 daily rollup 写入，不会停止 metrics 明细写入。
 
+## API 限流配置
+
+API 限流通过 Redis 共享计数；Redis 不可用时会自动回退到单实例内存计数。生产部署建议保留默认值起步，再根据压测和 429 日志调整：
+
+```env
+RATE_LIMIT_METRICS_MAX_REQUESTS=60
+RATE_LIMIT_METRICS_WINDOW_SECONDS=60
+RATE_LIMIT_CAS_UPLOAD_MAX_REQUESTS=30
+RATE_LIMIT_CAS_UPLOAD_WINDOW_SECONDS=60
+RATE_LIMIT_CAS_READ_MAX_REQUESTS=100
+RATE_LIMIT_CAS_READ_WINDOW_SECONDS=60
+RATE_LIMIT_OAUTH_MAX_REQUESTS=600
+RATE_LIMIT_OAUTH_WINDOW_SECONDS=60
+RATE_LIMIT_AUTH_MAX_REQUESTS=300
+RATE_LIMIT_AUTH_WINDOW_SECONDS=60
+RATE_LIMIT_ADMIN_MAX_REQUESTS=30
+RATE_LIMIT_ADMIN_WINDOW_SECONDS=60
+RATE_LIMIT_DEFAULT_MAX_REQUESTS=300
+RATE_LIMIT_DEFAULT_WINDOW_SECONDS=60
+```
+
+路由分层：
+
+| Tier | 默认值 | 覆盖范围 |
+|------|--------|----------|
+| `metrics` | 60/min | `/worker/metrics/*` |
+| `cas_upload` | 30/min | `/worker/cas/upload*` |
+| `cas_read` | 100/min | `/worker/cas*` |
+| `oauth` | 600/min | `/worker/oauth/*` |
+| `auth` | 300/min | `/auth/*`, `/login`, `/logout`, `/verify` |
+| `admin` | 30/min | `/api/admin/*` |
+| `default` | 300/min | 其他 API |
+
+多人同时注册、网页登录或 CLI 登录时，优先观察 `auth` 和 `oauth` tier 的 429 日志。如果 OAuth 设备码轮询较密集，可以提高 `RATE_LIMIT_OAUTH_MAX_REQUESTS`；如果注册登录入口被撞库或爆破，应降低 `RATE_LIMIT_AUTH_MAX_REQUESTS`，并配合更细粒度的账号/IP 风控。
+
 ## Postgres 慢查询观测
 
 部署包的 `docker-compose.yml` 已为 PostgreSQL 启用：

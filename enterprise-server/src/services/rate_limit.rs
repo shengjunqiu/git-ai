@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::routes::AppState;
 
@@ -19,7 +20,7 @@ return current
 "#;
 
 /// Rate limit tier configuration: (max_requests, window_seconds)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitTier {
     pub max_requests: u32,
     pub window_seconds: u64,
@@ -34,24 +35,13 @@ impl RateLimitTier {
     }
 }
 
-/// Well-known rate limit tiers
-pub mod tiers {
-    use super::RateLimitTier;
-    pub const METRICS: RateLimitTier = RateLimitTier::new(60, 60);
-    pub const CAS_UPLOAD: RateLimitTier = RateLimitTier::new(30, 60);
-    pub const CAS_READ: RateLimitTier = RateLimitTier::new(100, 60);
-    pub const OAUTH: RateLimitTier = RateLimitTier::new(10, 60);
-    pub const ADMIN: RateLimitTier = RateLimitTier::new(30, 60);
-    pub const DEFAULT: RateLimitTier = RateLimitTier::new(120, 60);
-}
-
 /// Redis-backed fixed-window rate limiter.
 /// Falls back to in-memory counters when Redis is unavailable.
 #[derive(Clone)]
 pub struct RateLimiter {
     redis: Option<redis::aio::ConnectionManager>,
-    /// Per-tier counters: tier_name -> (key -> (count, window_start))
-    counters: Arc<RwLock<HashMap<String, HashMap<String, (u32, Instant)>>>>,
+    /// Per-tier counters: tier_name -> (key -> (count, window_start, window_seconds))
+    counters: Arc<RwLock<HashMap<String, HashMap<String, (u32, Instant, u64)>>>>,
 }
 
 impl fmt::Debug for RateLimiter {
@@ -71,25 +61,27 @@ impl RateLimiter {
     }
 
     pub async fn with_redis(redis: redis::Client) -> Self {
-        let redis =
-            match tokio::time::timeout(Duration::from_secs(1), redis.get_connection_manager())
-                .await
-            {
-                Ok(Ok(manager)) => Some(manager),
-                Ok(Err(error)) => {
-                    tracing::warn!(
-                        "Redis rate limit unavailable at startup; using in-memory counters: {}",
-                        error
-                    );
-                    None
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        "Redis rate limit connection timed out at startup; using in-memory counters"
-                    );
-                    None
-                }
-            };
+        let redis = match tokio::time::timeout(
+            Duration::from_secs(1),
+            redis.get_connection_manager(),
+        )
+        .await
+        {
+            Ok(Ok(manager)) => Some(manager),
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    "Redis rate limit unavailable at startup; using in-memory counters: {}",
+                    error
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "Redis rate limit connection timed out at startup; using in-memory counters"
+                );
+                None
+            }
+        };
 
         Self {
             redis,
@@ -139,14 +131,19 @@ impl RateLimiter {
     ) -> Result<(), AppError> {
         let mut counters = self.counters.write().await;
         let now = Instant::now();
-        let window_duration = Duration::from_secs(limit.window_seconds.max(1));
+        let window_seconds = limit.window_seconds.max(1);
+        let window_duration = Duration::from_secs(window_seconds);
 
         let tier_map = counters.entry(tier.to_string()).or_default();
-        let entry = tier_map.entry(key.to_string()).or_insert((0, now));
+        let entry = tier_map
+            .entry(key.to_string())
+            .or_insert((0, now, window_seconds));
 
         // Reset counter if window has expired
         if now.duration_since(entry.1) > window_duration {
-            *entry = (0, now);
+            *entry = (0, now, window_seconds);
+        } else {
+            entry.2 = window_seconds;
         }
 
         entry.0 += 1;
@@ -158,17 +155,11 @@ impl RateLimiter {
     pub async fn cleanup(&self) {
         let mut counters = self.counters.write().await;
         let now = Instant::now();
-        for (tier_name, tier_map) in counters.iter_mut() {
-            let window = match tier_name.as_str() {
-                "metrics" => Duration::from_secs(tiers::METRICS.window_seconds),
-                "cas_upload" => Duration::from_secs(tiers::CAS_UPLOAD.window_seconds),
-                "cas_read" => Duration::from_secs(tiers::CAS_READ.window_seconds),
-                "oauth" => Duration::from_secs(tiers::OAUTH.window_seconds),
-                "admin" => Duration::from_secs(tiers::ADMIN.window_seconds),
-                _ => Duration::from_secs(tiers::DEFAULT.window_seconds),
-            };
-            tier_map
-                .retain(|_, (count, start)| *count > 0 && now.duration_since(*start) <= window * 2);
+        for tier_map in counters.values_mut() {
+            tier_map.retain(|_, (count, start, window_seconds)| {
+                let window = Duration::from_secs((*window_seconds).max(1));
+                *count > 0 && now.duration_since(*start) <= window * 2
+            });
         }
     }
 }
@@ -216,20 +207,68 @@ fn should_bypass_rate_limit(path: &str) -> bool {
 }
 
 /// Determine rate limit tier from request path
-fn tier_for_path(path: &str) -> (&'static str, RateLimitTier) {
+fn tier_for_path(config: &AppConfig, path: &str) -> (&'static str, RateLimitTier) {
     if path.starts_with("/worker/metrics") {
-        ("metrics", tiers::METRICS)
+        (
+            "metrics",
+            RateLimitTier::new(
+                config.rate_limit_metrics_max_requests,
+                config.rate_limit_metrics_window_seconds,
+            ),
+        )
     } else if path.starts_with("/worker/cas/upload") {
-        ("cas_upload", tiers::CAS_UPLOAD)
+        (
+            "cas_upload",
+            RateLimitTier::new(
+                config.rate_limit_cas_upload_max_requests,
+                config.rate_limit_cas_upload_window_seconds,
+            ),
+        )
     } else if path.starts_with("/worker/cas") {
-        ("cas_read", tiers::CAS_READ)
+        (
+            "cas_read",
+            RateLimitTier::new(
+                config.rate_limit_cas_read_max_requests,
+                config.rate_limit_cas_read_window_seconds,
+            ),
+        )
     } else if path.starts_with("/worker/oauth") {
-        ("oauth", tiers::OAUTH)
+        (
+            "oauth",
+            RateLimitTier::new(
+                config.rate_limit_oauth_max_requests,
+                config.rate_limit_oauth_window_seconds,
+            ),
+        )
     } else if path.starts_with("/api/admin") {
-        ("admin", tiers::ADMIN)
+        (
+            "admin",
+            RateLimitTier::new(
+                config.rate_limit_admin_max_requests,
+                config.rate_limit_admin_window_seconds,
+            ),
+        )
+    } else if is_auth_path(path) {
+        (
+            "auth",
+            RateLimitTier::new(
+                config.rate_limit_auth_max_requests,
+                config.rate_limit_auth_window_seconds,
+            ),
+        )
     } else {
-        ("default", tiers::DEFAULT)
+        (
+            "default",
+            RateLimitTier::new(
+                config.rate_limit_default_max_requests,
+                config.rate_limit_default_window_seconds,
+            ),
+        )
     }
+}
+
+fn is_auth_path(path: &str) -> bool {
+    matches!(path, "/login" | "/logout" | "/verify") || path.starts_with("/auth/")
 }
 
 /// Extract a client identifier from the request.
@@ -272,7 +311,7 @@ pub async fn rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    let (tier_name, tier_limit) = tier_for_path(&path);
+    let (tier_name, tier_limit) = tier_for_path(&state.config, &path);
     let client_key = extract_client_key(&request);
 
     state
@@ -338,6 +377,105 @@ mod tests {
         assert!(should_bypass_rate_limit("/ready"));
         assert!(!should_bypass_rate_limit("/worker/metrics/upload"));
         assert!(!should_bypass_rate_limit("/api/admin/users/list"));
+    }
+
+    #[test]
+    fn tier_for_path_assigns_configured_limits() {
+        let config = test_config();
+
+        assert_path_tier(
+            &config,
+            "/worker/oauth/device/code",
+            "oauth",
+            RateLimitTier::new(601, 61),
+        );
+        assert_path_tier(
+            &config,
+            "/worker/oauth/token",
+            "oauth",
+            RateLimitTier::new(601, 61),
+        );
+        assert_path_tier(&config, "/auth/login", "auth", RateLimitTier::new(301, 31));
+        assert_path_tier(
+            &config,
+            "/auth/register",
+            "auth",
+            RateLimitTier::new(301, 31),
+        );
+        assert_path_tier(
+            &config,
+            "/auth/organizations",
+            "auth",
+            RateLimitTier::new(301, 31),
+        );
+        assert_path_tier(&config, "/login", "auth", RateLimitTier::new(301, 31));
+        assert_path_tier(&config, "/verify", "auth", RateLimitTier::new(301, 31));
+        assert_path_tier(
+            &config,
+            "/worker/metrics/upload",
+            "metrics",
+            RateLimitTier::new(60, 10),
+        );
+        assert_path_tier(
+            &config,
+            "/api/admin/users/list",
+            "admin",
+            RateLimitTier::new(30, 30),
+        );
+        assert_path_tier(
+            &config,
+            "/api/other",
+            "default",
+            RateLimitTier::new(300, 300),
+        );
+    }
+
+    fn assert_path_tier(
+        config: &AppConfig,
+        path: &str,
+        expected_name: &'static str,
+        expected_limit: RateLimitTier,
+    ) {
+        let (name, limit) = tier_for_path(config, path);
+        assert_eq!(name, expected_name);
+        assert_eq!(limit, expected_limit);
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            database_url: String::new(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
+            redis_url: String::new(),
+            jwt_secret: "test-secret".to_string(),
+            s3_endpoint: String::new(),
+            s3_bucket: String::new(),
+            s3_access_key: String::new(),
+            s3_secret_key: String::new(),
+            s3_region: String::new(),
+            cas_upload_concurrency: 8,
+            metrics_write_rollups: true,
+            dashboard_use_rollups: true,
+            rate_limit_metrics_max_requests: 60,
+            rate_limit_metrics_window_seconds: 10,
+            rate_limit_cas_upload_max_requests: 30,
+            rate_limit_cas_upload_window_seconds: 20,
+            rate_limit_cas_read_max_requests: 100,
+            rate_limit_cas_read_window_seconds: 25,
+            rate_limit_oauth_max_requests: 601,
+            rate_limit_oauth_window_seconds: 61,
+            rate_limit_auth_max_requests: 301,
+            rate_limit_auth_window_seconds: 31,
+            rate_limit_admin_max_requests: 30,
+            rate_limit_admin_window_seconds: 30,
+            rate_limit_default_max_requests: 300,
+            rate_limit_default_window_seconds: 300,
+            base_url: String::new(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
     }
 
     async fn redis_test_client() -> anyhow::Result<Option<redis::Client>> {
