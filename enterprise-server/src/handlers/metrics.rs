@@ -36,6 +36,7 @@ pub async fn upload_metrics(
         Some(auth.0.user_id),
         auth.0.org_id,
         distinct_id.clone(),
+        state.config.metrics_write_rollups,
     )
     .await;
 

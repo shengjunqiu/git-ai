@@ -1,6 +1,7 @@
 //! Metrics service - handles decoding, storing, and querying metrics events
 
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -18,6 +19,7 @@ pub async fn process_metrics_batch(
     user_id: Option<Uuid>,
     org_id: Option<Uuid>,
     distinct_id: Option<String>,
+    write_rollups: bool,
 ) -> MetricsUploadResponse {
     let mut errors = Vec::new();
     let mut rows = Vec::new();
@@ -48,7 +50,7 @@ pub async fn process_metrics_batch(
     }
 
     for chunk in rows.chunks(METRICS_INSERT_CHUNK_SIZE) {
-        if let Err(e) = insert_metrics_chunk(pool, chunk).await {
+        if let Err(e) = insert_metrics_chunk(pool, chunk, write_rollups).await {
             tracing::warn!(
                 "Failed to bulk insert metrics chunk with {} events: {}",
                 chunk.len(),
@@ -87,6 +89,7 @@ struct PreparedMetricRow {
     git_diff_deleted_lines: Option<i32>,
     tool_model_pairs_json: Option<serde_json::Value>,
     ai_additions_by_tool_json: Option<serde_json::Value>,
+    tool_rollups: Vec<PreparedToolRollup>,
     prompt_id: Option<String>,
     session_id: Option<String>,
     file_path: Option<String>,
@@ -124,6 +127,7 @@ impl PreparedMetricRow {
             event.ai_additions.as_deref(),
             event.tool_model_pairs.as_deref(),
         );
+        let tool_rollups = prepare_tool_rollups(event);
 
         let raw_values_json = serde_json::to_value(&event.raw_values)
             .map_err(|e| AppError::Internal(format!("Failed to serialize raw_values: {}", e)))?;
@@ -163,6 +167,7 @@ impl PreparedMetricRow {
             git_diff_deleted_lines: event.git_diff_deleted_lines,
             tool_model_pairs_json,
             ai_additions_by_tool_json,
+            tool_rollups,
             prompt_id: event.prompt_id.clone(),
             session_id: event.session_id.clone(),
             file_path: event.file_path.clone(),
@@ -173,11 +178,57 @@ impl PreparedMetricRow {
     }
 }
 
-async fn insert_metrics_chunk(pool: &PgPool, rows: &[PreparedMetricRow]) -> Result<(), AppError> {
+#[derive(Debug, Clone)]
+struct PreparedToolRollup {
+    tool_model: String,
+    ai_lines: i64,
+    mixed_lines: i64,
+    ai_accepted: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DailyRollupKey {
+    day: chrono::NaiveDate,
+    org_id: Uuid,
+    user_id: Uuid,
+    repo_url: String,
+    tool_model: String,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedDailyRollup {
+    key: DailyRollupKey,
+    commits: i64,
+    total_lines: i64,
+    ai_lines: i64,
+    human_lines: i64,
+    mixed_lines: i64,
+    ai_accepted: i64,
+}
+
+async fn insert_metrics_chunk(
+    pool: &PgPool,
+    rows: &[PreparedMetricRow],
+    write_rollups: bool,
+) -> Result<(), AppError> {
     if rows.is_empty() {
         return Ok(());
     }
 
+    let mut tx = pool.begin().await.map_err(AppError::Database)?;
+    insert_metrics_events_chunk(&mut tx, rows).await?;
+    if write_rollups {
+        upsert_metrics_daily_rollups(&mut tx, rows).await?;
+    }
+    tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+async fn insert_metrics_events_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &[PreparedMetricRow],
+) -> Result<(), AppError> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO metrics_events (
             event_type, timestamp, user_id, distinct_id, org_id,
@@ -222,7 +273,176 @@ async fn insert_metrics_chunk(pool: &PgPool, rows: &[PreparedMetricRow]) -> Resu
 
     builder
         .build()
-        .execute(pool)
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+fn prepare_tool_rollups(event: &DecodedMetricEvent) -> Vec<PreparedToolRollup> {
+    let Some(pairs) = event.tool_model_pairs.as_deref() else {
+        return Vec::new();
+    };
+
+    pairs
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, pair)| {
+            if pair == "all" || pair.is_empty() {
+                return None;
+            }
+
+            Some(PreparedToolRollup {
+                tool_model: pair.clone(),
+                ai_lines: metric_value_at(event.ai_additions.as_deref(), idx),
+                mixed_lines: metric_value_at(event.mixed_additions.as_deref(), idx),
+                ai_accepted: metric_value_at(event.ai_accepted.as_deref(), idx),
+            })
+        })
+        .collect()
+}
+
+fn metric_value_at(values: Option<&[i32]>, idx: usize) -> i64 {
+    values
+        .and_then(|values| values.get(idx).copied())
+        .unwrap_or(0)
+        .into()
+}
+
+fn prepare_daily_rollups(rows: &[PreparedMetricRow]) -> Vec<PreparedDailyRollup> {
+    let mut rollups: HashMap<DailyRollupKey, PreparedDailyRollup> = HashMap::new();
+
+    for row in rows {
+        if row.event_type != 1 {
+            continue;
+        }
+
+        let day = metric_day(row.timestamp);
+        let org_id = row.org_id.unwrap_or_else(Uuid::nil);
+        let user_id = row.user_id.unwrap_or_else(Uuid::nil);
+        let repo_url = row.repo_url.clone().unwrap_or_default();
+        let total_lines = i64::from(row.git_diff_added_lines.unwrap_or(0));
+        let ai_lines = i64::from(row.ai_additions_total);
+        let human_lines = (total_lines - ai_lines).max(0);
+        let summary_key = DailyRollupKey {
+            day,
+            org_id,
+            user_id,
+            repo_url: repo_url.clone(),
+            tool_model: String::new(),
+        };
+
+        add_rollup_delta(
+            &mut rollups,
+            summary_key.clone(),
+            PreparedDailyRollup {
+                key: summary_key,
+                commits: 1,
+                total_lines,
+                ai_lines,
+                human_lines,
+                mixed_lines: i64::from(row.mixed_additions_total),
+                ai_accepted: i64::from(row.ai_accepted_total),
+            },
+        );
+
+        for tool in &row.tool_rollups {
+            let tool_key = DailyRollupKey {
+                day,
+                org_id,
+                user_id,
+                repo_url: repo_url.clone(),
+                tool_model: tool.tool_model.clone(),
+            };
+            add_rollup_delta(
+                &mut rollups,
+                tool_key.clone(),
+                PreparedDailyRollup {
+                    key: tool_key,
+                    commits: 1,
+                    total_lines: 0,
+                    ai_lines: tool.ai_lines,
+                    human_lines: 0,
+                    mixed_lines: tool.mixed_lines,
+                    ai_accepted: tool.ai_accepted,
+                },
+            );
+        }
+    }
+
+    rollups.into_values().collect()
+}
+
+fn add_rollup_delta(
+    rollups: &mut HashMap<DailyRollupKey, PreparedDailyRollup>,
+    key: DailyRollupKey,
+    delta: PreparedDailyRollup,
+) {
+    rollups
+        .entry(key)
+        .and_modify(|existing| {
+            existing.commits += delta.commits;
+            existing.total_lines += delta.total_lines;
+            existing.ai_lines += delta.ai_lines;
+            existing.human_lines += delta.human_lines;
+            existing.mixed_lines += delta.mixed_lines;
+            existing.ai_accepted += delta.ai_accepted;
+        })
+        .or_insert(delta);
+}
+
+fn metric_day(timestamp: i64) -> chrono::NaiveDate {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(|dt| dt.date_naive())
+        .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date"))
+}
+
+async fn upsert_metrics_daily_rollups(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &[PreparedMetricRow],
+) -> Result<(), AppError> {
+    let rollups = prepare_daily_rollups(rows);
+    if rollups.is_empty() {
+        return Ok(());
+    }
+
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        r#"INSERT INTO metrics_daily_rollups (
+            day, org_id, user_id, repo_url, tool_model,
+            commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
+        ) "#,
+    );
+
+    builder.push_values(&rollups, |mut row_builder, row| {
+        row_builder
+            .push_bind(row.key.day)
+            .push_bind(row.key.org_id)
+            .push_bind(row.key.user_id)
+            .push_bind(&row.key.repo_url)
+            .push_bind(&row.key.tool_model)
+            .push_bind(row.commits)
+            .push_bind(row.total_lines)
+            .push_bind(row.ai_lines)
+            .push_bind(row.human_lines)
+            .push_bind(row.mixed_lines)
+            .push_bind(row.ai_accepted);
+    });
+
+    builder.push(
+        r#" ON CONFLICT (day, org_id, user_id, repo_url, tool_model) DO UPDATE SET
+            commits = metrics_daily_rollups.commits + EXCLUDED.commits,
+            total_lines = metrics_daily_rollups.total_lines + EXCLUDED.total_lines,
+            ai_lines = metrics_daily_rollups.ai_lines + EXCLUDED.ai_lines,
+            human_lines = metrics_daily_rollups.human_lines + EXCLUDED.human_lines,
+            mixed_lines = metrics_daily_rollups.mixed_lines + EXCLUDED.mixed_lines,
+            ai_accepted = metrics_daily_rollups.ai_accepted + EXCLUDED.ai_accepted,
+            updated_at = now()"#,
+    );
+
+    builder
+        .build()
+        .execute(&mut **tx)
         .await
         .map_err(AppError::Database)?;
 
@@ -365,6 +585,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
@@ -394,6 +615,7 @@ mod tests {
             Some(user_id),
             None,
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
@@ -405,6 +627,14 @@ mod tests {
         .fetch_one(&db.pool)
         .await?;
         assert_eq!(stored_org_id, None);
+
+        let stored_rollup_org_id: Uuid = sqlx::query_scalar(
+            "SELECT org_id FROM metrics_daily_rollups WHERE user_id = $1 AND tool_model = '' LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(stored_rollup_org_id, Uuid::nil());
 
         db.cleanup().await?;
         Ok(())
@@ -424,11 +654,62 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
         assert!(response.errors.is_empty());
         assert_eq!(metrics_count(&db.pool).await?, 10);
+        let summary: (i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(commits), 0)::bigint,
+                    COALESCE(SUM(total_lines), 0)::bigint,
+                    COALESCE(SUM(ai_lines), 0)::bigint,
+                    COALESCE(SUM(human_lines), 0)::bigint
+             FROM metrics_daily_rollups
+             WHERE org_id = $1 AND user_id = $2 AND tool_model = ''",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(summary, (10, 300, 200, 100));
+
+        let tool_ai_lines: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(ai_lines), 0)::bigint
+             FROM metrics_daily_rollups
+             WHERE org_id = $1 AND user_id = $2 AND tool_model = $3",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .bind("codex::gpt-5")
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(tool_ai_lines, 50);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_batch_can_disable_daily_rollups() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event()],
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+            false,
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        assert_eq!(metrics_count(&db.pool).await?, 1);
+        assert_eq!(rollups_count(&db.pool).await?, 0);
 
         db.cleanup().await?;
         Ok(())
@@ -450,6 +731,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
@@ -477,6 +759,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
@@ -505,6 +788,7 @@ mod tests {
             None,
             Some(missing_org_id),
             Some("metrics-test-device".into()),
+            true,
         )
         .await;
 
@@ -648,6 +932,14 @@ mod tests {
         Ok(sqlx::query_scalar("SELECT COUNT(*) FROM metrics_events")
             .fetch_one(pool)
             .await?)
+    }
+
+    async fn rollups_count(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM metrics_daily_rollups")
+                .fetch_one(pool)
+                .await?,
+        )
     }
 
     fn test_database_url() -> String {

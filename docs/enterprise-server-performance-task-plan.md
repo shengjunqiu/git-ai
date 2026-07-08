@@ -1061,7 +1061,7 @@ git commit -m "Store structured commit author times"
 
 ### 3.4 设计并落地 metrics daily rollup 表
 
-目标：dashboard summary/trends/tool comparison 默认查 rollup，避免每次扫明细。
+目标：先落地 metrics daily rollup 写入与回填，为下一阶段 dashboard summary/trends/tool comparison 切换到 rollup 查询做准备。
 
 涉及文件：
 
@@ -1069,18 +1069,21 @@ git commit -m "Store structured commit author times"
 - `enterprise-server/deploy/migrations/016_metrics_daily_rollups.sql`
 - `enterprise-server/src/db/migrations.rs`
 - `enterprise-server/src/services/metrics.rs`
-- `enterprise-server/src/handlers/dashboard.rs`
-- 可选：`enterprise-server/src/config.rs`
+- `enterprise-server/src/handlers/metrics.rs`
+- `enterprise-server/src/config.rs`
+- 测试配置补齐：`enterprise-server/src/auth/jwt.rs`、`enterprise-server/src/handlers/auth_api.rs`、`enterprise-server/src/handlers/cas.rs`、`enterprise-server/src/handlers/oauth.rs`、`enterprise-server/src/handlers/release.rs`、`enterprise-server/src/handlers/report.rs`
 
 实现步骤：
 
-- [ ] 新增 rollup 表：
+- [x] 新增 rollup 表。
+
+实际实现说明：原草案把 `org_id`、`user_id` 设计成 nullable 主键列，但 PostgreSQL 主键列不能为 `NULL`，且 `ON CONFLICT` 需要稳定 key。本阶段改为用 nil UUID sentinel 表示缺失 scope。
 
 ```sql
 CREATE TABLE IF NOT EXISTS metrics_daily_rollups (
     day DATE NOT NULL,
-    org_id UUID,
-    user_id UUID,
+    org_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    user_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     repo_url TEXT NOT NULL DEFAULT '',
     tool_model TEXT NOT NULL DEFAULT '',
     commits BIGINT NOT NULL DEFAULT 0,
@@ -1095,7 +1098,7 @@ CREATE TABLE IF NOT EXISTS metrics_daily_rollups (
 );
 ```
 
-- [ ] 增加索引：
+- [x] 增加索引：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_metrics_daily_rollups_org_day
@@ -1108,18 +1111,20 @@ CREATE INDEX IF NOT EXISTS idx_metrics_daily_rollups_tool_day
     ON metrics_daily_rollups(tool_model, day);
 ```
 
-- [ ] metrics batch 成功写入明细后，在内存中按 day/org/user/repo/tool 聚合。
-- [ ] 使用批量 upsert 更新 rollup。
-- [ ] 增加配置开关：
+- [x] metrics batch 成功写入明细后，在内存中按 day/org/user/repo/tool 聚合。
+- [x] 使用同一事务批量插入 `metrics_events` 并批量 upsert `metrics_daily_rollups`。
+- [x] 使用 UTC day 聚合，避免数据库会话时区影响回填结果。
+- [x] `tool_model = ''` 代表 summary/trends 汇总行，非空 `tool_model` 代表 per-tool rollup 行。
+- [x] 增加配置开关：
 
 ```env
 DASHBOARD_USE_ROLLUPS=false
 METRICS_WRITE_ROLLUPS=true
 ```
 
-- [ ] 首版先只写 rollup，不默认切 dashboard。
-- [ ] 增加回填 SQL 或管理脚本。
-- [ ] 增加一致性测试：rollup 聚合结果与明细查询结果一致。
+- [x] 首版先只写 rollup，不默认切 dashboard。
+- [x] 增加回填 SQL：迁移 016 从既有 `metrics_events` 回填 summary 行和 per-tool 行。
+- [x] 增加一致性测试：metrics 写入后 rollup 汇总与明细 fixture 聚合一致。
 
 测试命令：
 
@@ -1132,15 +1137,37 @@ cargo test
 
 验收标准：
 
-- [ ] metrics 写入后 rollup 行正确增加。
-- [ ] 重复 batch 不会产生非预期重复，前提是当前 metrics 明细语义允许重复上传。
-- [ ] 回填结果与明细聚合一致。
-- [ ] rollup 写入对 metrics upload 延迟影响可接受。
+- [x] metrics 写入后 rollup 行正确增加。
+- [x] 重复 batch 不会产生非预期重复：当前 metrics 明细没有幂等 key，重复上传会产生重复明细，rollup 与明细保持同等累加，不额外放大重复。
+- [x] 回填 SQL 可随迁移执行，并按明细字段聚合 summary/per-tool 行。
+- [ ] rollup 写入对 metrics upload 延迟影响可接受。留到阶段 4 压测验证。
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| 表设计 | `metrics_daily_rollups(day, org_id, user_id, repo_url, tool_model)` 主键，缺失 scope 使用 nil UUID sentinel |
+| 写入链路 | `process_metrics_batch` 增加 `write_rollups` 参数，handler 使用 `METRICS_WRITE_ROLLUPS` 配置 |
+| 事务边界 | 明细批量插入和 rollup upsert 在同一事务内完成 |
+| 回填 | 迁移 016 生成 summary 行和 per-tool 行，跳过 `all` 和空 `tool_model` |
+| dashboard 读取 | 本阶段未切换，`DASHBOARD_USE_ROLLUPS=false` 默认关闭，阶段 3.5 再接入 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test metrics` | 15 passed, 0 failed |
+| `cargo test db::migrations` | 1 passed, 0 failed |
+| `cargo test` | 100 passed, 0 failed |
+| `rustfmt --edition 2024 --check src/services/metrics.rs src/config.rs src/db/migrations.rs src/handlers/metrics.rs` | 通过 |
+| `diff -u enterprise-server/migrations/016_metrics_daily_rollups.sql enterprise-server/deploy/migrations/016_metrics_daily_rollups.sql` | 通过，无差异 |
+| `git diff --check` | 通过 |
 
 提交建议：
 
 ```bash
-git add enterprise-server/migrations/016_metrics_daily_rollups.sql enterprise-server/deploy/migrations/016_metrics_daily_rollups.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/dashboard.rs enterprise-server/src/config.rs
+git add enterprise-server/migrations/016_metrics_daily_rollups.sql enterprise-server/deploy/migrations/016_metrics_daily_rollups.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/metrics.rs enterprise-server/src/config.rs
 git commit -m "Write daily metrics rollups"
 ```
 
