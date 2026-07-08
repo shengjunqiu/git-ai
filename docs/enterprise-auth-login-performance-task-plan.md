@@ -203,14 +203,14 @@ API 启动和健康检查：
 
 实现步骤：
 
-- [ ] 在 `enterprise-server/docker-compose.yml` 的 `api.environment` 中增加：
+- [x] 在 `enterprise-server/docker-compose.yml` 的 `api.environment` 中增加：
 
 ```yaml
 - METRICS_WRITE_ROLLUPS=${METRICS_WRITE_ROLLUPS:-true}
 - DASHBOARD_USE_ROLLUPS=${DASHBOARD_USE_ROLLUPS:-true}
 ```
 
-- [ ] 在 `enterprise-server/.env.example` 中增加：
+- [x] 在 `enterprise-server/.env.example` 中增加：
 
 ```env
 # Optional: Metrics/dashboard rollup tuning
@@ -218,7 +218,7 @@ METRICS_WRITE_ROLLUPS=true
 DASHBOARD_USE_ROLLUPS=true
 ```
 
-- [ ] 确认 `METRICS_WRITE_ROLLUPS` 默认仍为 `true`，`DASHBOARD_USE_ROLLUPS` 在生产配置里可以明确开启。
+- [x] 确认 `METRICS_WRITE_ROLLUPS` 默认仍为 `true`，`DASHBOARD_USE_ROLLUPS` 在生产配置里可以明确开启。
 
 验证命令：
 
@@ -229,8 +229,8 @@ docker compose config --quiet
 
 验收标准：
 
-- [ ] compose 配置有效。
-- [ ] `.env.example` 明确展示两个开关。
+- [x] compose 配置有效。
+- [x] `.env.example` 明确展示两个开关。
 
 ### 1.2 补齐 deploy compose 配置
 
@@ -242,14 +242,14 @@ docker compose config --quiet
 
 实现步骤：
 
-- [ ] 在 `enterprise-server/deploy/docker-compose.yml` 的 `api.environment` 中增加：
+- [x] 在 `enterprise-server/deploy/docker-compose.yml` 的 `api.environment` 中增加：
 
 ```yaml
 - METRICS_WRITE_ROLLUPS=${METRICS_WRITE_ROLLUPS:-true}
 - DASHBOARD_USE_ROLLUPS=${DASHBOARD_USE_ROLLUPS:-true}
 ```
 
-- [ ] 在 `enterprise-server/deploy/.env.example` 中增加：
+- [x] 在 `enterprise-server/deploy/.env.example` 中增加：
 
 ```env
 # === Metrics/dashboard rollups ===
@@ -257,7 +257,7 @@ METRICS_WRITE_ROLLUPS=true
 DASHBOARD_USE_ROLLUPS=true
 ```
 
-- [ ] 在 deploy README 增加说明：
+- [x] 在 deploy README 增加说明：
   - `METRICS_WRITE_ROLLUPS=true` 会在上传 metrics 时同步写 daily rollup。
   - `DASHBOARD_USE_ROLLUPS=true` 会让 dashboard 常用聚合优先查询 rollup 表。
   - 如果 dashboard 数据异常，先把 `DASHBOARD_USE_ROLLUPS=false` 回退到明细查询。
@@ -271,27 +271,27 @@ JWT_SECRET=test-secret-at-least-32-characters POSTGRES_PASSWORD=test-password do
 
 验收标准：
 
-- [ ] deploy compose 配置有效。
-- [ ] README 说明开启作用和回退方式。
+- [x] deploy compose 配置有效。
+- [x] README 说明开启作用和回退方式。
 
 ### 1.3 本地开启并验证 dashboard 查询
 
 步骤：
 
-- [ ] 在 `enterprise-server/.env` 中设置：
+- [x] 通过 compose 默认值或 `enterprise-server/.env` 设置：
 
 ```env
 METRICS_WRITE_ROLLUPS=true
 DASHBOARD_USE_ROLLUPS=true
 ```
 
-- [ ] 重建 API：
+- [x] 重建 API：
 
 ```bash
 docker compose up -d --force-recreate api
 ```
 
-- [ ] 确认 API 正常：
+- [x] 确认 API 正常：
 
 ```bash
 curl -sS http://127.0.0.1:8080/ready
@@ -310,7 +310,7 @@ python3 ../scripts/benchmarks/enterprise/bench_dashboard.py \
 
 验收标准：
 
-- [ ] `/ready` 正常。
+- [x] `/ready` 正常。
 - [ ] dashboard 压测无错误。
 - [ ] p95 接近或优于 10 万级历史结果：summary 约 267ms、tools 约 144ms、trends 约 116-125ms。
 
@@ -320,6 +320,41 @@ python3 ../scripts/benchmarks/enterprise/bench_dashboard.py \
 git add enterprise-server/docker-compose.yml enterprise-server/.env.example enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Enable enterprise rollup configuration"
 ```
+
+### 阶段 1 执行记录
+
+执行日期：2026-07-08
+
+实现结果：
+
+| 项 | 结果 |
+| --- | --- |
+| 本地 compose | `api.environment` 已显式传入 `METRICS_WRITE_ROLLUPS=${METRICS_WRITE_ROLLUPS:-true}` 和 `DASHBOARD_USE_ROLLUPS=${DASHBOARD_USE_ROLLUPS:-true}` |
+| 本地 `.env.example` | 已新增 Metrics/dashboard rollup tuning 段落 |
+| deploy compose | `api.environment` 已显式传入两个 rollup 开关 |
+| deploy `.env.example` | 已新增 Metrics/dashboard rollups 段落 |
+| deploy README | 已说明开启作用、迁移前提、dashboard 回退方式和写入压力回退方式 |
+| 本地 `.env` | 未修改用户本地文件；compose 默认值已能在未设置 `.env` 时传入 `true` |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `docker compose config --quiet` | 通过 |
+| `JWT_SECRET=test-secret-at-least-32-characters POSTGRES_PASSWORD=test-password docker compose -f deploy/docker-compose.yml config --quiet` | 通过 |
+| `docker compose up -d --force-recreate api` | 通过，API 容器已重建 |
+| `docker compose exec api printenv METRICS_WRITE_ROLLUPS` | `true` |
+| `docker compose exec api printenv DASHBOARD_USE_ROLLUPS` | `true` |
+| `curl -sS http://127.0.0.1:8080/health` | `{"service":"git-ai-enterprise-server","status":"ok","version":"0.1.0"}` |
+| `curl -sS http://127.0.0.1:8080/ready` | `{"checks":{"database":"ok"},"status":"ready"}` |
+| `printenv ENTERPRISE_API_KEY` / `ENTERPRISE_API_KEYS` | 未设置 |
+| active API keys | 数据库中有 13 个 active key，但只有 hash，无法反推出明文用于 dashboard benchmark |
+
+未完成项：
+
+| 项 | 原因 |
+| --- | --- |
+| `bench_dashboard.py` 阶段 1 复测 | 当前 shell 没有明文 `ENTERPRISE_API_KEY`/`ENTERPRISE_API_KEYS`，数据库中的既有 key 只有 hash；不修改用户本地密钥文件，留到有明文 API key 时执行 |
 
 ## 阶段 2: 注册/登录限流配置化
 

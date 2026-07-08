@@ -146,6 +146,32 @@ SELECT key_prefix, name FROM api_keys WHERE revoked_at IS NULL;
 
 建议通过 API 接口创建新的 API Key，以便获取明文密钥。
 
+## Metrics 和 Dashboard Rollup
+
+建议生产部署显式开启：
+
+```env
+METRICS_WRITE_ROLLUPS=true
+DASHBOARD_USE_ROLLUPS=true
+```
+
+`METRICS_WRITE_ROLLUPS=true` 会在 metrics 上传时同步写入 `metrics_daily_rollups`，让 dashboard 查询有预聚合数据可用。`DASHBOARD_USE_ROLLUPS=true` 会让 summary、trends、tools 和 agent comparison 优先读取 rollup 表，避免在大数据量下反复扫描 `metrics_events` 明细。
+
+开启前请先确认数据库迁移已执行到 `016_metrics_daily_rollups` 和 `017_metrics_tool_model_events`，并确认 `metrics_daily_rollups` 有数据：
+
+```bash
+docker compose exec postgres psql -U ${POSTGRES_USER:-gitai} -d ${POSTGRES_DB:-gitai_enterprise} \
+  -c "SELECT COUNT(*) FROM metrics_daily_rollups;"
+```
+
+如果 dashboard 数据异常或需要快速回退，先将 `.env` 中的 `DASHBOARD_USE_ROLLUPS=false`，然后重启 API：
+
+```bash
+docker compose up -d --force-recreate api
+```
+
+如 metrics 写入压力异常，可临时设置 `METRICS_WRITE_ROLLUPS=false` 并重启 API；这只会关闭 daily rollup 写入，不会停止 metrics 明细写入。
+
 ## Postgres 慢查询观测
 
 部署包的 `docker-compose.yml` 已为 PostgreSQL 启用：

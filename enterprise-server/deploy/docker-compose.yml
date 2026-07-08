@@ -23,6 +23,8 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
       - S3_REGION=${S3_REGION:-us-east-1}
       - BASE_URL=${BASE_URL:-http://localhost:8080}
+      - METRICS_WRITE_ROLLUPS=${METRICS_WRITE_ROLLUPS:-true}
+      - DASHBOARD_USE_ROLLUPS=${DASHBOARD_USE_ROLLUPS:-true}
       - SENTRY_DSN=${SENTRY_DSN:-}
       - POSTHOG_HOST=${POSTHOG_HOST:-}
       - POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
