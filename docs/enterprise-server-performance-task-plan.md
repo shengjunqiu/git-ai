@@ -660,29 +660,29 @@ git commit -m "Throttle client last seen updates"
 
 实现步骤：
 
-- [ ] 先在 handler 开头校验 batch 大小。
-- [ ] 预校验所有对象的 hash 格式和 hash/content 匹配；如果有 bad request，直接返回 400。
-- [ ] 将真正写入流程改成有界并发，初始并发度 8。
-- [ ] 如果引入配置，增加：
+- [x] 先在 handler 开头校验 batch 大小。
+- [x] 预校验所有对象的 hash 格式和 hash/content 匹配；如果有 bad request，直接返回 400。
+- [x] 将真正写入流程改成有界并发，初始并发度 8。
+- [x] 如果引入配置，增加：
 
 ```env
 CAS_UPLOAD_CONCURRENCY=8
 ```
 
-- [ ] 单对象内部流程保持不变：
+- [x] 单对象内部流程保持不变：
   - secrets scan
   - S3 put
   - DB transaction
   - ownership upsert
-- [ ] 并发处理结果聚合成原有 response 格式。
-- [ ] 保持部分对象失败时返回 partial result 的语义。
+- [x] 并发处理结果聚合成原有 response 格式。
+- [x] 保持部分对象失败时返回 partial result 的语义。
 
 测试步骤：
 
-- [ ] 同 hash 同内容并发上传仍幂等。
-- [ ] 同 hash 不同内容仍返回 400 或只允许正确内容成功。
-- [ ] S3 put 失败时 DB 不留下记录。
-- [ ] batch 中一部分对象失败时 success/failure count 正确。
+- [x] 同 hash 同内容并发上传仍幂等。
+- [x] 同 hash 不同内容仍返回 400 或只允许正确内容成功。
+- [x] S3 put 失败时 DB 不留下记录。
+- [x] batch 中一部分对象失败时 success/failure count 正确。
 
 测试命令：
 
@@ -702,16 +702,37 @@ CAS_UPLOAD_CONCURRENCY: 1, 4, 8
 
 验收标准：
 
-- [ ] 并发度为 1 时行为等同当前串行逻辑。
-- [ ] 并发度为 4/8 时 batch latency 下降。
-- [ ] API 内存、MinIO/S3 错误率没有明显上升。
+- [x] 并发度为 1 时行为等同当前串行逻辑。
+- [ ] 并发度为 4/8 时 batch latency 下降：本阶段已实现并发处理，端到端压测留到阶段 4 统一验证。
+- [ ] API 内存、MinIO/S3 错误率没有明显上升：本阶段未跑外部压测，留到阶段 4 统一验证。
 
 提交建议：
 
 ```bash
-git add enterprise-server/src/handlers/cas.rs enterprise-server/Cargo.toml enterprise-server/Cargo.lock
+git add enterprise-server/src/handlers/cas.rs enterprise-server/src/config.rs enterprise-server/src/auth/jwt.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/report.rs enterprise-server/src/handlers/release.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-server-deployment.md docs/enterprise-server-performance-task-plan.md
 git commit -m "Process CAS uploads with bounded concurrency"
 ```
+
+阶段 2.4 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| batch 预校验 | 已实现，所有对象在启动并发任务前完成 hash 格式和 hash/content 校验；bad request 不写 S3/DB |
+| 有界并发 | 已实现，`CAS_UPLOAD_CONCURRENCY` 默认 8，实际值通过配置读取并至少为 1 |
+| 单对象流程 | 已保留 secrets scan、S3 put、DB transaction、ownership upsert 顺序 |
+| response 顺序 | 已保持，任务并发完成后按原请求 index 排序返回 |
+| partial result | 已保持，非 BadRequest 的 S3/DB 错误按对象返回 error 并累计 failure_count |
+| 配置文档 | 已更新 `.env.example`、deploy `.env.example` 和部署文档 |
+| 外部压测 | 本阶段未执行，batch latency、内存和 S3 错误率留到阶段 4 统一对比 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `rustfmt --edition 2024 --check src/handlers/cas.rs src/config.rs` | 通过 |
+| `cargo test cas` | 12 passed, 0 failed |
+| `cargo test` | 92 passed, 0 failed |
 
 ### 2.5 report stats 批量 upsert
 

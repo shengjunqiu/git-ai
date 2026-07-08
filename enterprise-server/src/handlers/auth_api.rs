@@ -796,6 +796,7 @@ mod tests {
             s3_access_key: "minioadmin".to_string(),
             s3_secret_key: "minioadmin".to_string(),
             s3_region: "us-east-1".to_string(),
+            cas_upload_concurrency: 8,
             base_url: "http://localhost:8080".to_string(),
             sentry_dsn: String::new(),
             posthog_host: String::new(),

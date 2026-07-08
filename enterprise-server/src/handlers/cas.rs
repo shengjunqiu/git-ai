@@ -3,10 +3,12 @@ use axum::response::Json;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio::task::JoinSet;
 
 use crate::auth::middleware::{AuthExtractor, HeaderExtractor};
 use crate::error::AppError;
-use crate::models::cas::CasUploadRequest;
+use crate::models::cas::{CasObject, CasUploadRequest};
+use crate::models::user::{AuthIdentity, RequestHeaders};
 use crate::pos_encoded::validate_hex_hash;
 use crate::routes::AppState;
 
@@ -20,33 +22,92 @@ pub async fn upload_cas(
     Json(req): Json<CasUploadRequest>,
 ) -> Result<Json<Value>, AppError> {
     validate_cas_batch_size(req.objects.len())?;
+    let objects = prepare_cas_objects(req.objects)?;
 
     tracing::info!(
         "CAS upload: {} objects, author_identity={:?}",
-        req.objects.len(),
+        objects.len(),
         headers.0.author_identity,
     );
+
+    let response = process_cas_uploads(
+        &state,
+        auth.0,
+        headers.0,
+        objects,
+        state.config.cas_upload_concurrency,
+    )
+    .await?;
+
+    Ok(Json(response))
+}
+
+fn prepare_cas_objects(objects: Vec<CasObject>) -> Result<Vec<PreparedCasObject>, AppError> {
+    objects.into_iter().map(PreparedCasObject::new).collect()
+}
+
+async fn process_cas_uploads(
+    state: &AppState,
+    identity: AuthIdentity,
+    headers: RequestHeaders,
+    objects: Vec<PreparedCasObject>,
+    concurrency: usize,
+) -> Result<Value, AppError> {
+    let concurrency = concurrency.max(1);
+    let mut object_iter = objects.into_iter().enumerate();
+    let mut join_set = JoinSet::new();
+    let mut completed = Vec::new();
+
+    while join_set.len() < concurrency {
+        let Some((index, object)) = object_iter.next() else {
+            break;
+        };
+        spawn_cas_upload_task(
+            &mut join_set,
+            state.clone(),
+            identity.clone(),
+            headers.clone(),
+            index,
+            object,
+        );
+    }
+
+    while let Some(join_result) = join_set.join_next().await {
+        let task_result = join_result
+            .map_err(|e| AppError::Internal(format!("CAS upload task failed: {}", e)))?;
+        completed.push(task_result);
+
+        if let Some((index, object)) = object_iter.next() {
+            spawn_cas_upload_task(
+                &mut join_set,
+                state.clone(),
+                identity.clone(),
+                headers.clone(),
+                index,
+                object,
+            );
+        }
+    }
+
+    completed.sort_by_key(|result| result.index);
 
     let mut results = Vec::new();
     let mut success_count = 0i64;
     let mut failure_count = 0i64;
 
-    for object in &req.objects {
-        match process_cas_object(&state, object, &auth.0, &headers.0).await {
+    for task_result in completed {
+        match task_result.result {
             Ok(()) => {
                 results.push(serde_json::json!({
-                    "hash": object.hash,
+                    "hash": task_result.hash,
                     "status": "ok",
                 }));
                 success_count += 1;
             }
             Err(e) => {
-                if matches!(e, AppError::BadRequest(_)) {
-                    return Err(e);
-                }
-                tracing::warn!("CAS upload failed for hash {}: {}", object.hash, e);
+                tracing::warn!("CAS upload failed for hash {}: {}", task_result.hash, e);
                 results.push(serde_json::json!({
-                    "hash": object.hash,
+                    "hash": task_result.hash,
                     "status": "error",
                     "error": e.to_string(),
                 }));
@@ -55,11 +116,31 @@ pub async fn upload_cas(
         }
     }
 
-    Ok(Json(serde_json::json!({
+    Ok(serde_json::json!({
         "results": results,
         "success_count": success_count,
         "failure_count": failure_count,
-    })))
+    }))
+}
+
+fn spawn_cas_upload_task(
+    join_set: &mut JoinSet<CasUploadTaskResult>,
+    state: AppState,
+    identity: AuthIdentity,
+    headers: RequestHeaders,
+    index: usize,
+    object: PreparedCasObject,
+) {
+    join_set.spawn(async move {
+        let hash = object.hash.clone();
+        let result = process_prepared_cas_object(&state, &object, &identity, &headers).await;
+
+        CasUploadTaskResult {
+            index,
+            hash,
+            result,
+        }
+    });
 }
 
 fn validate_cas_batch_size(object_count: usize) -> Result<(), AppError> {
@@ -73,6 +154,49 @@ fn validate_cas_batch_size(object_count: usize) -> Result<(), AppError> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct PreparedCasObject {
+    hash: String,
+    content_json: serde_json::Value,
+    content_str: String,
+    metadata_json: Option<serde_json::Value>,
+}
+
+impl PreparedCasObject {
+    fn new(object: CasObject) -> Result<Self, AppError> {
+        validate_hex_hash(&object.hash)?;
+
+        let content_str = canonical_content_string(&object.content)?;
+        let content_hash = sha256_hex(content_str.as_bytes());
+
+        if object.hash != content_hash {
+            return Err(AppError::BadRequest(format!(
+                "CAS hash mismatch: expected {}, got {}",
+                content_hash, object.hash
+            )));
+        }
+
+        let metadata_json = if object.metadata.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_value(&object.metadata)?)
+        };
+
+        Ok(Self {
+            hash: object.hash,
+            content_json: object.content,
+            content_str,
+            metadata_json,
+        })
+    }
+}
+
+struct CasUploadTaskResult {
+    index: usize,
+    hash: String,
+    result: Result<(), AppError>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,8 +204,8 @@ mod tests {
     use crate::models::cas::CasObject;
     use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
     use object_store::local::LocalFileSystem;
-    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
     use std::collections::HashMap;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -287,8 +411,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn upload_cas_concurrent_same_hash_different_content_rejects_mismatch(
-    ) -> anyhow::Result<()> {
+    async fn upload_cas_concurrent_same_hash_different_content_rejects_mismatch()
+    -> anyhow::Result<()> {
         let object_store_dir = tempfile::tempdir()?;
         let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
             return Ok(());
@@ -324,19 +448,151 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_cas_processes_batch_with_bounded_concurrency() -> anyhow::Result<()> {
+        let object_store_dir = tempfile::tempdir()?;
+        let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let objects: Vec<CasObject> = (0..10)
+            .map(|idx| cas_object(cas_content(&format!("batch-{idx}"))))
+            .collect();
+        let expected_hashes: Vec<String> =
+            objects.iter().map(|object| object.hash.clone()).collect();
+
+        let response = upload_objects(&db.state, user_id, org_id, objects).await?;
+
+        assert_eq!(response.0["success_count"], 10);
+        assert_eq!(response.0["failure_count"], 0);
+        assert_eq!(table_count(&db.state.db, "cas_objects").await?, 10);
+        assert_eq!(table_count(&db.state.db, "cas_ownership").await?, 10);
+        for (idx, expected_hash) in expected_hashes.iter().enumerate() {
+            assert_eq!(response.0["results"][idx]["hash"], *expected_hash);
+            assert_eq!(response.0["results"][idx]["status"], "ok");
+        }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_cas_uploads_with_concurrency_one_preserves_serial_result_order()
+    -> anyhow::Result<()> {
+        let object_store_dir = tempfile::tempdir()?;
+        let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let objects: Vec<CasObject> = (0..4)
+            .map(|idx| cas_object(cas_content(&format!("serial-{idx}"))))
+            .collect();
+        let expected_hashes: Vec<String> =
+            objects.iter().map(|object| object.hash.clone()).collect();
+        let prepared = prepare_cas_objects(objects)?;
+
+        let response = process_cas_uploads(
+            &db.state,
+            auth_extractor(user_id, org_id).0,
+            RequestHeaders::default(),
+            prepared,
+            1,
+        )
+        .await?;
+
+        assert_eq!(response["success_count"], 4);
+        assert_eq!(response["failure_count"], 0);
+        for (idx, expected_hash) in expected_hashes.iter().enumerate() {
+            assert_eq!(response["results"][idx]["hash"], *expected_hash);
+            assert_eq!(response["results"][idx]["status"], "ok");
+        }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_cas_rejects_batch_hash_mismatch_before_writes() -> anyhow::Result<()> {
+        let object_store_dir = tempfile::tempdir()?;
+        let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let valid = cas_object(cas_content("valid-before-bad-request"));
+        let mut tampered = cas_object(cas_content("tampered-before-bad-request"));
+        tampered.content = cas_content("tampered-after-hash");
+
+        let result =
+            upload_objects(&db.state, user_id, org_id, vec![valid.clone(), tampered]).await;
+
+        assert!(matches!(result, Err(AppError::BadRequest(_))));
+        assert_eq!(table_count(&db.state.db, "cas_objects").await?, 0);
+        assert_eq!(table_count(&db.state.db, "cas_ownership").await?, 0);
+        assert!(db.state.cas_store.get(&valid.hash).await?.is_none());
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_cas_aggregates_partial_batch_failures() -> anyhow::Result<()> {
+        let object_store_dir = tempfile::tempdir()?;
+        let (success_object, failing_object) = cas_objects_with_distinct_prefixes();
+        std::fs::create_dir_all(object_store_dir.path().join("cas"))?;
+        std::fs::write(
+            object_store_dir
+                .path()
+                .join("cas")
+                .join(&failing_object.hash[..2]),
+            b"not a directory",
+        )?;
+
+        let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+
+        let response = upload_objects(
+            &db.state,
+            user_id,
+            org_id,
+            vec![success_object.clone(), failing_object.clone()],
+        )
+        .await?;
+
+        assert_eq!(response.0["success_count"], 1);
+        assert_eq!(response.0["failure_count"], 1);
+        assert_eq!(response.0["results"][0]["hash"], success_object.hash);
+        assert_eq!(response.0["results"][0]["status"], "ok");
+        assert_eq!(response.0["results"][1]["hash"], failing_object.hash);
+        assert_eq!(response.0["results"][1]["status"], "error");
+        assert_eq!(table_count(&db.state.db, "cas_objects").await?, 1);
+        assert_eq!(table_count(&db.state.db, "cas_ownership").await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     async fn upload_object(
         state: &AppState,
         user_id: Uuid,
         org_id: Uuid,
         object: CasObject,
     ) -> Result<Json<Value>, AppError> {
+        upload_objects(state, user_id, org_id, vec![object]).await
+    }
+
+    async fn upload_objects(
+        state: &AppState,
+        user_id: Uuid,
+        org_id: Uuid,
+        objects: Vec<CasObject>,
+    ) -> Result<Json<Value>, AppError> {
         upload_cas(
             State(state.clone()),
             auth_extractor(user_id, org_id),
             HeaderExtractor(RequestHeaders::default()),
-            Json(CasUploadRequest {
-                objects: vec![object],
-            }),
+            Json(CasUploadRequest { objects }),
         )
         .await
     }
@@ -365,6 +621,19 @@ mod tests {
             "total_additions": 1,
             "total_deletions": 0,
         })
+    }
+
+    fn cas_objects_with_distinct_prefixes() -> (CasObject, CasObject) {
+        let first = cas_object(cas_content("partial-0"));
+
+        for idx in 1.. {
+            let candidate = cas_object(cas_content(&format!("partial-{idx}")));
+            if first.hash[..2] != candidate.hash[..2] {
+                return (first, candidate);
+            }
+        }
+
+        unreachable!("sha256 prefixes should diverge for generated test objects")
     }
 
     fn content_hash(content: &Value) -> String {
@@ -441,6 +710,7 @@ mod tests {
             s3_access_key: "minioadmin".to_string(),
             s3_secret_key: "minioadmin".to_string(),
             s3_region: "us-east-1".to_string(),
+            cas_upload_concurrency: 8,
             base_url: "http://localhost:8080".to_string(),
             sentry_dsn: String::new(),
             posthog_host: String::new(),
@@ -486,28 +756,14 @@ mod tests {
     }
 }
 
-async fn process_cas_object(
+async fn process_prepared_cas_object(
     state: &AppState,
-    object: &crate::models::cas::CasObject,
-    identity: &crate::models::user::AuthIdentity,
-    headers: &crate::models::user::RequestHeaders,
+    object: &PreparedCasObject,
+    identity: &AuthIdentity,
+    headers: &RequestHeaders,
 ) -> Result<(), AppError> {
-    validate_hex_hash(&object.hash)?;
-
-    let content_json = serde_json::to_value(&object.content)
-        .map_err(|e| AppError::BadRequest(format!("Invalid content JSON: {}", e)))?;
-    let content_str = canonical_content_string(&object.content)?;
-    let content_hash = sha256_hex(content_str.as_bytes());
-
-    if object.hash != content_hash {
-        return Err(AppError::BadRequest(format!(
-            "CAS hash mismatch: expected {}, got {}",
-            content_hash, object.hash
-        )));
-    }
-
     // Server-side secrets detection (defense in depth)
-    let scan_result = crate::services::secrets::scan_json_for_secrets(&content_json);
+    let scan_result = crate::services::secrets::scan_json_for_secrets(&object.content_json);
     if scan_result.secrets_found > 0 {
         tracing::warn!(
             "CAS upload contains {} potential secret(s): hash={} detections={:?}",
@@ -531,16 +787,10 @@ async fn process_cas_object(
         ).await.ok();
     }
 
-    let metadata_json = if object.metadata.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_value(&object.metadata).unwrap())
-    };
-
     // Store content in S3 before marking it readable in Postgres.
     state
         .cas_store
-        .put(&object.hash, content_str.as_bytes())
+        .put(&object.hash, object.content_str.as_bytes())
         .await?;
 
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
@@ -552,12 +802,12 @@ async fn process_cas_object(
         ON CONFLICT (hash) DO NOTHING"#
     )
     .bind(&object.hash)
-    .bind(&content_json)
-    .bind(&metadata_json)
+    .bind(&object.content_json)
+    .bind(&object.metadata_json)
     .bind(&headers.author_identity)
     .bind(identity.user_id)
     .bind(identity.org_id)
-    .bind(content_str.len() as i32)
+    .bind(object.content_str.len() as i32)
     .execute(&mut *tx)
     .await
     .map_err(|e| AppError::Database(e))?;

@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub s3_access_key: String,
     pub s3_secret_key: String,
     pub s3_region: String,
+    pub cas_upload_concurrency: usize,
     pub base_url: String,
     // Telemetry
     pub sentry_dsn: String,
@@ -33,6 +34,7 @@ pub struct EnvConfig {
     pub s3_access_key: Option<String>,
     pub s3_secret_key: Option<String>,
     pub s3_region: Option<String>,
+    pub cas_upload_concurrency: Option<usize>,
     pub base_url: Option<String>,
     // Telemetry
     pub sentry_dsn: Option<String>,
@@ -59,6 +61,7 @@ impl AppConfig {
             s3_access_key: env.s3_access_key.unwrap_or_else(|| "minioadmin".into()),
             s3_secret_key: env.s3_secret_key.unwrap_or_else(|| "minioadmin".into()),
             s3_region: env.s3_region.unwrap_or_else(|| "us-east-1".into()),
+            cas_upload_concurrency: env.cas_upload_concurrency.unwrap_or(8).max(1),
             base_url: env
                 .base_url
                 .unwrap_or_else(|| "http://localhost:8080".into()),

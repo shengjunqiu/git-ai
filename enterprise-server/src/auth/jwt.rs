@@ -119,6 +119,7 @@ mod tests {
             s3_access_key: String::new(),
             s3_secret_key: String::new(),
             s3_region: String::new(),
+            cas_upload_concurrency: 8,
             base_url: String::new(),
             sentry_dsn: String::new(),
             posthog_host: String::new(),
