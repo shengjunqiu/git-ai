@@ -1,11 +1,18 @@
 use axum::extract::State;
 use axum::response::Json;
 use serde_json::Value;
+use sqlx::{Postgres, QueryBuilder, Transaction};
+use std::collections::{HashMap, HashSet};
 
 use crate::auth::middleware::{AuthExtractor, HeaderExtractor as _HeaderExtractor};
 use crate::error::AppError;
-use crate::models::report::{ProjectSummaryReport, ReportDocument};
+use crate::models::report::{
+    ProjectSummaryReport, ReportCommit, ReportDocument, ToolModelBreakdown,
+};
 use crate::routes::AppState;
+
+const REPORT_COMMIT_UPSERT_CHUNK_SIZE: usize = 1000;
+const REPORT_TOOL_MODEL_UPSERT_CHUNK_SIZE: usize = 1000;
 
 /// POST /api/v1/reports — Upload report data
 pub async fn upload_report(
@@ -67,106 +74,293 @@ pub async fn upload_report(
     .map_err(|e| AppError::Database(e))?;
 
     let upload_id = upload_row.0;
-    let mut inserted_commits = 0i64;
-    let mut updated_commits = 0i64;
-
-    for commit in &report.commits {
-        if commit.sha.trim().is_empty() {
-            continue;
-        }
-
-        let stats = &commit.stats;
-        let inserted: bool = sqlx::query_scalar(
-            r#"INSERT INTO commit_stats (
-                project_id, sha, author, author_time, subject, has_authorship_note,
-                git_diff_added_lines, git_diff_deleted_lines, ai_additions, human_additions,
-                mixed_additions, unknown_additions, ai_accepted, total_ai_additions,
-                total_ai_deletions, time_waiting_for_ai
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            ON CONFLICT (project_id, sha) DO UPDATE SET
-                author = EXCLUDED.author,
-                author_time = EXCLUDED.author_time,
-                subject = EXCLUDED.subject,
-                has_authorship_note = EXCLUDED.has_authorship_note,
-                git_diff_added_lines = EXCLUDED.git_diff_added_lines,
-                git_diff_deleted_lines = EXCLUDED.git_diff_deleted_lines,
-                ai_additions = EXCLUDED.ai_additions,
-                human_additions = EXCLUDED.human_additions,
-                mixed_additions = EXCLUDED.mixed_additions,
-                unknown_additions = EXCLUDED.unknown_additions,
-                ai_accepted = EXCLUDED.ai_accepted,
-                total_ai_additions = EXCLUDED.total_ai_additions,
-                total_ai_deletions = EXCLUDED.total_ai_deletions,
-                time_waiting_for_ai = EXCLUDED.time_waiting_for_ai
-            RETURNING (xmax = '0'::xid) AS inserted"#,
-        )
-        .bind(project_id)
-        .bind(&commit.sha)
-        .bind(&commit.author)
-        .bind(&commit.author_time)
-        .bind(&commit.subject)
-        .bind(commit.has_authorship_note)
-        .bind(stats.git_diff_added_lines.unwrap_or(0))
-        .bind(stats.git_diff_deleted_lines.unwrap_or(0))
-        .bind(stats.ai_additions.unwrap_or(0))
-        .bind(stats.human_additions.unwrap_or(0))
-        .bind(stats.mixed_additions.unwrap_or(0))
-        .bind(stats.unknown_additions.unwrap_or(0))
-        .bind(stats.ai_accepted.unwrap_or(0))
-        .bind(stats.total_ai_additions.unwrap_or(0))
-        .bind(stats.total_ai_deletions.unwrap_or(0))
-        .bind(stats.time_waiting_for_ai.unwrap_or(0))
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
-
-        if inserted {
-            inserted_commits += 1;
-        } else {
-            updated_commits += 1;
-        }
-    }
-
-    // Store tool_model_breakdown
-    if let Some(breakdown) = &report.tool_model_breakdown {
-        for (tool_model, stats) in breakdown {
-            sqlx::query(
-                r#"INSERT INTO tool_model_stats (
-                    project_id, tool_model, ai_additions, mixed_additions,
-                    ai_accepted, total_ai_additions, total_ai_deletions, time_waiting_for_ai
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (project_id, tool_model) DO UPDATE SET
-                    ai_additions = EXCLUDED.ai_additions,
-                    mixed_additions = EXCLUDED.mixed_additions,
-                    ai_accepted = EXCLUDED.ai_accepted,
-                    total_ai_additions = EXCLUDED.total_ai_additions,
-                    total_ai_deletions = EXCLUDED.total_ai_deletions,
-                    time_waiting_for_ai = EXCLUDED.time_waiting_for_ai"#,
-            )
-            .bind(project_id)
-            .bind(tool_model)
-            .bind(stats.ai_additions.unwrap_or(0))
-            .bind(stats.mixed_additions.unwrap_or(0))
-            .bind(stats.ai_accepted.unwrap_or(0))
-            .bind(stats.total_ai_additions.unwrap_or(0))
-            .bind(stats.total_ai_deletions.unwrap_or(0))
-            .bind(stats.time_waiting_for_ai.unwrap_or(0))
-            .execute(&mut *tx)
-            .await
-            .map_err(AppError::Database)?;
-        }
-    }
+    let commit_summary = upsert_commit_stats(&mut tx, project_id, &report.commits).await?;
+    upsert_tool_model_stats(&mut tx, project_id, report.tool_model_breakdown.as_ref()).await?;
 
     tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(serde_json::json!({
         "project_id": project_id,
         "upload_id": upload_id,
-        "inserted_commits": inserted_commits,
-        "updated_commits": updated_commits,
-        "duplicate_commits": updated_commits,
+        "inserted_commits": commit_summary.inserted_commits,
+        "updated_commits": commit_summary.updated_commits,
+        "duplicate_commits": commit_summary.updated_commits,
     })))
+}
+
+#[derive(Debug)]
+struct CommitUpsertSummary {
+    inserted_commits: i64,
+    updated_commits: i64,
+}
+
+#[derive(Debug)]
+struct PreparedCommitStat {
+    sha: String,
+    author: String,
+    author_time: String,
+    subject: String,
+    has_authorship_note: bool,
+    git_diff_added_lines: i64,
+    git_diff_deleted_lines: i64,
+    ai_additions: i64,
+    human_additions: i64,
+    mixed_additions: i64,
+    unknown_additions: i64,
+    ai_accepted: i64,
+    total_ai_additions: i64,
+    total_ai_deletions: i64,
+    time_waiting_for_ai: i64,
+}
+
+impl PreparedCommitStat {
+    fn from_commit(commit: &ReportCommit) -> Option<Self> {
+        let sha = commit.sha.trim();
+        if sha.is_empty() {
+            return None;
+        }
+
+        let stats = &commit.stats;
+        Some(Self {
+            sha: sha.to_string(),
+            author: commit.author.clone(),
+            author_time: commit.author_time.clone(),
+            subject: commit.subject.clone(),
+            has_authorship_note: commit.has_authorship_note,
+            git_diff_added_lines: stats.git_diff_added_lines.unwrap_or(0),
+            git_diff_deleted_lines: stats.git_diff_deleted_lines.unwrap_or(0),
+            ai_additions: stats.ai_additions.unwrap_or(0),
+            human_additions: stats.human_additions.unwrap_or(0),
+            mixed_additions: stats.mixed_additions.unwrap_or(0),
+            unknown_additions: stats.unknown_additions.unwrap_or(0),
+            ai_accepted: stats.ai_accepted.unwrap_or(0),
+            total_ai_additions: stats.total_ai_additions.unwrap_or(0),
+            total_ai_deletions: stats.total_ai_deletions.unwrap_or(0),
+            time_waiting_for_ai: stats.time_waiting_for_ai.unwrap_or(0),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PreparedToolModelStat {
+    tool_model: String,
+    ai_additions: i64,
+    mixed_additions: i64,
+    ai_accepted: i64,
+    total_ai_additions: i64,
+    total_ai_deletions: i64,
+    time_waiting_for_ai: i64,
+}
+
+impl PreparedToolModelStat {
+    fn from_breakdown(tool_model: &str, stats: &ToolModelBreakdown) -> Self {
+        Self {
+            tool_model: tool_model.to_string(),
+            ai_additions: stats.ai_additions.unwrap_or(0),
+            mixed_additions: stats.mixed_additions.unwrap_or(0),
+            ai_accepted: stats.ai_accepted.unwrap_or(0),
+            total_ai_additions: stats.total_ai_additions.unwrap_or(0),
+            total_ai_deletions: stats.total_ai_deletions.unwrap_or(0),
+            time_waiting_for_ai: stats.time_waiting_for_ai.unwrap_or(0),
+        }
+    }
+}
+
+async fn upsert_commit_stats(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    commits: &[ReportCommit],
+) -> Result<CommitUpsertSummary, AppError> {
+    let rows = prepare_commit_stats(commits);
+    if rows.is_empty() {
+        return Ok(CommitUpsertSummary {
+            inserted_commits: 0,
+            updated_commits: 0,
+        });
+    }
+
+    let shas: Vec<String> = rows.iter().map(|row| row.sha.clone()).collect();
+    let existing_shas = fetch_existing_commit_shas(tx, project_id, &shas).await?;
+
+    for chunk in rows.chunks(REPORT_COMMIT_UPSERT_CHUNK_SIZE) {
+        upsert_commit_stats_chunk(tx, project_id, chunk).await?;
+    }
+
+    let updated_commits = rows
+        .iter()
+        .filter(|row| existing_shas.contains(&row.sha))
+        .count() as i64;
+    let inserted_commits = rows.len() as i64 - updated_commits;
+
+    Ok(CommitUpsertSummary {
+        inserted_commits,
+        updated_commits,
+    })
+}
+
+fn prepare_commit_stats(commits: &[ReportCommit]) -> Vec<PreparedCommitStat> {
+    let mut rows = Vec::new();
+    let mut index_by_sha = HashMap::new();
+
+    for commit in commits {
+        let Some(row) = PreparedCommitStat::from_commit(commit) else {
+            continue;
+        };
+
+        if let Some(index) = index_by_sha.get(&row.sha).copied() {
+            rows[index] = row;
+        } else {
+            index_by_sha.insert(row.sha.clone(), rows.len());
+            rows.push(row);
+        }
+    }
+
+    rows
+}
+
+async fn fetch_existing_commit_shas(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    shas: &[String],
+) -> Result<HashSet<String>, AppError> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT sha FROM commit_stats WHERE project_id = $1 AND sha = ANY($2)")
+            .bind(project_id)
+            .bind(shas)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(AppError::Database)?;
+
+    Ok(rows.into_iter().map(|(sha,)| sha).collect())
+}
+
+async fn upsert_commit_stats_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    rows: &[PreparedCommitStat],
+) -> Result<(), AppError> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        r#"INSERT INTO commit_stats (
+            project_id, sha, author, author_time, subject, has_authorship_note,
+            git_diff_added_lines, git_diff_deleted_lines, ai_additions, human_additions,
+            mixed_additions, unknown_additions, ai_accepted, total_ai_additions,
+            total_ai_deletions, time_waiting_for_ai
+        ) "#,
+    );
+
+    builder.push_values(rows, |mut row_builder, row| {
+        row_builder
+            .push_bind(project_id)
+            .push_bind(&row.sha)
+            .push_bind(&row.author)
+            .push_bind(&row.author_time)
+            .push_bind(&row.subject)
+            .push_bind(row.has_authorship_note)
+            .push_bind(row.git_diff_added_lines)
+            .push_bind(row.git_diff_deleted_lines)
+            .push_bind(row.ai_additions)
+            .push_bind(row.human_additions)
+            .push_bind(row.mixed_additions)
+            .push_bind(row.unknown_additions)
+            .push_bind(row.ai_accepted)
+            .push_bind(row.total_ai_additions)
+            .push_bind(row.total_ai_deletions)
+            .push_bind(row.time_waiting_for_ai);
+    });
+
+    builder.push(
+        r#" ON CONFLICT (project_id, sha) DO UPDATE SET
+            author = EXCLUDED.author,
+            author_time = EXCLUDED.author_time,
+            subject = EXCLUDED.subject,
+            has_authorship_note = EXCLUDED.has_authorship_note,
+            git_diff_added_lines = EXCLUDED.git_diff_added_lines,
+            git_diff_deleted_lines = EXCLUDED.git_diff_deleted_lines,
+            ai_additions = EXCLUDED.ai_additions,
+            human_additions = EXCLUDED.human_additions,
+            mixed_additions = EXCLUDED.mixed_additions,
+            unknown_additions = EXCLUDED.unknown_additions,
+            ai_accepted = EXCLUDED.ai_accepted,
+            total_ai_additions = EXCLUDED.total_ai_additions,
+            total_ai_deletions = EXCLUDED.total_ai_deletions,
+            time_waiting_for_ai = EXCLUDED.time_waiting_for_ai"#,
+    );
+
+    builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+async fn upsert_tool_model_stats(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    breakdown: Option<&HashMap<String, ToolModelBreakdown>>,
+) -> Result<(), AppError> {
+    let Some(breakdown) = breakdown else {
+        return Ok(());
+    };
+
+    let rows: Vec<PreparedToolModelStat> = breakdown
+        .iter()
+        .map(|(tool_model, stats)| PreparedToolModelStat::from_breakdown(tool_model, stats))
+        .collect();
+
+    for chunk in rows.chunks(REPORT_TOOL_MODEL_UPSERT_CHUNK_SIZE) {
+        upsert_tool_model_stats_chunk(tx, project_id, chunk).await?;
+    }
+
+    Ok(())
+}
+
+async fn upsert_tool_model_stats_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    rows: &[PreparedToolModelStat],
+) -> Result<(), AppError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        r#"INSERT INTO tool_model_stats (
+            project_id, tool_model, ai_additions, mixed_additions,
+            ai_accepted, total_ai_additions, total_ai_deletions, time_waiting_for_ai
+        ) "#,
+    );
+
+    builder.push_values(rows, |mut row_builder, row| {
+        row_builder
+            .push_bind(project_id)
+            .push_bind(&row.tool_model)
+            .push_bind(row.ai_additions)
+            .push_bind(row.mixed_additions)
+            .push_bind(row.ai_accepted)
+            .push_bind(row.total_ai_additions)
+            .push_bind(row.total_ai_deletions)
+            .push_bind(row.time_waiting_for_ai);
+    });
+
+    builder.push(
+        r#" ON CONFLICT (project_id, tool_model) DO UPDATE SET
+            ai_additions = EXCLUDED.ai_additions,
+            mixed_additions = EXCLUDED.mixed_additions,
+            ai_accepted = EXCLUDED.ai_accepted,
+            total_ai_additions = EXCLUDED.total_ai_additions,
+            total_ai_deletions = EXCLUDED.total_ai_deletions,
+            time_waiting_for_ai = EXCLUDED.time_waiting_for_ai"#,
+    );
+
+    builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(())
 }
 
 /// POST /api/v1/summaries — Upload summary data (no auth required!)
@@ -216,8 +410,8 @@ mod tests {
     use crate::auth::middleware::HeaderExtractor;
     use crate::models::report::{ReportCommit, ReportCommitStats, ReportRepo, ToolModelBreakdown};
     use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
-    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -430,11 +624,71 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_report_bulk_upserts_large_report_in_chunks() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let commits: Vec<ReportCommit> = (0..=REPORT_COMMIT_UPSERT_CHUNK_SIZE)
+            .map(|idx| {
+                report_commit(
+                    &format!("large-sha-{idx:04}"),
+                    "Bulk Author",
+                    &format!("bulk subject {idx}"),
+                    stats(idx as i64),
+                )
+            })
+            .collect();
+        let breakdown = Some(HashMap::from([
+            ("Codex gpt-5".to_string(), tool_stats(1)),
+            ("Cursor claude-sonnet".to_string(), tool_stats(2)),
+        ]));
+
+        let response = upload_report(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id),
+            HeaderExtractor(RequestHeaders::default()),
+            Json(report_document_with_commits(
+                "large-report-repo",
+                commits,
+                breakdown,
+            )),
+        )
+        .await?;
+
+        assert_eq!(
+            response.0["inserted_commits"],
+            (REPORT_COMMIT_UPSERT_CHUNK_SIZE + 1) as i64
+        );
+        assert_eq!(response.0["updated_commits"], 0);
+        assert_eq!(
+            table_count(&db.state.db, "commit_stats", None).await?,
+            (REPORT_COMMIT_UPSERT_CHUNK_SIZE + 1) as i64
+        );
+        assert_eq!(
+            table_count(&db.state.db, "tool_model_stats", None).await?,
+            2
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     fn report_document(
         remote_url_hash: &str,
         commit: ReportCommit,
         tool_model_breakdown: Option<HashMap<String, ToolModelBreakdown>>,
     ) -> ReportDocument {
+        report_document_with_commits(remote_url_hash, vec![commit], tool_model_breakdown)
+    }
+
+    fn report_document_with_commits(
+        remote_url_hash: &str,
+        commits: Vec<ReportCommit>,
+        tool_model_breakdown: Option<HashMap<String, ToolModelBreakdown>>,
+    ) -> ReportDocument {
+        let head_commit = commits.last().map(|commit| commit.sha.clone());
         ReportDocument {
             schema_version: "3.0.0".into(),
             generated_at: "2026-07-07T00:00:00Z".into(),
@@ -443,13 +697,13 @@ mod tests {
                 workdir: Some("/tmp/repo".into()),
                 remote_url_hash: Some(remote_url_hash.into()),
                 branch: Some("main".into()),
-                head_commit: Some(commit.sha.clone()),
+                head_commit,
             }),
             range: None,
             summary: None,
             ratios: None,
             tool_model_breakdown,
-            commits: vec![commit],
+            commits,
         }
     }
 

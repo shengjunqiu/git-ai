@@ -744,18 +744,18 @@ git commit -m "Process CAS uploads with bounded concurrency"
 
 实现步骤：
 
-- [ ] 保留整个 `upload_report` 的 transaction。
-- [ ] 将 `commit_stats` 写入改成按 chunk 批量 upsert。
-- [ ] 将 `tool_model_stats` 写入改成批量 upsert。
-- [ ] 保持 `ON CONFLICT ... DO UPDATE SET` 更新全部字段。
-- [ ] 如果 inserted/updated 计数难以精确保留，可以先增加 `processed_commits`，但不要误导性地返回错误计数。
-- [ ] 更新测试断言。
+- [x] 保留整个 `upload_report` 的 transaction。
+- [x] 将 `commit_stats` 写入改成按 chunk 批量 upsert。
+- [x] 将 `tool_model_stats` 写入改成批量 upsert。
+- [x] 保持 `ON CONFLICT ... DO UPDATE SET` 更新全部字段。
+- [x] 保留 `inserted_commits` / `updated_commits` 计数；写入前查询已有 sha，本次 report 内重复 sha 取最后一条。
+- [x] 更新测试断言。
 
 测试步骤：
 
-- [ ] 事务回滚测试继续通过。
-- [ ] 重复上传同 commit 后数据更新为第二次结果。
-- [ ] 大 report 上传不会超时。
+- [x] 事务回滚测试继续通过。
+- [x] 重复上传同 commit 后数据更新为第二次结果。
+- [x] 大 report 上传不会超时。
 
 测试命令：
 
@@ -774,8 +774,8 @@ tool_model rows: 1, 10, 100
 
 验收标准：
 
-- [ ] 1000 commit report 上传耗时明显下降。
-- [ ] transaction 语义不变。
+- [ ] 1000 commit report 上传耗时明显下降：本阶段已将 DB 往返从逐条 SQL 降为按 chunk 批量 upsert，端到端耗时压测留到阶段 4 统一验证。
+- [x] transaction 语义不变。
 
 提交建议：
 
@@ -783,6 +783,26 @@ tool_model rows: 1, 10, 100
 git add enterprise-server/src/handlers/report.rs
 git commit -m "Bulk upsert enterprise report stats"
 ```
+
+阶段 2.5 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| `commit_stats` 批量 upsert | 已实现，按 1000 条 chunk 使用 `sqlx::QueryBuilder` 批量写入 |
+| `tool_model_stats` 批量 upsert | 已实现，按 1000 条 chunk 使用 `sqlx::QueryBuilder` 批量写入 |
+| inserted/updated 计数 | 已保留，写入前查询当前 project 已存在 sha 后计算 |
+| report 内重复 sha | 已处理，同一 report 中重复 sha 取最后一条，避免单条 bulk insert 内重复 conflict key |
+| transaction 语义 | 已保持，project、upload、commit stats、tool model stats 仍在同一 transaction 内提交或回滚 |
+| 外部压测 | 本阶段未执行，1000/5000 commits report 的端到端耗时留到阶段 4 统一对比 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `rustfmt --edition 2024 --check src/handlers/report.rs` | 通过 |
+| `cargo test report` | 4 passed, 0 failed |
+| `cargo test` | 93 passed, 0 failed |
 
 ## 阶段 3: P2 dashboard 查询优化
 
