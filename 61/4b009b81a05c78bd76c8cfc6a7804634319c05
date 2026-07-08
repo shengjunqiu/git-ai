@@ -1,0 +1,34 @@
+scripts/benchmarks/enterprise/README.md
+  a73676cfded0c055 89-107
+enterprise-server/deploy/docker-compose.yml
+  a73676cfded0c055 46-56
+enterprise-server/deploy/README.md
+  a73676cfded0c055 135-137,146-204
+enterprise-server/docker-compose.yml
+  a73676cfded0c055 33-43
+scripts/benchmarks/enterprise/postgres_observability.sql
+  a73676cfded0c055 1-86
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 1493-1495,1509,1520-1551
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "614b009b81a05c78bd76c8cfc6a7804634319c05",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 220,
+      "total_deletions": 8,
+      "accepted_lines": 225,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/77a0648e951d93b61be588cd94296eef4e1b0d9599aab33bb7425d9ca422024f"
+    }
+  }
+}
