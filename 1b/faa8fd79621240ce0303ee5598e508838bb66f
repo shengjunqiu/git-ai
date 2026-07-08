@@ -1,0 +1,24 @@
+docs/enterprise-auth-login-performance-task-plan.md
+  a73676cfded0c055 953-959,964-965,968-1016
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "1bfaa8fd79621240ce0303ee5598e508838bb66f",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 177,
+      "total_deletions": 27,
+      "accepted_lines": 59,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/228ce2eb27add584f7b343b131ea6a453828580cb423305438a7241b366cf59e"
+    }
+  }
+}
