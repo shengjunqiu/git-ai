@@ -1962,38 +1962,17 @@ async fn fetch_metrics_tool_rows(
 
     sqlx::query_as(
         r#"SELECT
-            pair.tool_model,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions
-        FROM metrics_events m
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS pair(tool_model, ord)
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
-        WHERE m.event_type = 1
-          AND pair.tool_model != 'all'
-          AND pair.tool_model != ''
-          AND ($1::uuid IS NULL OR m.user_id = $1)
-          AND ($2::uuid IS NULL OR m.org_id = $2)
-        GROUP BY pair.tool_model
-        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#,
+            tool_model,
+            COALESCE(SUM(ai_additions), 0)::bigint AS ai_additions,
+            COALESCE(SUM(mixed_additions), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(total_ai_additions), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(total_ai_deletions), 0)::bigint AS total_ai_deletions
+        FROM metrics_tool_model_events
+        WHERE ($1::uuid IS NULL OR user_id = $1)
+          AND ($2::uuid IS NULL OR org_id = $2)
+        GROUP BY tool_model
+        ORDER BY SUM(ai_additions) DESC"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -2037,40 +2016,19 @@ async fn fetch_metrics_agent_rows(
 
     sqlx::query_as(
         r#"SELECT
-            pair.tool_model,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(mixed.value) = 'number' THEN (mixed.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS mixed_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(accepted.value) = 'number' THEN (accepted.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS ai_accepted,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_add.value) = 'number' THEN (total_add.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_additions,
-            COALESCE(SUM(CASE WHEN jsonb_typeof(total_del.value) = 'number' THEN (total_del.value #>> '{}')::bigint ELSE 0 END), 0)::bigint AS total_ai_deletions,
-            COUNT(DISTINCT m.id)::bigint AS commits
-        FROM metrics_events m
-        CROSS JOIN LATERAL jsonb_array_elements_text(
-            CASE WHEN jsonb_typeof(m.tool_model_pairs::jsonb) = 'array' THEN m.tool_model_pairs::jsonb ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS pair(tool_model, ord)
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'5') = 'array' THEN m.raw_values->'5' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS ai(value, ord) ON ai.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'4') = 'array' THEN m.raw_values->'4' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS mixed(value, ord) ON mixed.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'6') = 'array' THEN m.raw_values->'6' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS accepted(value, ord) ON accepted.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'7') = 'array' THEN m.raw_values->'7' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_add(value, ord) ON total_add.ord = pair.ord
-        LEFT JOIN LATERAL jsonb_array_elements(
-            CASE WHEN jsonb_typeof(m.raw_values->'8') = 'array' THEN m.raw_values->'8' ELSE '[]'::jsonb END
-        ) WITH ORDINALITY AS total_del(value, ord) ON total_del.ord = pair.ord
-        WHERE m.event_type = 1
-          AND pair.tool_model != 'all'
-          AND pair.tool_model != ''
-          AND ($1::uuid IS NULL OR m.user_id = $1)
-          AND ($2::uuid IS NULL OR m.org_id = $2)
-          AND ($3::text IS NULL OR m.org_id = (SELECT id FROM organizations WHERE slug = $3))
-        GROUP BY pair.tool_model
-        ORDER BY SUM(CASE WHEN jsonb_typeof(ai.value) = 'number' THEN (ai.value #>> '{}')::bigint ELSE 0 END) DESC"#,
+            tool_model,
+            COALESCE(SUM(ai_additions), 0)::bigint AS ai_additions,
+            COALESCE(SUM(mixed_additions), 0)::bigint AS mixed_additions,
+            COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+            COALESCE(SUM(total_ai_additions), 0)::bigint AS total_ai_additions,
+            COALESCE(SUM(total_ai_deletions), 0)::bigint AS total_ai_deletions,
+            COUNT(DISTINCT metric_event_id)::bigint AS commits
+        FROM metrics_tool_model_events
+        WHERE ($1::uuid IS NULL OR user_id = $1)
+          AND ($2::uuid IS NULL OR org_id = $2)
+          AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+        GROUP BY tool_model
+        ORDER BY SUM(ai_additions) DESC"#,
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -3383,12 +3341,13 @@ mod tests {
         });
         let tool_model_pairs = serde_json::json!(["all", "codex::gpt-5"]);
 
-        sqlx::query(
+        let metric_event_id: i64 = sqlx::query_scalar(
             r#"INSERT INTO metrics_events (
                 event_type, timestamp, user_id, org_id, repo_url, commit_sha,
                 human_additions, ai_additions, mixed_additions, ai_accepted,
                 git_diff_added_lines, tool_model_pairs, raw_values
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            RETURNING id"#,
         )
         .bind(1_i16)
         .bind(timestamp)
@@ -3403,6 +3362,24 @@ mod tests {
         .bind(total_lines)
         .bind(&tool_model_pairs)
         .bind(&raw_values)
+        .fetch_one(pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO metrics_tool_model_events (
+                metric_event_id, org_id, user_id, timestamp, tool_model,
+                ai_additions, mixed_additions, ai_accepted,
+                total_ai_additions, total_ai_deletions
+            ) VALUES ($1, $2, $3, $4, 'codex::gpt-5', $5, $6, $7, $8, 0)"#,
+        )
+        .bind(metric_event_id)
+        .bind(org_id)
+        .bind(user_id)
+        .bind(timestamp)
+        .bind(i64::from(tool_ai_lines))
+        .bind(i64::from(tool_mixed_lines))
+        .bind(i64::from(tool_accepted))
+        .bind(i64::from(tool_ai_lines))
         .execute(pool)
         .await?;
 

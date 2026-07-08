@@ -184,6 +184,22 @@ struct PreparedToolRollup {
     ai_lines: i64,
     mixed_lines: i64,
     ai_accepted: i64,
+    total_ai_additions: i64,
+    total_ai_deletions: i64,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedToolModelEventRow {
+    metric_event_id: i64,
+    org_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    timestamp: i64,
+    tool_model: String,
+    ai_additions: i64,
+    mixed_additions: i64,
+    ai_accepted: i64,
+    total_ai_additions: i64,
+    total_ai_deletions: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -216,7 +232,8 @@ async fn insert_metrics_chunk(
     }
 
     let mut tx = pool.begin().await.map_err(AppError::Database)?;
-    insert_metrics_events_chunk(&mut tx, rows).await?;
+    let metric_event_ids = insert_metrics_events_chunk(&mut tx, rows).await?;
+    insert_metrics_tool_model_events_chunk(&mut tx, rows, &metric_event_ids).await?;
     if write_rollups {
         upsert_metrics_daily_rollups(&mut tx, rows).await?;
     }
@@ -228,7 +245,7 @@ async fn insert_metrics_chunk(
 async fn insert_metrics_events_chunk(
     tx: &mut Transaction<'_, Postgres>,
     rows: &[PreparedMetricRow],
-) -> Result<(), AppError> {
+) -> Result<Vec<i64>, AppError> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO metrics_events (
             event_type, timestamp, user_id, distinct_id, org_id,
@@ -271,13 +288,15 @@ async fn insert_metrics_events_chunk(
             .push_bind(&row.raw_attrs_json);
     });
 
-    builder
-        .build()
-        .execute(&mut **tx)
+    builder.push(" RETURNING id");
+
+    let inserted_rows: Vec<(i64,)> = builder
+        .build_query_as()
+        .fetch_all(&mut **tx)
         .await
         .map_err(AppError::Database)?;
 
-    Ok(())
+    Ok(inserted_rows.into_iter().map(|(id,)| id).collect())
 }
 
 fn prepare_tool_rollups(event: &DecodedMetricEvent) -> Vec<PreparedToolRollup> {
@@ -298,9 +317,24 @@ fn prepare_tool_rollups(event: &DecodedMetricEvent) -> Vec<PreparedToolRollup> {
                 ai_lines: metric_value_at(event.ai_additions.as_deref(), idx),
                 mixed_lines: metric_value_at(event.mixed_additions.as_deref(), idx),
                 ai_accepted: metric_value_at(event.ai_accepted.as_deref(), idx),
+                total_ai_additions: raw_metric_value_at(&event.raw_values, "7", idx),
+                total_ai_deletions: raw_metric_value_at(&event.raw_values, "8", idx),
             })
         })
         .collect()
+}
+
+fn raw_metric_value_at(
+    raw_values: &std::collections::HashMap<String, serde_json::Value>,
+    key: &str,
+    idx: usize,
+) -> i64 {
+    raw_values
+        .get(key)
+        .and_then(|value| value.as_array())
+        .and_then(|values| values.get(idx))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0)
 }
 
 fn metric_value_at(values: Option<&[i32]>, idx: usize) -> i64 {
@@ -308,6 +342,84 @@ fn metric_value_at(values: Option<&[i32]>, idx: usize) -> i64 {
         .and_then(|values| values.get(idx).copied())
         .unwrap_or(0)
         .into()
+}
+
+fn prepare_tool_model_event_rows(
+    rows: &[PreparedMetricRow],
+    metric_event_ids: &[i64],
+) -> Result<Vec<PreparedToolModelEventRow>, AppError> {
+    if rows.len() != metric_event_ids.len() {
+        return Err(AppError::Internal(format!(
+            "Inserted metrics event id count mismatch: expected {}, got {}",
+            rows.len(),
+            metric_event_ids.len()
+        )));
+    }
+
+    let mut tool_rows = Vec::new();
+    for (row, metric_event_id) in rows.iter().zip(metric_event_ids.iter().copied()) {
+        if row.event_type != 1 {
+            continue;
+        }
+
+        for tool in &row.tool_rollups {
+            tool_rows.push(PreparedToolModelEventRow {
+                metric_event_id,
+                org_id: row.org_id,
+                user_id: row.user_id,
+                timestamp: row.timestamp,
+                tool_model: tool.tool_model.clone(),
+                ai_additions: tool.ai_lines,
+                mixed_additions: tool.mixed_lines,
+                ai_accepted: tool.ai_accepted,
+                total_ai_additions: tool.total_ai_additions,
+                total_ai_deletions: tool.total_ai_deletions,
+            });
+        }
+    }
+
+    Ok(tool_rows)
+}
+
+async fn insert_metrics_tool_model_events_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &[PreparedMetricRow],
+    metric_event_ids: &[i64],
+) -> Result<(), AppError> {
+    let tool_rows = prepare_tool_model_event_rows(rows, metric_event_ids)?;
+    if tool_rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        r#"INSERT INTO metrics_tool_model_events (
+            metric_event_id, org_id, user_id, timestamp, tool_model,
+            ai_additions, mixed_additions, ai_accepted,
+            total_ai_additions, total_ai_deletions
+        ) "#,
+    );
+
+    builder.push_values(&tool_rows, |mut row_builder, row| {
+        row_builder
+            .push_bind(row.metric_event_id)
+            .push_bind(row.org_id)
+            .push_bind(row.user_id)
+            .push_bind(row.timestamp)
+            .push_bind(&row.tool_model)
+            .push_bind(row.ai_additions)
+            .push_bind(row.mixed_additions)
+            .push_bind(row.ai_accepted)
+            .push_bind(row.total_ai_additions)
+            .push_bind(row.total_ai_deletions);
+    });
+
+    builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(())
 }
 
 fn prepare_daily_rollups(rows: &[PreparedMetricRow]) -> Vec<PreparedDailyRollup> {
@@ -686,6 +798,22 @@ mod tests {
         .await?;
         assert_eq!(tool_ai_lines, 50);
 
+        let tool_model_row: (i64, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(ai_additions), 0)::bigint,
+                    COALESCE(SUM(mixed_additions), 0)::bigint,
+                    COALESCE(SUM(ai_accepted), 0)::bigint,
+                    COALESCE(SUM(total_ai_additions), 0)::bigint,
+                    COALESCE(SUM(total_ai_deletions), 0)::bigint
+             FROM metrics_tool_model_events
+             WHERE org_id = $1 AND user_id = $2 AND tool_model = $3",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .bind("codex::gpt-5")
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(tool_model_row, (50, 20, 30, 50, 0));
+
         db.cleanup().await?;
         Ok(())
     }
@@ -710,6 +838,7 @@ mod tests {
         assert!(response.errors.is_empty());
         assert_eq!(metrics_count(&db.pool).await?, 1);
         assert_eq!(rollups_count(&db.pool).await?, 0);
+        assert_eq!(tool_model_events_count(&db.pool).await?, 1);
 
         db.cleanup().await?;
         Ok(())
@@ -900,7 +1029,11 @@ mod tests {
         values.insert("1".into(), serde_json::json!(2));
         values.insert("2".into(), serde_json::json!(30));
         values.insert("3".into(), serde_json::json!(["all", "codex::gpt-5"]));
+        values.insert("4".into(), serde_json::json!([8, 2]));
         values.insert("5".into(), serde_json::json!([20, 5]));
+        values.insert("6".into(), serde_json::json!([10, 3]));
+        values.insert("7".into(), serde_json::json!([20, 5]));
+        values.insert("8".into(), serde_json::json!([0, 0]));
 
         let mut attrs = HashMap::new();
         attrs.insert("0".into(), serde_json::json!("1.3.2"));
@@ -937,6 +1070,14 @@ mod tests {
     async fn rollups_count(pool: &PgPool) -> anyhow::Result<i64> {
         Ok(
             sqlx::query_scalar("SELECT COUNT(*) FROM metrics_daily_rollups")
+                .fetch_one(pool)
+                .await?,
+        )
+    }
+
+    async fn tool_model_events_count(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM metrics_tool_model_events")
                 .fetch_one(pool)
                 .await?,
         )

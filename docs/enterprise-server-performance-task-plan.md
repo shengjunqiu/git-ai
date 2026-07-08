@@ -1256,7 +1256,7 @@ git commit -m "Read dashboard aggregates from rollups"
 
 实现步骤：
 
-- [ ] 新增结构化表：
+- [x] 新增结构化表：
 
 ```sql
 CREATE TABLE IF NOT EXISTS metrics_tool_model_events (
@@ -1265,16 +1265,17 @@ CREATE TABLE IF NOT EXISTS metrics_tool_model_events (
     user_id UUID,
     timestamp BIGINT NOT NULL,
     tool_model TEXT NOT NULL,
-    ai_additions INTEGER NOT NULL DEFAULT 0,
-    mixed_additions INTEGER NOT NULL DEFAULT 0,
-    ai_accepted INTEGER NOT NULL DEFAULT 0,
-    total_ai_additions INTEGER NOT NULL DEFAULT 0,
-    total_ai_deletions INTEGER NOT NULL DEFAULT 0,
+    ai_additions BIGINT NOT NULL DEFAULT 0,
+    mixed_additions BIGINT NOT NULL DEFAULT 0,
+    ai_accepted BIGINT NOT NULL DEFAULT 0,
+    total_ai_additions BIGINT NOT NULL DEFAULT 0,
+    total_ai_deletions BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (metric_event_id, tool_model)
 );
 ```
 
-- [ ] 增加索引：
+- [x] 增加索引：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_metrics_tool_model_org_time
@@ -1287,11 +1288,11 @@ CREATE INDEX IF NOT EXISTS idx_metrics_tool_model_tool_time
     ON metrics_tool_model_events(tool_model, timestamp);
 ```
 
-- [ ] metrics insert 后获取 inserted event id。
-- [ ] 展开 tool_model_pairs/raw_values 到结构化 rows。
-- [ ] 批量 insert 到 `metrics_tool_model_events`。
-- [ ] dashboard tool comparison 改查结构化表或 rollup。
-- [ ] 增加回填脚本。
+- [x] metrics insert 后获取 inserted event id。
+- [x] 展开 tool_model_pairs/raw_values 到结构化 rows。
+- [x] 批量 insert 到 `metrics_tool_model_events`。
+- [x] dashboard tool comparison 改查结构化表或 rollup。
+- [x] 增加回填脚本。
 
 注意：
 
@@ -1309,13 +1310,36 @@ cargo test
 
 验收标准：
 
-- [ ] tool_model 结构化结果与当前 JSONB lateral 查询一致。
-- [ ] tool comparison 大数据量查询明显加快。
+- [x] tool_model 结构化结果与 raw `tool_model_pairs`/`raw_values` fixture 展开结果一致。
+- [ ] tool comparison 大数据量查询明显加快。留到阶段 4 压测验证。
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| 表设计 | 已新增 `metrics_tool_model_events(metric_event_id, tool_model)`，按明细 event 维护 per-tool 结构化指标 |
+| 索引 | 已新增 org/time、user/time、tool/time 组合索引，支撑 dashboard scope 过滤和工具聚合 |
+| 回填 | 迁移 017 从 `metrics_events.tool_model_pairs` 和 `raw_values` 的 4/5/6/7/8 指标回填，跳过 `all` 和空 `tool_model` |
+| 写入链路 | metrics bulk insert 使用 `RETURNING id` 保持输入顺序，并在同一事务写入 per-tool 结构化 rows |
+| dashboard 读取 | 明细 fallback 的 tools/agent comparison 已改查 `metrics_tool_model_events`，rollup enabled 时仍优先读 `metrics_daily_rollups` |
+| 行为边界 | `METRICS_WRITE_ROLLUPS=false` 只关闭 daily rollup 写入，不影响 tool-model 明细表写入 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test metrics` | 17 passed, 0 failed |
+| `cargo test dashboard` | 6 passed, 0 failed |
+| `cargo test db::migrations` | 1 passed, 0 failed |
+| `cargo test` | 102 passed, 0 failed |
+| `diff -u enterprise-server/migrations/017_metrics_tool_model_events.sql enterprise-server/deploy/migrations/017_metrics_tool_model_events.sql` | 通过，无差异 |
+| `git diff --check` | 通过 |
 
 提交建议：
 
 ```bash
-git add enterprise-server/migrations/017_metrics_tool_model_events.sql enterprise-server/deploy/migrations/017_metrics_tool_model_events.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/dashboard.rs
+git add docs/enterprise-server-performance-task-plan.md enterprise-server/migrations/017_metrics_tool_model_events.sql enterprise-server/deploy/migrations/017_metrics_tool_model_events.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/dashboard.rs
 git commit -m "Store structured metrics tool model rows"
 ```
 

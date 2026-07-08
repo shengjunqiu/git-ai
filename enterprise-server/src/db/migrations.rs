@@ -68,6 +68,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "016_metrics_daily_rollups",
         include_str!("../../migrations/016_metrics_daily_rollups.sql"),
     ),
+    (
+        "017_metrics_tool_model_events",
+        include_str!("../../migrations/017_metrics_tool_model_events.sql"),
+    ),
 ];
 
 /// Run all database migrations
