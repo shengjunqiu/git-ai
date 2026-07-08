@@ -1,0 +1,48 @@
+enterprise-server/migrations/016_metrics_daily_rollups.sql
+  a73676cfded0c055 1-100
+enterprise-server/src/handlers/oauth.rs
+  a73676cfded0c055 604-605
+enterprise-server/src/db/migrations.rs
+  a73676cfded0c055 67-70
+enterprise-server/src/services/metrics.rs
+  a73676cfded0c055 3-4,22,53,92,130,170,181-213,218-231,276-445,588,618,631-638,657,663-712,734,762,791,937-942
+enterprise-server/src/auth/jwt.rs
+  a73676cfded0c055 123-124
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 1064,1072-1074,1078-1080,1085-1086,1101,1114-1118,1125-1127,1140-1165,1170
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 800-801
+enterprise-server/src/handlers/metrics.rs
+  a73676cfded0c055 39
+enterprise-server/src/config.rs
+  a73676cfded0c055 17-18,40-41,69-70
+enterprise-server/src/handlers/release.rs
+  a73676cfded0c055 898-899
+enterprise-server/src/handlers/report.rs
+  a73676cfded0c055 860-861
+enterprise-server/src/handlers/cas.rs
+  a73676cfded0c055 714-715
+enterprise-server/deploy/migrations/016_metrics_daily_rollups.sql
+  a73676cfded0c055 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "0f070eb143b6d39ace3d4ce3eb610851f5e72fd6",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 3214,
+      "total_deletions": 679,
+      "accepted_lines": 6796,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/7545aaf163a85f3caa3430d8a5183c1562ee791e5f2b261b793767477d74836b"
+    }
+  }
+}
