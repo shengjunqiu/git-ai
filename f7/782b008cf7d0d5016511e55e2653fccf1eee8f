@@ -1,0 +1,38 @@
+scripts/benchmarks/enterprise/seed_metrics.py
+  a73676cfded0c055 1-162
+scripts/benchmarks/enterprise/_common.py
+  a73676cfded0c055 1-380
+scripts/benchmarks/enterprise/bench_dashboard.py
+  a73676cfded0c055 1-128
+scripts/benchmarks/enterprise/bench_metrics_upload.py
+  a73676cfded0c055 1-156
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 1359,1365-1369,1382-1405,1410
+scripts/benchmarks/enterprise/.gitignore
+  a73676cfded0c055 1-2
+scripts/benchmarks/enterprise/bench_health_ready.py
+  a73676cfded0c055 1-77
+scripts/benchmarks/enterprise/README.md
+  a73676cfded0c055 1-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "f7782b008cf7d0d5016511e55e2653fccf1eee8f",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1022,
+      "total_deletions": 10,
+      "accepted_lines": 1022,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/f8059ba14ec9e4c2f1c409bbf82ccaae6f29b66601c039ef1bbd280037250143"
+    }
+  }
+}
