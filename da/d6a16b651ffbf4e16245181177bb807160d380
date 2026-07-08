@@ -1,0 +1,26 @@
+docs/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 1181,1185-1191,1196-1206,1225-1236,1241
+enterprise-server/src/handlers/dashboard.rs
+  a73676cfded0c055 1652-1701,1703,1713,1719,1721-1722,1724-1744,1751-1757,1777-1778,1783-1785,1787-1817,1830-2126,2130-2154,2782-2787,2789,2917-2927,2929,3011-3017,3019,3168-3170,3202-3469
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "dad6a16b651ffbf4e16245181177bb807160d380",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 772,
+      "total_deletions": 207,
+      "accepted_lines": 772,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/283c600164d4acbf09b308d8c0ccc4cef946d37a86df4b1b041b4af3691c0f22"
+    }
+  }
+}
