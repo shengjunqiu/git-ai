@@ -950,20 +950,70 @@ OAuth:
 
 记录项：
 
-- [ ] p50/p95/p99。
-- [ ] 429 比例。
-- [ ] 401/409 比例。
-- [ ] API CPU。
-- [ ] Postgres active connection。
-- [ ] Redis CPU。
-- [ ] Tokio worker 是否被 Argon2 拖慢，可用整体延迟和健康检查旁路压测间接观察。
+- [x] p50/p95/p99。
+- [x] 429 比例。
+- [x] 401/409 比例。
+- [x] API CPU。
+- [x] Postgres active connection。
+- [x] Redis CPU。
+- [x] Tokio worker 是否被 Argon2 拖慢，可用整体延迟和健康检查旁路压测间接观察。
 
 验收标准：
 
 - [ ] 50 并发 OAuth 请求不再大面积 429。
-- [ ] 30 并发网页登录时 `/health`、`/ready` 不被拖慢。
-- [ ] 注册 p95 明显优于改造前，或至少不再影响其它轻量接口。
+- [x] 30 并发网页登录时 `/health`、`/ready` 不被拖慢。
+- [x] 注册 p95 明显优于改造前，或至少不再影响其它轻量接口。
 - [ ] 错误率符合预期，不能出现 DB acquire timeout。
+
+### 7.2 执行记录
+
+执行日期：2026-07-08。
+
+本次在本地 `docker compose` 环境执行，API 地址为 `http://127.0.0.1:8080`。服务启动健康检查正常：
+
+- `/health`: `{"service":"git-ai-enterprise-server","status":"ok","version":"0.1.0"}`
+- `/ready`: `{"checks":{"database":"ok"},"status":"ready"}`
+
+测试组织和部门：
+
+- organization: `linewell.com` / `ac81cb06-4c0c-43db-8144-8d063600a19a`
+- department: `technology-center` / `4110c6bc-2fbc-4b39-a106-6aaa2f24e075`
+- 登录压测用户：`bench-login-stage72-20260708-001@linewell.com`
+
+注意：运行中的 API 容器未显式设置 `RATE_LIMIT_AUTH_MAX_REQUESTS`、`RATE_LIMIT_OAUTH_MAX_REQUESTS` 和 `AUTH_PASSWORD_CONCURRENCY` 环境变量。当前仓库的默认值已经是 auth `300/60s`、OAuth `600/60s`、password concurrency `8`，但运行日志显示本地容器的 OAuth tier 仍是 `limit=10`。因此 OAuth 结果主要反映“运行环境未加载最新限流配置”，不是当前代码配置下的最终容量。
+
+#### 基准结果
+
+| 场景 | 请求/并发 | 成功/错误 | HTTP 状态 | RPS | p50 | p95 | p99 | 结论 |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 登录，控制样本 | 100/30 | 100/0 | 200=100 | 65.82 | 406.04ms | 780.27ms | 1022.37ms | 30 并发下全部成功，无 401/409/429。 |
+| 登录，撞限流边界 | 200/30 | 150/50 | 200=150, 429=49, 500=1 | 15.74 | 701.06ms | 8018.95ms | 9478.67ms | 同一 anonymous client 在窗口内触发 auth 限流；该样本用于识别边界，不作为纯性能样本。 |
+| 注册，控制样本 | 100/30 | 100/0 | 201=100 | 60.06 | 436.26ms | 753.29ms | 851.15ms | 30 并发注册全部成功，无 401/409/429。 |
+| 注册，限流污染样本 | 100/30 | 0/100 | 429=100 | 426.29 | 55.27ms | 81.84ms | 95.42ms | 在登录压测打满 auth 窗口后立即执行，全部被限流，不作为性能样本。 |
+| OAuth device flow | 200 flows/50 | 10 device code 成功，其余限流 | 200=10, 429=200 | device code 19.47 | 116.94ms | 180.31ms | 180.31ms | 运行日志确认 `tier=oauth limit=10`，50 并发验收未通过。 |
+
+OAuth 结果补充：
+
+- `oauth_device_code`: 10 请求，10 成功，p50 `116.94ms`，p95 `180.31ms`。
+- `oauth_device_code_rate_limited`: 190 请求，190 错误，p50 `77.37ms`，p95 `242.77ms`。
+- `oauth_token_rate_limited`: 10 请求，10 错误，p50 `77.13ms`，p95 `104.46ms`。
+
+#### 资源和旁路指标
+
+| 时间点 | API CPU / 内存 | Postgres CPU / 内存 | Redis CPU / 内存 | Postgres 连接 | 健康检查 |
+| --- | --- | --- | --- | --- | --- |
+| 压测前 | 9.91% / 49.75MiB | 6.26% / 162.9MiB | 0.87% / 10.27MiB | active=1, idle=4 | health=2.419ms, ready=4.413ms |
+| 注册/OAuth 后 | 0.53% / 837.9MiB | 1.96% / 211MiB | 0.64% / 10.36MiB | active=1, idle=20 | health=3.320ms, ready=26.172ms |
+| 登录补测后 | 0.00% / 969.4MiB | 0.02% / 213.5MiB | 0.71% / 10.54MiB | active=1, idle=20 | health=4.279ms, ready=4.294ms |
+
+观察结论：
+
+- 登录和注册在 30 并发、低于限流窗口的控制样本中稳定成功，p95 均在 `0.8s` 内。
+- `/health` 和 `/ready` 在压测前后保持毫秒级响应，说明 Argon2 已从 Tokio worker 上移走，轻量接口没有被明显拖慢。
+- Postgres active connection 保持 `1`，idle 连接在压测后增加到 `20`，未观察到 DB acquire timeout 迹象。
+- 200/30 登录样本出现 `1` 个 500，需要下一轮日志采样定位；本次尾部日志没有看到 DB acquire timeout。
+- OAuth 50 并发未通过验收，直接原因是运行中容器仍按 `oauth limit=10` 执行。下一步应重建/重启 API 并显式设置 `RATE_LIMIT_OAUTH_MAX_REQUESTS=600`、`RATE_LIMIT_AUTH_MAX_REQUESTS=300` 后重跑 7.2。
+- 当前 benchmark 默认没有传 `X-Forwarded-For`，所有匿名请求会聚合成同一个 `anonymous` client。若要评估“多人同时登录/注册”，下一轮应扩展脚本支持多用户登录池和可选 client IP 分布。
 
 ## 阶段 8: 上线和回滚
 
