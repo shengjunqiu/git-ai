@@ -900,7 +900,7 @@ git commit -m "Use epoch filters for dashboard metrics queries"
 
 实现步骤：
 
-- [ ] 新增 migration 文件：
+- [x] 新增 migration 文件：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_metrics_event_org_time
@@ -919,9 +919,9 @@ CREATE INDEX IF NOT EXISTS idx_projects_org_user
     ON projects(org_id, user_id);
 ```
 
-- [ ] 同步复制到 deploy migrations。
-- [ ] 在 `src/db/migrations.rs` 的 `MIGRATIONS` 中注册 `014_metrics_query_indexes`。
-- [ ] 如果生产表已经很大，评估是否需要单独使用 `CREATE INDEX CONCURRENTLY` 的运维迁移，而不是应用启动时创建。
+- [x] 同步复制到 deploy migrations。
+- [x] 在 `src/db/migrations.rs` 的 `MIGRATIONS` 中注册 `014_metrics_query_indexes`。
+- [x] 如果生产表已经很大，评估是否需要单独使用 `CREATE INDEX CONCURRENTLY` 的运维迁移，而不是应用启动时创建。
 
 测试命令：
 
@@ -939,10 +939,10 @@ cargo run -- --migrate
 
 验收标准：
 
-- [ ] migration 可重复执行。
-- [ ] 新索引存在。
-- [ ] 写入压测没有明显恶化。
-- [ ] dashboard 查询 `EXPLAIN` 开始使用组合索引。
+- [x] migration 可重复执行。
+- [x] 新索引存在。
+- [ ] 写入压测没有明显恶化：留到阶段 4 压测统一验证。
+- [ ] dashboard 查询 `EXPLAIN` 开始使用组合索引：留到阶段 4 使用样本数据统一验证。
 
 提交建议：
 
@@ -950,6 +950,27 @@ cargo run -- --migrate
 git add enterprise-server/migrations/014_metrics_query_indexes.sql enterprise-server/deploy/migrations/014_metrics_query_indexes.sql enterprise-server/src/db/migrations.rs
 git commit -m "Add dashboard metrics query indexes"
 ```
+
+阶段 3.2 执行记录：
+
+| 项目 | 结果 |
+| --- | --- |
+| metrics scope/time 索引 | 已新增 `idx_metrics_event_org_time` 和 `idx_metrics_event_user_time`，覆盖 dashboard 的 `event_type + org/user + timestamp` 过滤 |
+| metrics commit 去重索引 | 已新增 `idx_metrics_event_commit`，覆盖 report fallback `NOT EXISTS` 中的 `event_type + commit_sha` 查询 |
+| report fallback 索引 | 已新增 `idx_commit_stats_project_author_time` 和 `idx_projects_org_user` |
+| deploy 迁移 | 已同步新增 `enterprise-server/deploy/migrations/014_metrics_query_indexes.sql` |
+| 程序化迁移注册 | 已在 `enterprise-server/src/db/migrations.rs` 注册 `014_metrics_query_indexes` |
+| `CREATE INDEX CONCURRENTLY` | 本阶段未采用；当前迁移 runner 直接执行 SQL。生产大表建议在维护窗口或独立运维脚本中使用 concurrent index，再让本迁移通过 `IF NOT EXISTS` 幂等跳过 |
+| 外部压测/EXPLAIN | 未执行，阶段 4 统一验证写入影响和 dashboard 查询计划 |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test db::migrations` | 1 passed, 0 failed |
+| `cargo test` | 97 passed, 0 failed |
+| `rustfmt --edition 2024 --check src/db/migrations.rs` | 通过 |
 
 ### 3.3 增加 author_time_at 结构化时间字段
 

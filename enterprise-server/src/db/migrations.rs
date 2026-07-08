@@ -56,6 +56,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "013_version_release_assets",
         include_str!("../../migrations/013_version_release_assets.sql"),
     ),
+    (
+        "014_metrics_query_indexes",
+        include_str!("../../migrations/014_metrics_query_indexes.sql"),
+    ),
 ];
 
 /// Run all database migrations
