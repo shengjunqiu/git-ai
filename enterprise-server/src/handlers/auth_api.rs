@@ -78,35 +78,35 @@ pub async fn register(
     let session_token =
         crate::services::sessions::create_web_session(&state.db, response_user.id).await?;
 
-    crate::services::audit::log_action(
-        &state.db,
-        Some(response_user.id),
-        Some(response_user.default_org_id),
-        "user.register",
-        Some("user"),
-        Some(&response_user.id.to_string()),
-        Some(json!({"email": response_user.email})),
-        None,
-        None,
-    )
-    .await
-    .ok();
-    crate::services::audit::log_action(
-        &state.db,
-        Some(response_user.id),
-        Some(response_user.default_org_id),
-        "org_member.create",
-        Some("org_member"),
-        Some(&format!(
-            "{}:{}",
-            response_user.id, response_user.default_org_id
-        )),
-        Some(json!({"role": "member"})),
-        None,
-        None,
-    )
-    .await
-    .ok();
+    crate::services::audit::spawn_log_action(
+        state.db.clone(),
+        crate::services::audit::AuditPayload {
+            user_id: Some(response_user.id),
+            org_id: Some(response_user.default_org_id),
+            action: "user.register".to_string(),
+            resource_type: Some("user".to_string()),
+            resource_id: Some(response_user.id.to_string()),
+            details: Some(json!({"email": response_user.email.clone()})),
+            ip_address: None,
+            user_agent: None,
+        },
+    );
+    crate::services::audit::spawn_log_action(
+        state.db.clone(),
+        crate::services::audit::AuditPayload {
+            user_id: Some(response_user.id),
+            org_id: Some(response_user.default_org_id),
+            action: "org_member.create".to_string(),
+            resource_type: Some("org_member".to_string()),
+            resource_id: Some(format!(
+                "{}:{}",
+                response_user.id, response_user.default_org_id
+            )),
+            details: Some(json!({"role": "member"})),
+            ip_address: None,
+            user_agent: None,
+        },
+    );
 
     let mut response = if wants_json {
         (StatusCode::CREATED, Json(json!({ "user": response_user }))).into_response()
@@ -159,19 +159,19 @@ pub async fn login(
 
     let session_token = crate::services::sessions::create_web_session(&state.db, user_id).await?;
 
-    crate::services::audit::log_action(
-        &state.db,
-        Some(user_id),
-        None,
-        "user.login",
-        Some("user"),
-        Some(&user_id.to_string()),
-        Some(json!({"email": user_email})),
-        None,
-        None,
-    )
-    .await
-    .ok();
+    crate::services::audit::spawn_log_action(
+        state.db.clone(),
+        crate::services::audit::AuditPayload {
+            user_id: Some(user_id),
+            org_id: None,
+            action: "user.login".to_string(),
+            resource_type: Some("user".to_string()),
+            resource_id: Some(user_id.to_string()),
+            details: Some(json!({"email": user_email.clone()})),
+            ip_address: None,
+            user_agent: None,
+        },
+    );
 
     let mut response = if wants_json {
         Json(json!({
@@ -786,6 +786,57 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn register_and_login_write_audit_logs_asynchronously() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let register_body = Bytes::from(
+            serde_json::json!({
+                "email": "audit-user@example.com",
+                "name": "Audit User",
+                "password": "correct-horse-battery",
+                "confirm_password": "correct-horse-battery",
+                "org_id": scope.org_id,
+                "department_id": scope.department_id,
+            })
+            .to_string(),
+        );
+
+        let register_response = register(
+            axum::extract::State(db.state.clone()),
+            json_headers(),
+            register_body,
+        )
+        .await?;
+
+        assert_eq!(register_response.status(), StatusCode::CREATED);
+        wait_for_audit_action_count(&db.state.db, "user.register", 1).await?;
+        wait_for_audit_action_count(&db.state.db, "org_member.create", 1).await?;
+
+        let login_body = Bytes::from(
+            serde_json::json!({
+                "email": "audit-user@example.com",
+                "password": "correct-horse-battery",
+            })
+            .to_string(),
+        );
+
+        let login_response = login(
+            axum::extract::State(db.state.clone()),
+            json_headers(),
+            login_body,
+        )
+        .await?;
+
+        assert_eq!(login_response.status(), StatusCode::OK);
+        wait_for_audit_action_count(&db.state.db, "user.login", 1).await?;
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     fn register_request(email: &str, org_id: Uuid, department_id: Uuid) -> RegisterRequest {
         RegisterRequest {
             email: email.to_string(),
@@ -862,6 +913,33 @@ mod tests {
         Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
             .fetch_one(pool)
             .await?)
+    }
+
+    async fn wait_for_audit_action_count(
+        pool: &sqlx::PgPool,
+        action: &str,
+        expected: i64,
+    ) -> anyhow::Result<()> {
+        for _ in 0..50 {
+            let count = audit_action_count(pool, action).await?;
+            if count >= expected {
+                return Ok(());
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let count = audit_action_count(pool, action).await?;
+        anyhow::bail!("expected at least {expected} audit rows for {action}, found {count}");
+    }
+
+    async fn audit_action_count(pool: &sqlx::PgPool, action: &str) -> anyhow::Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE action = $1")
+                .bind(action)
+                .fetch_one(pool)
+                .await?,
+        )
     }
 
     fn test_config(database_url: &str) -> crate::config::AppConfig {

@@ -103,19 +103,19 @@ pub async fn authorize_submit(
     .await
     .map_err(AppError::Database)?;
 
-    crate::services::audit::log_action(
-        &state.db,
-        Some(user_id),
-        None,
-        "cli.authorize",
-        Some("authorization_code"),
-        Some(&code_hash),
-        Some(serde_json::json!({"client_id": params.client_id})),
-        None,
-        None,
-    )
-    .await
-    .ok();
+    crate::services::audit::spawn_log_action(
+        state.db.clone(),
+        crate::services::audit::AuditPayload {
+            user_id: Some(user_id),
+            org_id: None,
+            action: "cli.authorize".to_string(),
+            resource_type: Some("authorization_code".to_string()),
+            resource_id: Some(code_hash),
+            details: Some(serde_json::json!({"client_id": params.client_id.clone()})),
+            ip_address: None,
+            user_agent: None,
+        },
+    );
 
     Ok(Redirect::to(&callback_url(
         &params.redirect_uri,
@@ -173,7 +173,11 @@ pub(crate) fn validate_redirect_uri(redirect_uri: &str) -> Result<(), AppError> 
         return Err(AppError::BadRequest("Invalid redirect_uri".into()));
     }
 
-    if url.port().is_none() || url.path() != "/callback" || url.query().is_some() || url.fragment().is_some() {
+    if url.port().is_none()
+        || url.path() != "/callback"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         return Err(AppError::BadRequest("Invalid redirect_uri".into()));
     }
 
@@ -287,7 +291,10 @@ fn hidden_fields(params: &AuthorizeParams) -> String {
         ("redirect_uri", params.redirect_uri.as_str()),
         ("response_type", params.response_type.as_str()),
         ("code_challenge", params.code_challenge.as_str()),
-        ("code_challenge_method", params.code_challenge_method.as_str()),
+        (
+            "code_challenge_method",
+            params.code_challenge_method.as_str(),
+        ),
         ("state", params.state.as_str()),
     ]
     .into_iter()

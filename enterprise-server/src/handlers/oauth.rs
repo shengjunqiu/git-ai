@@ -302,19 +302,19 @@ async fn handle_authorization_code_grant(
         return oauth_error("Authorization code already used or expired");
     }
 
-    crate::services::audit::log_action(
-        &state.db,
-        Some(user_id),
-        None,
-        "token.exchange",
-        Some("authorization_code"),
-        Some(&code_hash),
-        Some(serde_json::json!({"grant_type": "authorization_code"})),
-        None,
-        None,
-    )
-    .await
-    .ok();
+    crate::services::audit::spawn_log_action(
+        state.db.clone(),
+        crate::services::audit::AuditPayload {
+            user_id: Some(user_id),
+            org_id: None,
+            action: "token.exchange".to_string(),
+            resource_type: Some("authorization_code".to_string()),
+            resource_id: Some(code_hash),
+            details: Some(serde_json::json!({"grant_type": "authorization_code"})),
+            ip_address: None,
+            user_agent: None,
+        },
+    );
 
     token_response(state, user_id).await
 }

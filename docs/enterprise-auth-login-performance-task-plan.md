@@ -793,21 +793,21 @@ git commit -m "Reduce enterprise registration database round trips"
 
 实现步骤：
 
-- [ ] 新增 helper，例如：
+- [x] 新增 helper，例如：
 
 ```rust
 pub fn spawn_log_action(pool: PgPool, payload: AuditPayload)
 ```
 
-- [ ] 在 helper 内部 `tokio::spawn` 写 audit。
-- [ ] 写入失败只打 warn，不影响主请求。
-- [ ] 避免 spawn 中捕获引用，payload 使用 owned data。
+- [x] 在 helper 内部 `tokio::spawn` 写 audit。
+- [x] 写入失败只打 warn，不影响主请求。
+- [x] 避免 spawn 中捕获引用，payload 使用 owned data。
 
 验收标准：
 
-- [ ] 登录/注册成功响应不再等待 audit insert。
-- [ ] audit 写入失败不会让登录失败。
-- [ ] 日志能看到 audit 写入失败原因。
+- [x] 登录/注册成功响应不再等待 audit insert。
+- [x] audit 写入失败不会让登录失败。
+- [x] 日志能看到 audit 写入失败原因。
 
 ### 6.2 改造注册/登录 audit 调用
 
@@ -817,10 +817,10 @@ pub fn spawn_log_action(pool: PgPool, payload: AuditPayload)
 
 实现步骤：
 
-- [ ] 将 `user.register` audit 改为异步后台写入。
-- [ ] 将 `org_member.create` audit 改为异步后台写入。
-- [ ] 将 `user.login` audit 改为异步后台写入。
-- [ ] 保持 logout 可按现有方式执行，或同步纳入 helper。
+- [x] 将 `user.register` audit 改为异步后台写入。
+- [x] 将 `org_member.create` audit 改为异步后台写入。
+- [x] 将 `user.login` audit 改为异步后台写入。
+- [x] 保持 logout 可按现有方式执行，或同步纳入 helper。
 
 测试命令：
 
@@ -833,15 +833,25 @@ cargo test
 
 验收标准：
 
-- [ ] 登录/注册响应不依赖 audit 写入完成。
-- [ ] audit 表仍能看到成功登录/注册记录。
+- [x] 登录/注册响应不依赖 audit 写入完成。
+- [x] audit 表仍能看到成功登录/注册记录。
 
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/audit.rs enterprise-server/src/handlers/auth_api.rs docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/src/services/audit.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/cli_authorize.rs docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Write enterprise auth audit logs asynchronously"
 ```
+
+### 6.3 执行记录
+
+- [x] 已新增 `AuditPayload` 和 `spawn_log_action`，payload 使用 owned data，后台任务内调用原 `log_action`。
+- [x] 后台 audit 写入失败只记录 `tracing::warn!`，不影响主请求响应。
+- [x] 已将注册 `user.register`、`org_member.create` 和登录 `user.login` 改为后台写入。
+- [x] 已将 CLI 授权 `cli.authorize` 和授权码换 token 的 `token.exchange` 改为后台写入。
+- [x] logout 保持现有同步写入，不改变登出流程语义。
+- [x] 已补充注册和登录成功后等待后台 audit 落库的测试。
+- [x] 验证通过：`cargo test audit`、`cargo test auth_api`、`cargo test`、`cargo check`、定向 `rustfmt --check`、`git diff --check`。
 
 ## 阶段 7: 注册/登录专项压测脚本
 

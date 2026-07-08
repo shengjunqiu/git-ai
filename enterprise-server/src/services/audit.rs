@@ -5,6 +5,18 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct AuditPayload {
+    pub user_id: Option<Uuid>,
+    pub org_id: Option<Uuid>,
+    pub action: String,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    pub details: Option<serde_json::Value>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 /// Record an audit log entry
 pub async fn log_action(
     pool: &PgPool,
@@ -33,4 +45,25 @@ pub async fn log_action(
     .await?;
 
     Ok(())
+}
+
+pub fn spawn_log_action(pool: PgPool, payload: AuditPayload) {
+    tokio::spawn(async move {
+        let action = payload.action.clone();
+        if let Err(error) = log_action(
+            &pool,
+            payload.user_id,
+            payload.org_id,
+            &payload.action,
+            payload.resource_type.as_deref(),
+            payload.resource_id.as_deref(),
+            payload.details,
+            payload.ip_address.as_deref(),
+            payload.user_agent.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(?error, action = %action, "failed to write audit log");
+        }
+    });
 }
