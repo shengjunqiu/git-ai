@@ -1356,17 +1356,17 @@ git commit -m "Store structured metrics tool model rows"
 
 实现步骤：
 
-- [ ] 新建目录：
+- [x] 新建目录：
 
 ```bash
 mkdir -p scripts/benchmarks/enterprise
 ```
 
-- [ ] 增加 README，说明依赖、环境变量、运行方式。
-- [ ] 增加 `seed_metrics` 脚本，支持生成大规模 metrics 数据。
-- [ ] 增加 `bench_health_ready` 脚本，包装 `/health`、`/ready` 压测。
-- [ ] 增加 `bench_metrics_upload` 脚本，构造认证请求和不同 batch size。
-- [ ] 增加 `bench_dashboard` 脚本，测试 summary/trends/tools。
+- [x] 增加 README，说明依赖、环境变量、运行方式。
+- [x] 增加 `seed_metrics` 脚本，支持生成大规模 metrics 数据。
+- [x] 增加 `bench_health_ready` 脚本，包装 `/health`、`/ready` 压测。
+- [x] 增加 `bench_metrics_upload` 脚本，构造认证请求和不同 batch size。
+- [x] 增加 `bench_dashboard` 脚本，测试 summary/trends/tools。
 
 建议环境变量：
 
@@ -1379,14 +1379,35 @@ BENCH_REQUESTS=1000
 
 验收标准：
 
-- [ ] 新机器上按 README 可以跑通基础压测。
-- [ ] 脚本输出 RPS、p95、p99、错误率。
-- [ ] 失败时退出码非 0。
+- [x] 新机器上按 README 可以跑通基础压测。
+- [x] 脚本输出 RPS、p95、p99、错误率。
+- [x] 失败时退出码非 0。
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| 目录 | 已新增 `scripts/benchmarks/enterprise/` |
+| 公共模块 | `_common.py` 统一处理 HTTP、并发调度、RPS/p95/p99/error rate 统计、PosEncoded metrics payload 生成 |
+| 健康检查 | `bench_health_ready.py` 压测 `/health` 和 `/ready`，不需要 API key |
+| 造数 | `seed_metrics.py` 通过 `/worker/metrics/upload` 写入 committed metrics，支持 `--events`、`--batch-size`、`--concurrency` |
+| metrics 上传 | `bench_metrics_upload.py` 构造认证请求和不同 batch size，并把 partial success 视为失败 |
+| dashboard | `bench_dashboard.py` 覆盖 summary、trends(day/week) 和 tools，并支持 `--org`/`BENCH_ORG` |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `python3 -m py_compile scripts/benchmarks/enterprise/_common.py scripts/benchmarks/enterprise/bench_health_ready.py scripts/benchmarks/enterprise/bench_metrics_upload.py scripts/benchmarks/enterprise/seed_metrics.py scripts/benchmarks/enterprise/bench_dashboard.py` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_health_ready.py --help` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_metrics_upload.py --help` | 通过 |
+| `python3 scripts/benchmarks/enterprise/seed_metrics.py --help` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_dashboard.py --help` | 通过 |
 
 提交建议：
 
 ```bash
-git add scripts/benchmarks/enterprise
+git add docs/enterprise-server-performance-task-plan.md scripts/benchmarks/enterprise
 git commit -m "Add enterprise server benchmark scripts"
 ```
 
