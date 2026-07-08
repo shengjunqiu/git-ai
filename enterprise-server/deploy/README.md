@@ -207,6 +207,16 @@ RATE_LIMIT_DEFAULT_WINDOW_SECONDS=60
 
 多人同时注册、网页登录或 CLI 登录时，优先观察 `auth` 和 `oauth` tier 的 429 日志。如果 OAuth 设备码轮询较密集，可以提高 `RATE_LIMIT_OAUTH_MAX_REQUESTS`；如果注册登录入口被撞库或爆破，应降低 `RATE_LIMIT_AUTH_MAX_REQUESTS`，并配合更细粒度的账号/IP 风控。
 
+## 注册登录密码计算
+
+注册和登录的 Argon2 密码 hash/verify 会在 blocking worker 上执行，并通过 semaphore 限制并发：
+
+```env
+AUTH_PASSWORD_CONCURRENCY=8
+```
+
+默认值 `8` 适合先作为通用起点。登录高峰时如果 API CPU 仍有余量但登录 p95 偏高，可小幅提高；如果 CPU 已接近打满或其它接口被拖慢，应降低该值。该配置不会降低 Argon2 参数，只控制同一 API 实例内同时执行的密码计算数量。
+
 ## Postgres 慢查询观测
 
 部署包的 `docker-compose.yml` 已为 PostgreSQL 启用：

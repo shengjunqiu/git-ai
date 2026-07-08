@@ -66,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize rate limiter
     let rate_limiter = services::rate_limit::RateLimiter::with_redis(redis_client.clone()).await;
+    let auth_password_limiter = crate::routes::auth_password_limiter(&config);
 
     // Build application state
     let state = crate::routes::AppState {
@@ -74,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         cas_store,
         rate_limiter,
+        auth_password_limiter,
     };
 
     // Run migrations on startup (auto-migrate)

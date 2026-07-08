@@ -120,6 +120,7 @@ mod tests {
             s3_secret_key: String::new(),
             s3_region: String::new(),
             cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
             metrics_write_rollups: true,
             dashboard_use_rollups: false,
             rate_limit_metrics_max_requests: 60,

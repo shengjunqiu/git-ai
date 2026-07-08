@@ -568,21 +568,21 @@ AUTH_PASSWORD_CONCURRENCY=8
 
 实现步骤：
 
-- [ ] 在 `AppConfig` 增加 `auth_password_concurrency: usize`。
-- [ ] 默认值设为 `8`，并用 `.max(1)` 防止无效配置。
-- [ ] 在 `AppState` 增加：
+- [x] 在 `AppConfig` 增加 `auth_password_concurrency: usize`。
+- [x] 默认值设为 `8`，并用 `.max(1)` 防止无效配置。
+- [x] 在 `AppState` 增加：
 
 ```rust
 pub auth_password_limiter: std::sync::Arc<tokio::sync::Semaphore>
 ```
 
-- [ ] 在 `main.rs` 构建 `AppState` 时初始化 semaphore。
-- [ ] 更新测试中的 `AppState` 构造。
+- [x] 在 `main.rs` 构建 `AppState` 时初始化 semaphore。
+- [x] 更新测试中的 `AppState` 构造。
 
 验收标准：
 
-- [ ] 配置默认值兼容。
-- [ ] 测试环境可以构造 `AppState`。
+- [x] 配置默认值兼容。
+- [x] 测试环境可以构造 `AppState`。
 
 ### 4.2 新增异步密码服务封装
 
@@ -593,11 +593,11 @@ pub auth_password_limiter: std::sync::Arc<tokio::sync::Semaphore>
 
 实现步骤：
 
-- [ ] 保留现有同步函数：
+- [x] 保留现有同步函数：
   - `hash_password`
   - `verify_password`
   - `validate_password_strength`
-- [ ] 新增 async 包装函数：
+- [x] 新增 async 包装函数：
 
 ```rust
 pub async fn hash_password_blocking(
@@ -614,16 +614,16 @@ pub async fn verify_password_blocking(
 ) -> Result<bool, AppError>
 ```
 
-- [ ] 在 async 函数中先 acquire semaphore permit。
-- [ ] 使用 `tokio::task::spawn_blocking` 执行同步 Argon2。
-- [ ] 正确处理 `JoinError`，返回 `AppError::Internal`。
-- [ ] 确保 permit 在阻塞任务完成后释放。
+- [x] 在 async 函数中先 acquire semaphore permit。
+- [x] 使用 `tokio::task::spawn_blocking` 执行同步 Argon2。
+- [x] 正确处理 `JoinError`，返回 `AppError::Internal`。
+- [x] 确保 permit 在阻塞任务完成后释放。
 
 验收标准：
 
-- [ ] 密码强度和 Argon2 参数不降低。
-- [ ] 并发密码计算不会无限放大。
-- [ ] Tokio worker 不再直接执行 Argon2 CPU 任务。
+- [x] 密码强度和 Argon2 参数不降低。
+- [x] 并发密码计算不会无限放大。
+- [x] Tokio worker 不再直接执行 Argon2 CPU 任务。
 
 ### 4.3 改造注册和登录 handler
 
@@ -633,7 +633,7 @@ pub async fn verify_password_blocking(
 
 实现步骤：
 
-- [ ] 注册路径中，将：
+- [x] 注册路径中，将：
 
 ```rust
 let password_hash = crate::services::passwords::hash_password(&req.password)?;
@@ -641,7 +641,7 @@ let password_hash = crate::services::passwords::hash_password(&req.password)?;
 
 替换为 async blocking 包装调用。
 
-- [ ] 登录路径中，将：
+- [x] 登录路径中，将：
 
 ```rust
 crate::services::passwords::verify_password(&req.password, &password_hash)?
@@ -649,8 +649,8 @@ crate::services::passwords::verify_password(&req.password, &password_hash)?
 
 替换为 async blocking 包装调用。
 
-- [ ] 避免在拿着 DB transaction 时执行 Argon2。
-- [ ] 保持错误响应不泄露邮箱是否存在、密码是否错误等敏感细节。
+- [x] 避免在拿着 DB transaction 时执行 Argon2。
+- [x] 保持错误响应不泄露邮箱是否存在、密码是否错误等敏感细节。
 
 测试命令：
 
@@ -663,10 +663,10 @@ cargo test
 
 验收标准：
 
-- [ ] 注册成功路径通过。
-- [ ] 登录成功路径通过。
-- [ ] 错误密码仍返回 unauthorized。
-- [ ] 并发注册同邮箱仍只有一个成功。
+- [x] 注册成功路径通过。
+- [x] 登录成功路径通过。
+- [x] 错误密码仍返回 unauthorized。
+- [x] 并发注册同邮箱仍只有一个成功。
 
 提交建议：
 
@@ -674,6 +674,16 @@ cargo test
 git add enterprise-server/src/config.rs enterprise-server/src/routes.rs enterprise-server/src/main.rs enterprise-server/src/services/passwords.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-auth-login-performance-task-plan.md
 git commit -m "Run enterprise password hashing on blocking workers"
 ```
+
+### 4.4 执行记录
+
+- [x] 已新增 `AUTH_PASSWORD_CONCURRENCY=8`，并通过 `.max(1)` 防止配置为 0。
+- [x] 已在 `AppState` 增加 `auth_password_limiter`，main 和测试状态构造均已接入。
+- [x] 已新增 `hash_password_blocking` 和 `verify_password_blocking`，内部先获取 semaphore permit，再用 `tokio::task::spawn_blocking` 执行原同步 Argon2 函数。
+- [x] 已保留原同步密码函数，未降低密码强度和 Argon2 参数。
+- [x] 已将注册 hash 和登录 verify 改为 blocking wrapper；注册仍在开启 DB transaction 前完成密码计算。
+- [x] 已更新 `.env.example`、deploy `.env.example`、两份 compose 和部署 README。
+- [x] 验证通过：`cargo test passwords`、`cargo test config`、`cargo test auth_api`、`cargo test`、`cargo check`、两份 compose config 校验、`git diff --check`。
 
 ## 阶段 5: 减少注册/登录 DB 往返
 

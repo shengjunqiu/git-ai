@@ -147,7 +147,13 @@ pub async fn login(
         return Err(AppError::Unauthorized("Invalid email or password".into()));
     };
 
-    if !crate::services::passwords::verify_password(&req.password, &password_hash)? {
+    if !crate::services::passwords::verify_password_blocking(
+        state.auth_password_limiter.clone(),
+        req.password.clone(),
+        password_hash,
+    )
+    .await?
+    {
         return Err(AppError::Unauthorized("Invalid email or password".into()));
     }
 
@@ -255,7 +261,11 @@ async fn register_user(
     }
 
     let user_id = Uuid::new_v4();
-    let password_hash = crate::services::passwords::hash_password(&req.password)?;
+    let password_hash = crate::services::passwords::hash_password_blocking(
+        state.auth_password_limiter.clone(),
+        req.password.clone(),
+    )
+    .await?;
 
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
@@ -681,12 +691,14 @@ mod tests {
             let config = test_config(&test_url);
             let redis = redis::Client::open(config.redis_url.clone())?;
             let cas_store = crate::services::cas::CasStore::new(&config)?;
+            let auth_password_limiter = crate::routes::auth_password_limiter(&config);
             let state = AppState {
                 db: pool,
                 redis,
                 config,
                 cas_store,
                 rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+                auth_password_limiter,
             };
 
             Ok(Some(Self {
@@ -797,6 +809,7 @@ mod tests {
             s3_secret_key: "minioadmin".to_string(),
             s3_region: "us-east-1".to_string(),
             cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
             metrics_write_rollups: true,
             dashboard_use_rollups: false,
             rate_limit_metrics_max_requests: 60,

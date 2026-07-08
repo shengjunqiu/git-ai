@@ -610,12 +610,14 @@ mod tests {
 
             let config = test_config(&test_url);
             let redis = redis::Client::open(config.redis_url.clone())?;
+            let auth_password_limiter = crate::routes::auth_password_limiter(&config);
             let state = AppState {
                 db: pool,
                 redis,
                 config,
                 cas_store,
                 rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+                auth_password_limiter,
             };
 
             Ok(Some(Self {
@@ -895,6 +897,7 @@ mod tests {
             s3_secret_key: "minioadmin".to_string(),
             s3_region: "us-east-1".to_string(),
             cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
             metrics_write_rollups: true,
             dashboard_use_rollups: false,
             rate_limit_metrics_max_requests: 60,

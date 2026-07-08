@@ -1,7 +1,10 @@
 //! Password hashing and verification helpers.
 
+use std::sync::Arc;
+
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::{Argon2, password_hash::rand_core::OsRng};
+use argon2::{password_hash::rand_core::OsRng, Argon2};
+use tokio::sync::Semaphore;
 
 use crate::error::AppError;
 
@@ -37,6 +40,37 @@ pub fn verify_password(password: &str, password_hash: &str) -> Result<bool, AppE
         .is_ok())
 }
 
+pub async fn hash_password_blocking(
+    limiter: Arc<Semaphore>,
+    password: String,
+) -> Result<String, AppError> {
+    let _permit = limiter
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal("Password hashing limiter closed".into()))?;
+
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|error| AppError::Internal(format!("Password hashing task failed: {error}")))?
+}
+
+pub async fn verify_password_blocking(
+    limiter: Arc<Semaphore>,
+    password: String,
+    password_hash: String,
+) -> Result<bool, AppError> {
+    let _permit = limiter
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal("Password verification limiter closed".into()))?;
+
+    tokio::task::spawn_blocking(move || verify_password(&password, &password_hash))
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("Password verification task failed: {error}"))
+        })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +100,32 @@ mod tests {
     #[test]
     fn validate_password_rejects_short_password() {
         assert!(validate_password_strength("short").is_err());
+    }
+
+    #[tokio::test]
+    async fn blocking_hash_and_verify_accept_correct_password() {
+        let limiter = Arc::new(Semaphore::new(1));
+
+        let hash = hash_password_blocking(limiter.clone(), "correct horse".to_string())
+            .await
+            .unwrap();
+
+        assert!(
+            verify_password_blocking(limiter, "correct horse".to_string(), hash)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn blocking_verify_rejects_wrong_password() {
+        let limiter = Arc::new(Semaphore::new(1));
+        let hash = hash_password("correct horse").unwrap();
+
+        assert!(
+            !verify_password_blocking(limiter, "wrong horse".to_string(), hash)
+                .await
+                .unwrap()
+        );
     }
 }

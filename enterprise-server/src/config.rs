@@ -14,6 +14,7 @@ const DEFAULT_RATE_LIMIT_ADMIN_MAX_REQUESTS: u32 = 30;
 const DEFAULT_RATE_LIMIT_ADMIN_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_RATE_LIMIT_DEFAULT_MAX_REQUESTS: u32 = 300;
 const DEFAULT_RATE_LIMIT_DEFAULT_WINDOW_SECONDS: u64 = 60;
+const DEFAULT_AUTH_PASSWORD_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -29,6 +30,7 @@ pub struct AppConfig {
     pub s3_secret_key: String,
     pub s3_region: String,
     pub cas_upload_concurrency: usize,
+    pub auth_password_concurrency: usize,
     pub metrics_write_rollups: bool,
     pub dashboard_use_rollups: bool,
     // Rate limiting
@@ -67,6 +69,7 @@ pub struct EnvConfig {
     pub s3_secret_key: Option<String>,
     pub s3_region: Option<String>,
     pub cas_upload_concurrency: Option<usize>,
+    pub auth_password_concurrency: Option<usize>,
     pub metrics_write_rollups: Option<bool>,
     pub dashboard_use_rollups: Option<bool>,
     pub rate_limit_metrics_max_requests: Option<u32>,
@@ -114,6 +117,10 @@ impl AppConfig {
             s3_secret_key: env.s3_secret_key.unwrap_or_else(|| "minioadmin".into()),
             s3_region: env.s3_region.unwrap_or_else(|| "us-east-1".into()),
             cas_upload_concurrency: env.cas_upload_concurrency.unwrap_or(8).max(1),
+            auth_password_concurrency: env
+                .auth_password_concurrency
+                .unwrap_or(DEFAULT_AUTH_PASSWORD_CONCURRENCY)
+                .max(1),
             metrics_write_rollups: env.metrics_write_rollups.unwrap_or(true),
             dashboard_use_rollups: env.dashboard_use_rollups.unwrap_or(false),
             rate_limit_metrics_max_requests: max_requests(
@@ -206,6 +213,7 @@ mod tests {
         assert_eq!(config.rate_limit_auth_window_seconds, 60);
         assert_eq!(config.rate_limit_default_max_requests, 300);
         assert_eq!(config.rate_limit_default_window_seconds, 60);
+        assert_eq!(config.auth_password_concurrency, 8);
     }
 
     #[test]
@@ -215,6 +223,7 @@ mod tests {
         env.rate_limit_auth_window_seconds = Some(30);
         env.rate_limit_oauth_max_requests = Some(0);
         env.rate_limit_oauth_window_seconds = Some(0);
+        env.auth_password_concurrency = Some(0);
 
         let config = AppConfig::from_env_config(env);
 
@@ -222,6 +231,7 @@ mod tests {
         assert_eq!(config.rate_limit_auth_window_seconds, 30);
         assert_eq!(config.rate_limit_oauth_max_requests, 1);
         assert_eq!(config.rate_limit_oauth_window_seconds, 1);
+        assert_eq!(config.auth_password_concurrency, 1);
     }
 
     #[test]
@@ -239,6 +249,7 @@ mod tests {
                 ("RATE_LIMIT_DEFAULT_WINDOW_SECONDS", "60"),
                 ("RATE_LIMIT_METRICS_MAX_REQUESTS", "48"),
                 ("RATE_LIMIT_METRICS_WINDOW_SECONDS", "75"),
+                ("AUTH_PASSWORD_CONCURRENCY", "4"),
             ]
             .into_iter()
             .map(|(key, value)| (key.to_string(), value.to_string())),
@@ -254,6 +265,7 @@ mod tests {
         assert_eq!(config.rate_limit_default_window_seconds, 60);
         assert_eq!(config.rate_limit_metrics_max_requests, 48);
         assert_eq!(config.rate_limit_metrics_window_seconds, 75);
+        assert_eq!(config.auth_password_concurrency, 4);
         Ok(())
     }
 
@@ -271,6 +283,7 @@ mod tests {
             s3_secret_key: None,
             s3_region: None,
             cas_upload_concurrency: None,
+            auth_password_concurrency: None,
             metrics_write_rollups: None,
             dashboard_use_rollups: None,
             rate_limit_metrics_max_requests: None,

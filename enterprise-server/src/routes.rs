@@ -17,6 +17,13 @@ pub struct AppState {
     pub config: AppConfig,
     pub cas_store: CasStore,
     pub rate_limiter: RateLimiter,
+    pub auth_password_limiter: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+pub fn auth_password_limiter(config: &AppConfig) -> std::sync::Arc<tokio::sync::Semaphore> {
+    std::sync::Arc::new(tokio::sync::Semaphore::new(
+        config.auth_password_concurrency,
+    ))
 }
 
 /// Build the complete router with all routes
