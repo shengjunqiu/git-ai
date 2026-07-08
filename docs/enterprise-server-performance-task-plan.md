@@ -18,31 +18,31 @@
 
 步骤：
 
-- [ ] 进入服务端目录：
+- [x] 进入服务端目录：
 
 ```bash
 cd enterprise-server
 ```
 
-- [ ] 启动依赖：
+- [x] 启动依赖：
 
 ```bash
 docker compose up -d postgres redis minio
 ```
 
-- [ ] 确认容器状态：
+- [x] 确认容器状态：
 
 ```bash
 docker compose ps
 ```
 
-- [ ] 确认 Postgres 就绪：
+- [x] 确认 Postgres 就绪：
 
 ```bash
 docker compose exec postgres pg_isready -U gitai -d gitai_enterprise
 ```
 
-- [ ] 跑服务端测试：
+- [x] 跑服务端测试：
 
 ```bash
 cargo test
@@ -50,8 +50,8 @@ cargo test
 
 验收标准：
 
-- [ ] Postgres、Redis、MinIO 都处于 running/healthy。
-- [ ] `cargo test` 通过。
+- [x] Postgres、Redis、MinIO 都处于 running/healthy。
+- [x] `cargo test` 通过。
 - [ ] 如果 Redis/Postgres 不可用，记录原因，不继续做性能改动。
 
 ### 0.2 记录当前基础压测基线
@@ -60,27 +60,27 @@ cargo test
 
 步骤：
 
-- [ ] 启动 API：
+- [x] 启动 API：
 
 ```bash
 docker compose up -d --build api
 ```
 
-- [ ] 确认健康检查：
+- [x] 确认健康检查：
 
 ```bash
 curl -sS http://127.0.0.1:8080/health
 curl -sS http://127.0.0.1:8080/ready
 ```
 
-- [ ] 跑基础压测：
+- [x] 跑基础压测：
 
 ```bash
 ab -n 100 -c 20 http://127.0.0.1:8080/health
 ab -n 100 -c 20 http://127.0.0.1:8080/ready
 ```
 
-- [ ] 记录容器资源：
+- [x] 记录容器资源：
 
 ```bash
 docker stats --no-stream enterprise-server-api-1 enterprise-server-postgres-1 enterprise-server-redis-1 enterprise-server-minio-1
@@ -88,10 +88,10 @@ docker stats --no-stream enterprise-server-api-1 enterprise-server-postgres-1 en
 
 记录项：
 
-- [ ] `/health` RPS、p50、p95、p99、失败数。
-- [ ] `/ready` RPS、p50、p95、p99、失败数。
-- [ ] API/Postgres/Redis/MinIO CPU 和内存。
-- [ ] 当前数据库数据量：
+- [x] `/health` RPS、p50、p95、p99、失败数。
+- [x] `/ready` RPS、p50、p95、p99、失败数。
+- [x] API/Postgres/Redis/MinIO CPU 和内存。
+- [x] 当前数据库数据量：
 
 ```bash
 docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "
@@ -105,8 +105,50 @@ UNION ALL SELECT 'users', COUNT(*) FROM users;
 
 验收标准：
 
-- [ ] 基线结果写入 PR 描述或单独记录文件。
-- [ ] 后续每个阶段都能与这组数据对比。
+- [x] 基线结果写入 PR 描述或单独记录文件。
+- [x] 后续每个阶段都能与这组数据对比。
+
+### 阶段 0 执行记录
+
+执行日期：2026-07-08
+
+环境状态：
+
+| 项目 | 结果 |
+| --- | --- |
+| `docker compose up -d postgres redis minio` | Postgres、Redis、MinIO 均已运行 |
+| `docker compose ps` | API healthy，Postgres healthy，Redis healthy，MinIO running |
+| `pg_isready` | `/var/run/postgresql:5432 - accepting connections` |
+| `cargo test` | 76 passed, 0 failed |
+| `docker compose up -d --build api` | 成功；release build 用时约 8m29s，API 容器重建后 healthy |
+| `/health` | `{"service":"git-ai-enterprise-server","status":"ok","version":"0.1.0"}` |
+| `/ready` | `{"checks":{"database":"ok"},"status":"ready"}` |
+
+基础压测：
+
+| 端点 | 请求/并发 | RPS | p50 | p95 | p99 | 失败数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `/health` | 100 / 20 | 466.06 | 40ms | 48ms | 50ms | 0 |
+| `/ready` | 100 / 20 | 451.78 | 39ms | 61ms | 65ms | 0 |
+
+容器资源快照：
+
+| 容器 | CPU | 内存 |
+| --- | ---: | ---: |
+| `enterprise-server-api-1` | 0.00% | 12.13MiB / 7.655GiB |
+| `enterprise-server-postgres-1` | 0.00% | 199.2MiB / 7.655GiB |
+| `enterprise-server-redis-1` | 0.65% | 10.26MiB / 7.655GiB |
+| `enterprise-server-minio-1` | 0.07% | 164.8MiB / 7.655GiB |
+
+数据库数据量：
+
+| 表 | 行数 |
+| --- | ---: |
+| `metrics_events` | 44 |
+| `commit_stats` | 1 |
+| `cas_objects` | 32 |
+| `report_uploads` | 1 |
+| `users` | 3 |
 
 ## 阶段 1: P0 低风险立即优化
 
