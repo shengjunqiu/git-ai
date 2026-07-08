@@ -20,7 +20,7 @@ from _common import (
     parse_tool_models,
     positive_int,
     print_summaries,
-    require_api_key,
+    require_api_keys,
     run_concurrent,
     summarize,
     timed_json_request,
@@ -38,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         "--api-key",
         default=os.environ.get("ENTERPRISE_API_KEY"),
         help="Enterprise API key. Defaults to ENTERPRISE_API_KEY.",
+    )
+    parser.add_argument(
+        "--api-keys",
+        default=os.environ.get("ENTERPRISE_API_KEYS"),
+        help="Comma-separated API keys. Defaults to ENTERPRISE_API_KEYS.",
     )
     parser.add_argument(
         "--requests",
@@ -103,7 +108,8 @@ def parse_args() -> argparse.Namespace:
 def validate_metrics_response(parsed) -> str | None:
     errors = parsed.get("errors", []) if isinstance(parsed, dict) else []
     if errors:
-        return f"metrics upload returned {len(errors)} event errors"
+        sample = errors[0] if isinstance(errors, list) and errors else {}
+        return f"metrics upload returned {len(errors)} event errors; sample={sample}"
     return None
 
 
@@ -112,14 +118,15 @@ def main() -> None:
     if args.batch_size > MAX_METRICS_BATCH_SIZE:
         raise SystemExit(f"--batch-size must be <= {MAX_METRICS_BATCH_SIZE}")
 
-    api_key = require_api_key(args.api_key)
+    api_keys = require_api_keys(args.api_keys, args.api_key)
     base_url = normalize_base_url(args.base_url)
     url = build_url(base_url, "/worker/metrics/upload")
-    headers = api_headers(api_key, args.distinct_id)
     tool_models = parse_tool_models(args.tool_models)
     now_s = int(time.time())
 
     def work(index: int):
+        api_key = api_keys[index % len(api_keys)]
+        headers = api_headers(api_key, args.distinct_id)
         start_seed = args.start_seed + index * args.batch_size
         payload = make_metrics_batch(
             start_seed,

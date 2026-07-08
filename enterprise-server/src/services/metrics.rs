@@ -483,7 +483,18 @@ fn prepare_daily_rollups(rows: &[PreparedMetricRow]) -> Vec<PreparedDailyRollup>
         }
     }
 
-    rollups.into_values().collect()
+    let mut rollups: Vec<_> = rollups.into_values().collect();
+    // Keep concurrent upserts locking rollup primary keys in the same order.
+    rollups.sort_by(|left, right| {
+        left.key
+            .day
+            .cmp(&right.key.day)
+            .then_with(|| left.key.org_id.cmp(&right.key.org_id))
+            .then_with(|| left.key.user_id.cmp(&right.key.user_id))
+            .then_with(|| left.key.repo_url.cmp(&right.key.repo_url))
+            .then_with(|| left.key.tool_model.cmp(&right.key.tool_model))
+    });
+    rollups
 }
 
 fn add_rollup_delta(

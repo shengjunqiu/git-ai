@@ -102,6 +102,19 @@ def require_api_key(value: str | None) -> str:
     sys.exit(2)
 
 
+def require_api_keys(*values: str | None) -> list[str]:
+    for value in values:
+        if value:
+            keys = [item.strip() for item in value.split(",") if item.strip()]
+            if keys:
+                return keys
+    print(
+        "ERROR: ENTERPRISE_API_KEY or ENTERPRISE_API_KEYS is required for this benchmark.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
 def api_headers(api_key: str | None = None, distinct_id: str | None = None) -> dict[str, str]:
     headers = {
         "Accept": "application/json",

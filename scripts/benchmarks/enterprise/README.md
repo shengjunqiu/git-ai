@@ -7,6 +7,8 @@
 ```bash
 export ENTERPRISE_BASE_URL=http://127.0.0.1:8080
 export ENTERPRISE_API_KEY=your-api-key
+# 可选：高并发造数时轮换多个 key，避免单 key metrics 限流影响压测。
+export ENTERPRISE_API_KEYS=key-1,key-2,key-3
 export BENCH_CONCURRENCY=20
 export BENCH_REQUESTS=1000
 ```

@@ -1417,21 +1417,72 @@ git commit -m "Add enterprise server benchmark scripts"
 
 步骤：
 
-- [ ] 使用造数脚本生成 10 万 metrics。
-- [ ] 运行 dashboard 压测。
-- [ ] 记录 p95/p99 和慢查询。
+- [x] 使用造数脚本生成 10 万 metrics。
+- [x] 运行 dashboard 压测。
+- [x] 记录 p95/p99；慢查询列表留到 4.3 接入 `pg_stat_statements` 后补充。
 - [ ] 生成 100 万 metrics。
 - [ ] 重复压测。
 - [ ] 如果机器允许，生成 500 万 metrics。
-- [ ] 对比 rollup enabled/disabled。
+- [x] 对比 rollup enabled/disabled。
 
 验收标准：
 
-- [ ] 30 天 summary p95 小于目标值。
-- [ ] trends p95 小于目标值。
-- [ ] tools comparison p95 小于目标值。
-- [ ] 没有 DB acquire timeout。
+- [x] 30 天 summary p95 小于目标值。10 万级本地验证：rollup enabled p95 267.58ms。
+- [x] trends p95 小于目标值。10 万级本地验证：rollup enabled day p95 124.89ms，week p95 116.43ms。
+- [x] tools comparison p95 小于目标值。10 万级本地验证：rollup enabled p95 143.93ms。
+- [x] 没有 DB acquire timeout。
 - [ ] Postgres CPU 没有长期打满。
+
+执行记录：
+
+| 项 | 结果 |
+| --- | --- |
+| 环境 | 本地 Docker PostgreSQL/Redis，当前源码分别启动 `DASHBOARD_USE_ROLLUPS=false` 的 `127.0.0.1:43130` 和 `DASHBOARD_USE_ROLLUPS=true` 的 `127.0.0.1:43131` |
+| 迁移 | 当前源码成功补跑迁移 014、015、016、017，生成 `metrics_daily_rollups` 和 `metrics_tool_model_events` |
+| 造数 | 使用 `seed_metrics.py --events 100000 --batch-size 500 --concurrency 10` 写入 10 万 committed metrics |
+| 造数限流 | metrics 每 API key 60/min，压测脚本已支持 `ENTERPRISE_API_KEYS` 多 key 轮换，避免把限流误判为写入瓶颈 |
+| 首轮问题 | 高并发 rollup upsert 触发 `deadlock detected`，根因是 `HashMap::into_values()` 导致不同事务按不同主键顺序锁定 `metrics_daily_rollups` |
+| 修复 | `prepare_daily_rollups` 输出按 `(day, org_id, user_id, repo_url, tool_model)` 主键排序，保证并发 upsert 锁顺序稳定 |
+| 当前数据量 | `metrics_events=113564`，`metrics_daily_rollups=13508`，`metrics_tool_model_events=113550` |
+
+造数结果：
+
+| 场景 | requests | success | error rate | elapsed | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 修复前 10 万造数 | 200 | 27 | 86.50% | 31.84s | 7186.63ms | 12973.30ms |
+| 修复后 10 万造数 | 200 | 200 | 0.00% | 34.13s | 3333.89ms | 4358.42ms |
+
+Dashboard 30 天查询结果，每个 endpoint 100 requests、concurrency 20：
+
+| endpoint | rollup | p95 | p99 | error rate |
+| --- | --- | ---: | ---: | ---: |
+| summary | disabled | 1378.55ms | 1451.40ms | 0.00% |
+| summary | enabled | 267.58ms | 320.56ms | 0.00% |
+| tools | disabled | 709.52ms | 746.04ms | 0.00% |
+| tools | enabled | 143.93ms | 207.73ms | 0.00% |
+| trends ai_lines/day | disabled | 790.77ms | 840.51ms | 0.00% |
+| trends ai_lines/day | enabled | 124.89ms | 173.67ms | 0.00% |
+| trends ai_ratio/week | disabled | 775.28ms | 840.42ms | 0.00% |
+| trends ai_ratio/week | enabled | 116.43ms | 147.20ms | 0.00% |
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check` | 通过，仅有既有 warning |
+| `cargo test metrics` | 17 passed, 0 failed |
+| `cargo test` | 102 passed, 0 failed |
+| `python3 -m py_compile scripts/benchmarks/enterprise/_common.py scripts/benchmarks/enterprise/bench_health_ready.py scripts/benchmarks/enterprise/bench_metrics_upload.py scripts/benchmarks/enterprise/seed_metrics.py scripts/benchmarks/enterprise/bench_dashboard.py` | 通过 |
+| `python3 scripts/benchmarks/enterprise/seed_metrics.py --help` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_dashboard.py --help` | 通过 |
+| `git diff --check` | 通过 |
+
+提交建议：
+
+```bash
+git add docs/enterprise-server-performance-task-plan.md enterprise-server/src/services/metrics.rs scripts/benchmarks/enterprise
+git commit -m "Stabilize enterprise metrics rollup validation"
+```
 
 ### 4.3 增加 Postgres 慢查询观测
 

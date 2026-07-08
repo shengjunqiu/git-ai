@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import os
-import time
 
 from _common import (
     api_headers,
@@ -17,7 +17,7 @@ from _common import (
     normalize_base_url,
     positive_int,
     print_summaries,
-    require_api_key,
+    require_api_keys,
     run_concurrent,
     summarize,
     timed_json_request,
@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
         "--api-key",
         default=os.environ.get("ENTERPRISE_API_KEY"),
         help="Enterprise API key. Defaults to ENTERPRISE_API_KEY.",
+    )
+    parser.add_argument(
+        "--api-keys",
+        default=os.environ.get("ENTERPRISE_API_KEYS"),
+        help="Comma-separated API keys. Defaults to ENTERPRISE_API_KEYS.",
     )
     parser.add_argument(
         "--requests",
@@ -70,11 +75,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    api_key = require_api_key(args.api_key)
+    api_keys = require_api_keys(args.api_keys, args.api_key)
     base_url = normalize_base_url(args.base_url)
-    headers = api_headers(api_key)
-    until = int(time.time())
-    since = until - args.days * 24 * 60 * 60
+    until_date = dt.datetime.now(dt.UTC).date()
+    since_date = until_date - dt.timedelta(days=args.days)
+    until = until_date.isoformat()
+    since = since_date.isoformat()
 
     endpoints = [
         (
@@ -109,6 +115,8 @@ def main() -> None:
     total_requests = args.requests * len(endpoints)
 
     def work(index: int):
+        api_key = api_keys[index % len(api_keys)]
+        headers = api_headers(api_key)
         label, path, params = endpoints[index % len(endpoints)]
         url = build_url(base_url, path, params)
         return timed_json_request(
