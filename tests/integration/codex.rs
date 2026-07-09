@@ -312,6 +312,68 @@ fn test_codex_preset_bash_post_tool_use_detects_changed_files() {
 }
 
 #[test]
+fn test_codex_apply_patch_post_tool_use_attributes_new_file_to_ai() {
+    use crate::repos::test_repo::TestRepo;
+
+    let mut repo = TestRepo::new();
+    repo.patch_git_ai_config(|patch| {
+        patch.exclude_prompts_in_repositories = Some(vec![]);
+    });
+
+    let repo_root = repo.canonical_path();
+    fs::write(repo_root.join("README.md"), "Project README\n").unwrap();
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    let fixture = fixture_path("codex-session-simple.jsonl");
+    let transcript_path = repo_root.join("codex-apply-patch-rollout.jsonl");
+    fs::copy(&fixture, &transcript_path).unwrap();
+
+    let pre_hook_input = json!({
+        "session_id": "session-apply-patch",
+        "cwd": repo_root.to_string_lossy().to_string(),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "tool_use_id": "apply-patch-1",
+        "tool_input": {
+            "patch": "*** Begin Patch\n*** Add File: generated.py\n+print('tracked by codex')\n*** End Patch\n"
+        },
+        "transcript_path": transcript_path.to_string_lossy().to_string()
+    })
+    .to_string();
+
+    repo.git_ai(&["checkpoint", "codex", "--hook-input", &pre_hook_input])
+        .expect("apply_patch pre-hook should succeed");
+
+    fs::write(
+        repo_root.join("generated.py"),
+        "print('tracked by codex')\n",
+    )
+    .unwrap();
+
+    let post_hook_input = json!({
+        "session_id": "session-apply-patch",
+        "cwd": repo_root.to_string_lossy().to_string(),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "apply_patch",
+        "tool_use_id": "apply-patch-1",
+        "tool_input": {
+            "patch": "*** Begin Patch\n*** Add File: generated.py\n+print('tracked by codex')\n*** End Patch\n"
+        },
+        "transcript_path": transcript_path.to_string_lossy().to_string()
+    })
+    .to_string();
+
+    repo.git_ai(&["checkpoint", "codex", "--hook-input", &post_hook_input])
+        .expect("apply_patch post-hook should create an AI checkpoint");
+
+    repo.stage_all_and_commit("Add generated file from Codex")
+        .expect("commit should succeed");
+
+    let mut generated = repo.filename("generated.py");
+    generated.assert_lines_and_blame(crate::lines!["print('tracked by codex')".ai()]);
+}
+
+#[test]
 fn test_find_rollout_path_for_session_in_home() {
     let fixture = fixture_path("codex-session-simple.jsonl");
     let temp = tempfile::tempdir().unwrap();
@@ -834,6 +896,7 @@ crate::reuse_tests_in_worktree!(
     test_codex_preset_bash_pre_tool_use_skips_checkpoint_after_capturing_snapshot,
     test_codex_preset_bash_pre_tool_use_supports_camel_case_hook_event_name,
     test_codex_preset_bash_post_tool_use_detects_changed_files,
+    test_codex_apply_patch_post_tool_use_attributes_new_file_to_ai,
     test_find_rollout_path_for_session_in_home,
     test_codex_e2e_commit_resync_uses_latest_rollout,
     test_codex_commit_inside_bash_inflight_is_attributed_to_codex,

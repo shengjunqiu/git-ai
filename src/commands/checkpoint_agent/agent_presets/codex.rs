@@ -82,6 +82,10 @@ impl AgentCheckpointPreset for CodexPreset {
             .or_else(|| hook_data.get("toolUseId"))
             .and_then(|v| v.as_str())
             .unwrap_or("bash");
+        let hook_edited_filepaths =
+            CodexPreset::string_array_field(&hook_data, &["edited_filepaths", "editedFilepaths"]);
+        let hook_dirty_files =
+            CodexPreset::string_map_field(&hook_data, &["dirty_files", "dirtyFiles"]);
 
         let agent_id = AgentId {
             tool: "codex".to_string(),
@@ -160,9 +164,9 @@ impl AgentCheckpointPreset for CodexPreset {
                     checkpoint_kind: CheckpointKind::AiAgent,
                     transcript: Some(transcript),
                     repo_working_dir: Some(cwd.to_string()),
-                    edited_filepaths,
+                    edited_filepaths: edited_filepaths.or_else(|| hook_edited_filepaths.clone()),
                     will_edit_filepaths: None,
-                    dirty_files: None,
+                    dirty_files: hook_dirty_files.clone(),
                     captured_checkpoint_id: bash_captured_checkpoint_id,
                 });
             }
@@ -181,15 +185,50 @@ impl AgentCheckpointPreset for CodexPreset {
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
             repo_working_dir: Some(cwd.to_string()),
-            edited_filepaths: None,
+            edited_filepaths: hook_edited_filepaths,
             will_edit_filepaths: None,
-            dirty_files: None,
+            dirty_files: hook_dirty_files,
             captured_checkpoint_id: None,
         })
     }
 }
 
 impl CodexPreset {
+    fn string_array_field(hook_data: &serde_json::Value, keys: &[&str]) -> Option<Vec<String>> {
+        keys.iter()
+            .find_map(|key| hook_data.get(*key))
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .filter(|value| !value.trim().is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty())
+    }
+
+    fn string_map_field(
+        hook_data: &serde_json::Value,
+        keys: &[&str],
+    ) -> Option<HashMap<String, String>> {
+        keys.iter()
+            .find_map(|key| hook_data.get(*key))
+            .and_then(|value| value.as_object())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .as_str()
+                            .map(|content| (key.clone(), content.to_string()))
+                    })
+                    .filter(|(key, _)| !key.trim().is_empty())
+                    .collect::<HashMap<_, _>>()
+            })
+            .filter(|values| !values.is_empty())
+    }
+
     fn session_id_from_hook_data(hook_data: &serde_json::Value) -> Option<String> {
         hook_data
             .get("session_id")

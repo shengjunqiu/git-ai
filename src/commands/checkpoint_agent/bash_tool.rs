@@ -458,10 +458,17 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             _ => ToolClass::Skip,
         },
         Agent::Codex => match tool_name {
-            // Codex currently only emits usable PreToolUse/PostToolUse hooks for Bash.
-            // File edits like `apply_patch` are still attributed via the turn-level Stop hook.
-            // TODO: classify Codex file-edit tools here once Codex ships file-edit tool hooks.
-            "Bash" => ToolClass::Bash,
+            // Codex tools that can mutate the workspace all use the stat-diff path.
+            // Some runtimes report these as namespaced tool ids, so keep the common
+            // forms here instead of relying only on the historical "Bash" name.
+            "Bash"
+            | "bash"
+            | "exec_command"
+            | "functions.exec_command"
+            | "apply_patch"
+            | "functions.apply_patch"
+            | "write_stdin"
+            | "functions.write_stdin" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
         Agent::Pi => match tool_name {
