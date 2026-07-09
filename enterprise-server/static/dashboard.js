@@ -308,23 +308,43 @@ async function loadTrends() {
     try {
         const r = await fetch(`/api/v1/aggregate/trends?metric=${metric}&granularity=${granularity}`);
         const d = await r.json();
+        if (!r.ok) {
+            throw new Error(d.error || '加载趋势数据失败');
+        }
         const data = d.data || [];
+        const canvas = document.getElementById('trend-chart');
+        const empty = document.getElementById('trend-chart-empty');
+
+        if (data.length === 0) {
+            if (trendChart) {
+                trendChart.destroy();
+                trendChart = null;
+            }
+            canvas.style.display = 'none';
+            empty.style.display = 'block';
+            return;
+        }
+
+        canvas.style.display = 'block';
+        empty.style.display = 'none';
 
         const labels = data.map(p => p.period);
         const values = data.map(p => p.value);
+        const isSinglePoint = data.length === 1;
 
         if (trendChart) trendChart.destroy();
-        const ctx = document.getElementById('trend-chart').getContext('2d');
+        const ctx = canvas.getContext('2d');
         trendChart = new Chart(ctx, {
-            type: 'line',
+            type: isSinglePoint ? 'bar' : 'line',
             data: {
                 labels,
                 datasets: [{
                     label: metricLabels[metric],
                     data: values,
                     borderColor: '#818cf8',
-                    backgroundColor: 'rgba(129,140,248,0.15)',
-                    fill: true, tension: 0.3, pointRadius: 3,
+                    backgroundColor: isSinglePoint ? 'rgba(129,140,248,0.7)' : 'rgba(129,140,248,0.15)',
+                    fill: !isSinglePoint, tension: 0.3, pointRadius: 4,
+                    borderWidth: isSinglePoint ? 1 : 2,
                 }]
             },
             options: {
@@ -744,7 +764,7 @@ async function loadAdminOrganizations() {
 
 async function loadDepartments() {
     try {
-        const r = await fetch('/api/v1/aggregate/departments');
+        const r = await fetch('/api/v1/departments');
         const d = await r.json();
         if (!r.ok) {
             throw new Error(d.error || '加载部门列表失败');
@@ -752,30 +772,27 @@ async function loadDepartments() {
         const departments = d.departments || [];
         if (departments.length === 0) {
             document.getElementById('departments-table').innerHTML =
-                '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
+                '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
             return;
         }
 
         document.getElementById('departments-table').innerHTML = departments.map(dept => {
-            const departmentName = escapeHtml(dept.department || '—');
-            const orgName = escapeHtml(dept.organization || '—');
-            const ai = dept.w_ai || 0;
-            const human = dept.w_human || 0;
-            const total = dept.w_total || (ai + human);
-            const pct = total > 0 ? (ai / total * 100) : 0;
+            const departmentName = escapeHtml(dept.name || '—');
+            const orgName = escapeHtml(dept.org_name || '—');
+            const pct = typeof dept.pct_ai_lines === 'number' ? dept.pct_ai_lines : 0;
+            const created = dept.created_at ? new Date(dept.created_at).toLocaleString('zh-CN') : '—';
             return `<tr>
                 <td><strong>${orgName}</strong></td>
                 <td><strong>${departmentName}</strong></td>
-                <td>${fmt(dept.total_commits || 0)}</td>
-                <td>${fmt(ai)}</td>
-                <td>${fmt(human)}</td>
+                <td>${fmt(dept.member_count || 0)}</td>
                 <td>${pctBar(pct)} <span style="font-size:0.8rem">${pct.toFixed(1)}%</span></td>
+                <td>${created}</td>
             </tr>`;
         }).join('');
     } catch(e) {
         console.error(e);
         document.getElementById('departments-table').innerHTML =
-            '<tr><td colspan="6" style="color:var(--danger)">加载部门列表失败</td></tr>';
+            '<tr><td colspan="5" style="color:var(--danger)">加载部门列表失败</td></tr>';
     }
 }
 

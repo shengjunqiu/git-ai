@@ -92,6 +92,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "022_pull_request_pagination_indexes",
         include_str!("../../migrations/022_pull_request_pagination_indexes.sql"),
     ),
+    (
+        "023_department_rollup_indexes",
+        include_str!("../../migrations/023_department_rollup_indexes.sql"),
+    ),
 ];
 
 /// Run all database migrations

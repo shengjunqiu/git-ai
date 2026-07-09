@@ -149,6 +149,10 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::handlers::dashboard::aggregate_organizations),
         )
         .route(
+            "/api/v1/departments",
+            get(crate::handlers::dashboard::list_departments),
+        )
+        .route(
             "/api/v1/aggregate/departments",
             get(crate::handlers::dashboard::aggregate_departments),
         )

@@ -54,9 +54,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Ping
 .sidebar-gitai-status { color: var(--text-primary); font-size: 0.72rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-gitai-detail { color: var(--text-muted); font-size: 0.66rem; margin-top: 0.16rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logout-btn { display: flex; align-items: center; justify-content: center; gap: 0.45rem; padding: 0.58rem 0.75rem; color: var(--text-secondary);
-               font-size: 0.78rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; background: transparent; width: 100%;
+               font-size: 0.78rem; font-weight: 600; cursor: pointer; border: 1px solid rgba(148,163,184,0.22); background: rgba(15,23,42,0.28); width: 100%;
                border-radius: 8px; transition: all 0.15s; }
-.logout-btn:hover { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.16); color: var(--danger); }
+.logout-btn:hover { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.38); color: var(--danger); }
+.logout-btn:focus-visible { outline: 2px solid rgba(248,113,113,0.35); outline-offset: 2px; }
 
 /* Main content */
 .main { flex: 1; min-width: 0; height: 100vh; height: 100dvh; min-height: 0; padding: 2rem; overflow-y: auto; }

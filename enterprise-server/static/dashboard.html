@@ -137,15 +137,18 @@
                             <option value="commits">提交数</option>
                         </select>
                         <select id="trend-granularity" onchange="loadTrends()">
-                            <option value="day">按天</option>
-                            <option value="week" selected>按周</option>
+                            <option value="day" selected>按天</option>
+                            <option value="week">按周</option>
                             <option value="month">按月</option>
                         </select>
                     </div>
                 </div>
                 <div class="chart-card">
-                    <div class="chart-title" id="trend-chart-title">AI 代码占比趋势（按周）</div>
-                    <div class="chart-container" style="height: 400px;"><canvas id="trend-chart"></canvas></div>
+                    <div class="chart-title" id="trend-chart-title">AI 代码占比趋势（按天）</div>
+                    <div class="chart-container" style="height: 400px;">
+                        <canvas id="trend-chart"></canvas>
+                        <div id="trend-chart-empty" class="empty-state" style="display:none;padding:2rem"><p>暂无趋势数据</p></div>
+                    </div>
                 </div>
                 <div class="chart-card">
                     <div class="chart-title">AI 工具对比</div>
@@ -239,14 +242,14 @@
                 <div class="page-header">
                     <div>
                         <div class="page-title">部门</div>
-                        <div class="page-subtitle">按部门查看 AI 代码归属分析</div>
+                        <div class="page-subtitle">查看组织下的部门信息</div>
                     </div>
                     <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
                 </div>
                 <div class="table-card">
                     <table>
-                        <thead><tr><th>组织</th><th>部门</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                        <thead><tr><th>组织</th><th>部门</th><th>成员数</th><th>AI 代码占比</th><th>创建时间</th></tr></thead>
+                        <tbody id="departments-table"><tr><td colspan="5">加载中...</td></tr></tbody>
                     </table>
                 </div>
             </div>
