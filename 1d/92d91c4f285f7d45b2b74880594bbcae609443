@@ -1,0 +1,44 @@
+enterprise-server/migrations/022_pull_request_pagination_indexes.sql
+  d2a37ee3fcb7cddb 1-10
+enterprise-server/src/db/migrations.rs
+  d2a37ee3fcb7cddb 91-94
+docs/enterprise/enterprise-server-pagination-task-plan.md
+  d2a37ee3fcb7cddb 729-733,737-739,747-749,754-756,775-780,798-823
+enterprise-server/src/handlers/lifecycle.rs
+  d2a37ee3fcb7cddb 5-17,20-62,69-81,84-128,144-178,468,642-1102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "1d92d91c4f285f7d45b2b74880594bbcae609443",
+  "prompts": {
+    "60d75f4f35309f03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4598-746b-70e3-ad44-e0c355afe762",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 137,
+      "total_deletions": 23,
+      "accepted_lines": 242,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/c71b28b84f7ce25ed97ca2e8c8f8d3239898d7815e0894272054e271ddba7d45"
+    },
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 625,
+      "total_deletions": 46,
+      "accepted_lines": 3524,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/23593a3296eb8a57b38a5842d54fe585dde6814b57ca014bb1100fa6205cfc68"
+    }
+  }
+}
