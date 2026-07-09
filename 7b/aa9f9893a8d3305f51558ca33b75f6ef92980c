@@ -1,0 +1,56 @@
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 960-963
+enterprise-server/src/handlers/oauth.rs
+  a73676cfded0c055 607-610
+enterprise-server/src/auth/jwt.rs
+  a73676cfded0c055 124-127
+docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
+  a73676cfded0c055 429,437-438,440,476-478,486,490-491,495-498,503-505,519,523-524,533-535,541,547,550,553,558,562-564,568-570,576-579,583-640
+enterprise-server/src/db/migrations.rs
+  a73676cfded0c055 79-82,230-278
+enterprise-server/src/services/metrics.rs
+  a73676cfded0c055 1-2,4-7,9-11,18-19,26,48-53,63,86,251-257,261,281-295,297,309-311,316,657-881,1018,1048,1087,1152,1160-1247,1269,1297,1326,1333-1336,1482-1526
+enterprise-server/src/handlers/report.rs
+  a73676cfded0c055 863-866
+enterprise-server/src/services/rate_limit.rs
+  a73676cfded0c055 459-462
+enterprise-server/src/handlers/release.rs
+  a73676cfded0c055 901-904
+enterprise-server/deploy/.env.example
+  a73676cfded0c055 21,23-29
+enterprise-server/src/handlers/metrics.rs
+  a73676cfded0c055 39
+enterprise-server/src/config.rs
+  a73676cfded0c055 3-4,21-38,54-57,97-100,132-140,160-169,262-268,289-315,332-335,352-358,378-381
+enterprise-server/src/main.rs
+  a73676cfded0c055 82-101
+enterprise-server/.env.example
+  a73676cfded0c055 23,25-31
+enterprise-server/migrations/019_metrics_rollup_dirty_scopes.sql
+  a73676cfded0c055 1-19
+enterprise-server/deploy/migrations/019_metrics_rollup_dirty_scopes.sql
+  a73676cfded0c055 1-19
+enterprise-server/src/handlers/cas.rs
+  a73676cfded0c055 208,416-417,482-483,717-720
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "7baa9f9893a8d3305f51558ca33b75f6ef92980c",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 3080,
+      "total_deletions": 2118,
+      "accepted_lines": 24092,
+      "overriden_lines": 209,
+      "messages_url": "http://localhost:8080/cas/a4715f977d60ee38e6235e0ce64d2837b9006dbd5d61ce1baea69884cc630bb9"
+    }
+  }
+}
