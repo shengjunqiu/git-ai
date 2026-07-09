@@ -1,0 +1,22 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "611b3aef8972127f15cbe5d1b2ddcdc60ed62658",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 4,
+      "accepted_lines": 2848,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/3a145193a614cdd46be8bfe5e512a28719ec508c5eb050d860c2162d40db5760"
+    }
+  }
+}
