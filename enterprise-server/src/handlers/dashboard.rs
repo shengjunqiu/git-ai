@@ -1889,137 +1889,181 @@ pub async fn aggregate_developers(
 pub async fn aggregate_tools(
     State(state): State<AppState>,
     auth: DashboardAuth,
+    Query(query): Query<AggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, DASHBOARD_MAX_LIMIT);
+    let cursor: Option<ToolAggregateCursor> = decode_dashboard_cursor(query.cursor.as_deref())?;
+    let cursor_ai_additions = cursor.as_ref().map(|cursor| cursor.ai_additions);
+    let cursor_tool_model = cursor.as_ref().map(|cursor| cursor.tool_model.clone());
 
-    // First try tool_model_stats from report uploads (richer data)
-    let report_rows: Vec<(
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-    )> = sqlx::query_as(
+    let metrics_source = if state.config.dashboard_use_rollups {
         r#"SELECT
-            tms.tool_model,
-            COALESCE(SUM(tms.ai_additions), 0),
-            COALESCE(SUM(tms.mixed_additions), 0),
-            COALESCE(SUM(tms.ai_accepted), 0),
-            COALESCE(SUM(tms.total_ai_additions), 0),
-            COALESCE(SUM(tms.total_ai_deletions), 0)
-        FROM tool_model_stats tms
-        JOIN projects p ON tms.project_id = p.id
-        WHERE ($1::uuid IS NULL OR p.user_id = $1)
-          AND ($2::uuid IS NULL OR p.org_id = $2)
-        GROUP BY tms.tool_model
-        ORDER BY SUM(tms.ai_additions) DESC"#,
-    )
-    .bind(user_filter)
-    .bind(org_filter)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-
-    // From committed metrics events or daily rollups.
-    let metrics_rows = fetch_metrics_tool_rows(
-        &state.db,
-        state.config.dashboard_use_rollups,
-        user_filter,
-        org_filter,
-    )
-    .await?;
-
-    // Also get Checkpoint events (type 4) which have tool/model directly
-    let checkpoint_rows: Vec<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
+                tool_model,
+                COALESCE(SUM(ai_lines), 0)::bigint AS ai_additions,
+                COALESCE(SUM(mixed_lines), 0)::bigint AS mixed_additions,
+                COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+                COALESCE(SUM(ai_lines), 0)::bigint AS total_ai_additions,
+                0::bigint AS total_ai_deletions,
+                FALSE AS has_report,
+                TRUE AS has_metrics
+            FROM metrics_daily_rollups
+            WHERE tool_model != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY tool_model"#
+    } else {
         r#"SELECT
-            tool,
-            model,
-            COALESCE(SUM(ai_additions), 0)
-        FROM metrics_events
-        WHERE event_type IN (2, 4) AND tool IS NOT NULL AND tool != ''
-          AND ($1::uuid IS NULL OR user_id = $1)
-          AND ($2::uuid IS NULL OR org_id = $2)
-        GROUP BY tool, model
-        ORDER BY SUM(ai_additions) DESC"#,
-    )
-    .bind(user_filter)
-    .bind(org_filter)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+                tool_model,
+                COALESCE(SUM(ai_additions), 0)::bigint AS ai_additions,
+                COALESCE(SUM(mixed_additions), 0)::bigint AS mixed_additions,
+                COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted,
+                COALESCE(SUM(total_ai_additions), 0)::bigint AS total_ai_additions,
+                COALESCE(SUM(total_ai_deletions), 0)::bigint AS total_ai_deletions,
+                FALSE AS has_report,
+                TRUE AS has_metrics
+            FROM metrics_tool_model_events
+            WHERE ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY tool_model"#
+    };
 
-    let mut tools_by_model: std::collections::BTreeMap<String, ToolAggregate> =
-        std::collections::BTreeMap::new();
+    let sql = format!(
+        r#"WITH tool_sources AS (
+            SELECT
+                tms.tool_model,
+                COALESCE(SUM(tms.ai_additions), 0)::bigint AS ai_additions,
+                COALESCE(SUM(tms.mixed_additions), 0)::bigint AS mixed_additions,
+                COALESCE(SUM(tms.ai_accepted), 0)::bigint AS ai_accepted,
+                COALESCE(SUM(tms.total_ai_additions), 0)::bigint AS total_ai_additions,
+                COALESCE(SUM(tms.total_ai_deletions), 0)::bigint AS total_ai_deletions,
+                TRUE AS has_report,
+                FALSE AS has_metrics
+            FROM tool_model_stats tms
+            JOIN projects p ON tms.project_id = p.id
+            WHERE ($1::uuid IS NULL OR p.user_id = $1)
+              AND ($2::uuid IS NULL OR p.org_id = $2)
+              AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY tms.tool_model
 
-    // Add report-based tool stats
-    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &report_rows {
-        tools_by_model
-            .entry(tool_model.clone())
-            .or_default()
-            .add_report_row(
-                ai_add.unwrap_or(0),
-                mixed_add.unwrap_or(0),
-                ai_accept.unwrap_or(0),
-                total_ai_add.unwrap_or(0),
-                total_ai_del.unwrap_or(0),
-            );
-    }
+            UNION ALL
 
-    // Add metrics-based committed-event stats.
-    for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &metrics_rows {
-        tools_by_model
-            .entry(tool_model.clone())
-            .or_default()
-            .add_metrics_row(
-                ai_add.unwrap_or(0),
-                mixed_add.unwrap_or(0),
-                ai_accept.unwrap_or(0),
-                total_ai_add.unwrap_or(0),
-                total_ai_del.unwrap_or(0),
-            );
-    }
+            {metrics_source}
 
-    // Also add Checkpoint/AgentUsage events which have tool/model directly.
-    for (tool, model, ai_add) in &checkpoint_rows {
-        let tool_name = tool.as_deref().unwrap_or("unknown");
-        let model_name = model.as_deref().unwrap_or("");
-        let tool_model = if model_name.is_empty() {
-            tool_name.to_string()
-        } else {
-            format!("{}::{}", tool_name, model_name)
-        };
+            UNION ALL
 
-        let ai_additions = ai_add.unwrap_or(0);
-        tools_by_model
-            .entry(tool_model)
-            .or_default()
-            .add_metrics_row(ai_additions, 0, 0, ai_additions, 0);
-    }
+            SELECT
+                CASE
+                    WHEN COALESCE(model, '') = '' THEN COALESCE(tool, 'unknown')
+                    ELSE CONCAT(COALESCE(tool, 'unknown'), '::', model)
+                END AS tool_model,
+                COALESCE(SUM(ai_additions), 0)::bigint AS ai_additions,
+                0::bigint AS mixed_additions,
+                0::bigint AS ai_accepted,
+                COALESCE(SUM(ai_additions), 0)::bigint AS total_ai_additions,
+                0::bigint AS total_ai_deletions,
+                FALSE AS has_report,
+                TRUE AS has_metrics
+            FROM metrics_events
+            WHERE event_type IN (2, 4) AND tool IS NOT NULL AND tool != ''
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY tool, model
+        ),
+        tool_rows AS (
+            SELECT
+                tool_model,
+                SUM(ai_additions)::bigint AS ai_additions,
+                SUM(mixed_additions)::bigint AS mixed_additions,
+                SUM(ai_accepted)::bigint AS ai_accepted,
+                SUM(total_ai_additions)::bigint AS total_ai_additions,
+                SUM(total_ai_deletions)::bigint AS total_ai_deletions,
+                BOOL_OR(has_report) AS has_report,
+                BOOL_OR(has_metrics) AS has_metrics
+            FROM tool_sources
+            GROUP BY tool_model
+        )
+        SELECT
+            tool_model,
+            CASE
+                WHEN has_report AND has_metrics THEN 'report+metrics'
+                WHEN has_report THEN 'report'
+                ELSE 'metrics'
+            END AS source,
+            ai_additions,
+            mixed_additions,
+            ai_accepted,
+            total_ai_additions,
+            total_ai_deletions
+        FROM tool_rows
+        WHERE (
+            $4::bigint IS NULL
+            OR ai_additions < $4::bigint
+            OR (ai_additions = $4::bigint AND tool_model > $5::text)
+        )
+        ORDER BY ai_additions DESC, tool_model ASC
+        LIMIT $6"#
+    );
 
-    let mut tools: Vec<Value> = tools_by_model
-        .into_iter()
-        .map(|(tool_model, stats)| {
-            json!({
-                "tool_model": tool_model,
-                "source": stats.source(),
-                "ai_additions": stats.ai_additions,
-                "mixed_additions": stats.mixed_additions,
-                "ai_accepted": stats.ai_accepted,
-                "total_ai_additions": stats.total_ai_additions,
-                "total_ai_deletions": stats.total_ai_deletions,
+    let rows: Vec<(String, String, i64, i64, i64, i64, i64)> = sqlx::query_as(&sql)
+        .bind(user_filter)
+        .bind(org_filter)
+        .bind(&query.org)
+        .bind(cursor_ai_additions)
+        .bind(cursor_tool_model)
+        .bind(fetch_limit(limit))
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e))?;
+
+    let mut rows = rows;
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(tool_model, _, ai_additions, _, _, _, _)| {
+                encode_cursor(&ToolAggregateCursor {
+                    v: CURSOR_VERSION,
+                    ai_additions: *ai_additions,
+                    tool_model: tool_model.clone(),
+                })
             })
-        })
+            .transpose()?
+    } else {
+        None
+    };
+
+    let tools: Vec<Value> = rows
+        .iter()
+        .map(
+            |(
+                tool_model,
+                source,
+                ai_additions,
+                mixed_additions,
+                ai_accepted,
+                total_ai_additions,
+                total_ai_deletions,
+            )| {
+                json!({
+                    "tool_model": tool_model,
+                    "source": source,
+                    "ai_additions": ai_additions,
+                    "mixed_additions": mixed_additions,
+                    "ai_accepted": ai_accepted,
+                    "total_ai_additions": total_ai_additions,
+                    "total_ai_deletions": total_ai_deletions,
+                })
+            },
+        )
         .collect();
 
-    // Sort by ai_additions descending
-    tools.sort_by(|a, b| {
-        let a_val = a.get("ai_additions").and_then(|v| v.as_i64()).unwrap_or(0);
-        let b_val = b.get("ai_additions").and_then(|v| v.as_i64()).unwrap_or(0);
-        b_val.cmp(&a_val)
-    });
-
-    Ok(Json(json!({ "tools": tools })))
+    Ok(Json(json!({
+        "tools": tools,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 // ================================================================
