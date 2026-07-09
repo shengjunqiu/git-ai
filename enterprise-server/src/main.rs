@@ -79,6 +79,26 @@ async fn main() -> anyhow::Result<()> {
     // Run migrations on startup (auto-migrate)
     db::run_migrations(&db_pool).await?;
 
+    if config.metrics_rollup_worker_enabled {
+        tracing::info!(
+            interval_seconds = config.metrics_rollup_worker_interval_seconds,
+            batch_size = config.metrics_rollup_worker_batch_size,
+            "starting metrics rollup worker"
+        );
+        services::metrics::spawn_metrics_rollup_worker(
+            db_pool.clone(),
+            Duration::from_secs(config.metrics_rollup_worker_interval_seconds),
+            config.metrics_rollup_worker_batch_size,
+        );
+    } else if matches!(
+        config.metrics_rollup_write_mode,
+        config::MetricsRollupWriteMode::DirtyAsync
+    ) {
+        tracing::warn!(
+            "METRICS_ROLLUP_WRITE_MODE=dirty_async is set but METRICS_ROLLUP_WORKER_ENABLED=false"
+        );
+    }
+
     // Build router
     let app = routes::build_router(state);
 

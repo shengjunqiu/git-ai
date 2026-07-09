@@ -426,7 +426,7 @@ chunk 写入分段耗时：
 
 目标：把 daily rollup 从请求同步路径移出，降低 metrics upload 尾延迟，同时保持 dashboard rollup 查询最终一致。
 
-推荐方案：dirty scope + 后台重建。
+推荐方案：dirty scope 追加队列 + 后台重建。
 
 设计思路：
 
@@ -434,9 +434,10 @@ chunk 写入分段耗时：
   - `metrics_events`
   - `metrics_tool_model_events`
 - 请求路径不再同步 upsert `metrics_daily_rollups`。
-- 请求路径只把受影响的 `(day, org_id, user_id)` 标记为 dirty。
-- 后台 worker 批量读取 dirty scope，在事务内按 day/org/user 从明细表重新聚合并覆盖对应 rollup。
+- 请求路径只把受影响的 `(day, org_id, user_id)` 追加写入 dirty queue。
+- 后台 worker 批量读取 dirty queue，在事务内按 day/org/user 去重后从明细表重新聚合并覆盖对应 rollup。
 - 该方案是幂等重建，不会因为 worker 重试导致 rollup 重复累加。
+- 不使用 `(day, org_id, user_id)` 唯一键做请求路径 upsert；本地压测证明该方案会在 worker 持锁重建时让 upload 请求等待唯一键冲突，导致连接池超时。
 
 涉及文件：
 
@@ -472,9 +473,9 @@ METRICS_ROLLUP_WORKER_BATCH_SIZE=100
 
 兼容要求：
 
-- [ ] 如果 `METRICS_ROLLUP_WRITE_MODE` 未设置，继续使用现有 `METRICS_WRITE_ROLLUPS` 的语义。
-- [ ] 初始默认仍为 `sync`，先不改变生产行为。
-- [ ] `.env.example` 和 deploy `.env.example` 写清楚推荐灰度方式。
+- [x] 如果 `METRICS_ROLLUP_WRITE_MODE` 未设置，继续使用现有 `METRICS_WRITE_ROLLUPS` 的语义。
+- [x] 初始默认仍为 `sync`，先不改变生产行为。
+- [x] `.env.example` 和 deploy `.env.example` 写清楚推荐灰度方式。
 
 ### 2.2 新增 dirty scope 表
 
@@ -482,24 +483,26 @@ METRICS_ROLLUP_WORKER_BATCH_SIZE=100
 
 ```sql
 CREATE TABLE IF NOT EXISTS metrics_rollup_dirty_scopes (
+    id BIGSERIAL PRIMARY KEY,
     day DATE NOT NULL,
     org_id UUID NOT NULL,
     user_id UUID NOT NULL,
-    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    claimed_at TIMESTAMPTZ,
-    PRIMARY KEY (day, org_id, user_id)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_metrics_rollup_dirty_claim
-    ON metrics_rollup_dirty_scopes (claimed_at NULLS FIRST, updated_at);
+    ON metrics_rollup_dirty_scopes (claimed_at NULLS FIRST, id);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_rollup_dirty_scope
+    ON metrics_rollup_dirty_scopes (day, org_id, user_id);
 ```
 
 实现步骤：
 
-- [ ] 新增本地和 deploy 迁移。
-- [ ] 注册迁移。
-- [ ] 增加迁移测试，确认表和索引存在。
+- [x] 新增本地和 deploy 迁移。
+- [x] 注册迁移。
+- [x] 增加迁移测试，确认表和索引存在。
 
 测试命令：
 
@@ -513,76 +516,128 @@ cargo run -- --migrate
 
 实现步骤：
 
-- [ ] 在 `insert_metrics_chunk` 中根据配置分支：
+- [x] 在 `insert_metrics_chunk` 中根据配置分支：
   - `sync`: 继续调用 `upsert_metrics_daily_rollups`
   - `dirty_async`: 调用 `mark_metrics_rollup_dirty_scopes`
   - `off`: 不写 rollup，不标记 dirty
-- [ ] `mark_metrics_rollup_dirty_scopes` 从本 chunk 的 rows 提取唯一 `(day, org_id, user_id)`。
-- [ ] 使用 bulk insert：
+- [x] `mark_metrics_rollup_dirty_scopes` 从本 chunk 的 rows 提取唯一 `(day, org_id, user_id)`。
+- [x] 使用 bulk insert 追加 dirty queue：
 
 ```sql
 INSERT INTO metrics_rollup_dirty_scopes (day, org_id, user_id)
 VALUES ...
-ON CONFLICT (day, org_id, user_id)
-DO UPDATE SET updated_at = now(), claimed_at = NULL;
 ```
 
 验收标准：
 
-- [ ] `sync` 模式行为完全保持。
-- [ ] `dirty_async` 模式下 metrics upload 响应成功，dirty 表出现记录。
-- [ ] `off` 模式下不写 rollup、不写 dirty。
+- [x] `sync` 模式行为完全保持。
+- [x] `dirty_async` 模式下 metrics upload 响应成功，dirty 表出现记录。
+- [x] `off` 模式下不写 rollup、不写 dirty。
 
 ### 2.4 实现 rollup rebuild worker
 
 实现步骤：
 
-- [ ] 增加服务函数：
+- [x] 增加服务函数：
 
 ```rust
 pub async fn process_metrics_rollup_dirty_scopes(pool: &PgPool, batch_size: i64) -> Result<u64, AppError>
 ```
 
-- [ ] 使用事务领取 dirty scope：
+- [x] 使用事务领取 dirty scope：
 
 ```sql
-SELECT day, org_id, user_id
+SELECT id, day, org_id, user_id
 FROM metrics_rollup_dirty_scopes
 WHERE claimed_at IS NULL OR claimed_at < now() - interval '5 minutes'
-ORDER BY updated_at
+ORDER BY id
 LIMIT $1
 FOR UPDATE SKIP LOCKED;
 ```
 
-- [ ] 对每个 scope，在同一事务内：
+- [x] 对每个 scope，在同一事务内：
   - 删除 `metrics_daily_rollups` 中对应 day/org/user 的旧 rollup。
   - 从 `metrics_events` 和 `metrics_tool_model_events` 聚合生成新 rollup。
   - 插入新的 `metrics_daily_rollups`。
-  - 删除对应 dirty scope。
-- [ ] 在 `main.rs` 中按配置启动后台 task。
-- [ ] worker 失败只记录 warn，不影响 API 主进程。
+  - 删除已领取的 dirty queue row。
+- [x] 在 `main.rs` 中按配置启动后台 task。
+- [x] worker 失败只记录 warn，不影响 API 主进程。
 
 验收标准：
 
-- [ ] worker 可重复执行，结果不重复累加。
-- [ ] worker 中途失败后 dirty scope 不丢失，可重试。
-- [ ] dashboard rollup 数据与 sync 模式结果一致。
+- [x] worker 可重复执行，结果不重复累加。
+- [x] worker 中途失败后 dirty scope 不丢失，可重试。
+- [x] dashboard rollup 数据与 sync 模式结果一致。
 
 ### 2.5 压测和灰度
 
 压测步骤：
 
-- [ ] `sync` 模式跑 metrics upload。
-- [ ] `dirty_async` 模式跑相同参数。
-- [ ] 压测后等待 worker 追平 dirty scope。
-- [ ] 跑 dashboard benchmark，确认数据可见。
+- [x] `sync` 模式跑 metrics upload。
+- [x] `dirty_async` 模式跑相同参数。
+- [x] 压测后等待 worker 追平 dirty scope。
+- [x] 跑 dashboard benchmark，确认数据可见。
 
 验收标准：
 
-- [ ] metrics upload p95 明显低于 `sync` 模式。
-- [ ] `metrics_rollup_dirty_scopes` 可在压测后归零或保持低水位。
-- [ ] dashboard rollup 查询结果与 sync 模式误差为 0。
-- [ ] health/ready 不受 worker 明显影响。
+- [x] metrics upload p95 明显低于 `sync` 模式。
+- [x] `metrics_rollup_dirty_scopes` 可在压测后归零或保持低水位。
+- [x] dashboard rollup 查询结果与 sync 模式误差为 0。
+- [x] health/ready 不受 worker 明显影响。
+
+### 阶段 2 执行记录
+
+代码改动：
+
+- 新增 `METRICS_ROLLUP_WRITE_MODE=sync|dirty_async|off`，保留 `METRICS_WRITE_ROLLUPS` 作为未设置新变量时的兼容语义。
+- 新增 `METRICS_ROLLUP_WORKER_ENABLED`、`METRICS_ROLLUP_WORKER_INTERVAL_SECONDS`、`METRICS_ROLLUP_WORKER_BATCH_SIZE`。
+- 新增 `metrics_rollup_dirty_scopes` 追加队列表，字段为 `id/day/org_id/user_id/created_at/claimed_at`，并增加领取索引和 scope 查询索引。
+- `dirty_async` 模式下请求事务只写明细表和追加 dirty queue，不再同步 upsert `metrics_daily_rollups`。
+- 后台 worker 按 `FOR UPDATE SKIP LOCKED` 领取 dirty queue，按 scope 去重后重建 daily rollup，并删除已领取 queue rows。
+
+验证命令：
+
+```bash
+cd enterprise-server
+cargo test
+
+ENTERPRISE_API_KEYS=... \
+python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
+  --base-url http://127.0.0.1:43140 \
+  --requests 500 \
+  --batch-size 100 \
+  --concurrency 50 \
+  --start-seed 202607116000
+
+ENTERPRISE_API_KEYS=... \
+python3 scripts/benchmarks/enterprise/bench_dashboard.py \
+  --base-url http://127.0.0.1:43140 \
+  --requests 300 \
+  --concurrency 20 \
+  --days 30
+```
+
+测试结果：
+
+- `cargo test`：117 passed，0 failed。
+- metrics upload `dirty_async`：500 requests，500 success，0 errors，RPS `54.57`，avg `883.82ms`，p50 `800.83ms`，p95 `1728.25ms`，p99 `1818.47ms`。
+- 同步 rollup 基线：500 requests，500 success，0 errors，RPS `27.52`，avg `1748.90ms`，p95 `3589.87ms`，p99 `5074.11ms`。
+- upload p95 从 `3589.87ms` 降至 `1728.25ms`，约降低 `51.9%`；RPS 从 `27.52` 提升至 `54.57`，约提升 `98.3%`。
+- 请求内分段耗时：dirty queue 标记 p95 `17.55ms`，chunk total p95 `711.65ms`；同步 rollup 的 daily rollup upsert p95 为 `2225.92ms`。
+- 压测后 `metrics_rollup_dirty_scopes` 短暂剩余 `194` 行，worker 随后自然追平到 `0`。
+- 压测后 health 正常，响应约 `5ms`；服务日志没有连接池超时或 worker 失败。
+
+设计调整记录：
+
+- 初版唯一键 dirty scope 在 50 并发 upload 下出现连接池超时：500 requests 中 474 success、26 errors，p95 `5567ms`。
+- 将唯一键 upsert 改为 `ON CONFLICT DO NOTHING` 仍会被 worker 的 row lock 和唯一键冲突拖慢：500 requests 中 469 success、31 errors，p95 `8075ms`。
+- 最终采用追加队列，避免请求路径等待 worker 正在处理的 scope 行锁。
+
+残留问题：
+
+- dashboard benchmark 全部成功但仍慢：summary p95 `10657.70ms`，trends p95 约 `4.3s`，tools p95 `372.26ms`。
+- 该慢点发生在 dirty queue 已归零、worker 无 backlog 的情况下，属于 dashboard 聚合查询路径问题，不是阶段 2 的 rollup 异步化请求路径问题。
+- 后续如果继续优化并发体感，优先级应转向 dashboard summary/trends 查询计划和索引，而不是继续压缩 metrics upload 的 rollup 写入。
 
 提交建议：
 

@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+const DEFAULT_METRICS_ROLLUP_WORKER_INTERVAL_SECONDS: u64 = 5;
+const DEFAULT_METRICS_ROLLUP_WORKER_BATCH_SIZE: i64 = 100;
 const DEFAULT_RATE_LIMIT_METRICS_MAX_REQUESTS: u32 = 60;
 const DEFAULT_RATE_LIMIT_METRICS_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_RATE_LIMIT_CAS_UPLOAD_MAX_REQUESTS: u32 = 30;
@@ -16,6 +18,24 @@ const DEFAULT_RATE_LIMIT_DEFAULT_MAX_REQUESTS: u32 = 300;
 const DEFAULT_RATE_LIMIT_DEFAULT_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_AUTH_PASSWORD_CONCURRENCY: usize = 8;
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricsRollupWriteMode {
+    Sync,
+    DirtyAsync,
+    Off,
+}
+
+impl MetricsRollupWriteMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sync => "sync",
+            Self::DirtyAsync => "dirty_async",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub database_url: String,
@@ -31,7 +51,10 @@ pub struct AppConfig {
     pub s3_region: String,
     pub cas_upload_concurrency: usize,
     pub auth_password_concurrency: usize,
-    pub metrics_write_rollups: bool,
+    pub metrics_rollup_write_mode: MetricsRollupWriteMode,
+    pub metrics_rollup_worker_enabled: bool,
+    pub metrics_rollup_worker_interval_seconds: u64,
+    pub metrics_rollup_worker_batch_size: i64,
     pub dashboard_use_rollups: bool,
     // Rate limiting
     pub rate_limit_metrics_max_requests: u32,
@@ -71,6 +94,10 @@ pub struct EnvConfig {
     pub cas_upload_concurrency: Option<usize>,
     pub auth_password_concurrency: Option<usize>,
     pub metrics_write_rollups: Option<bool>,
+    pub metrics_rollup_write_mode: Option<MetricsRollupWriteMode>,
+    pub metrics_rollup_worker_enabled: Option<bool>,
+    pub metrics_rollup_worker_interval_seconds: Option<u64>,
+    pub metrics_rollup_worker_batch_size: Option<i64>,
     pub dashboard_use_rollups: Option<bool>,
     pub rate_limit_metrics_max_requests: Option<u32>,
     pub rate_limit_metrics_window_seconds: Option<u64>,
@@ -102,6 +129,15 @@ impl AppConfig {
     }
 
     fn from_env_config(env: EnvConfig) -> Self {
+        let legacy_metrics_write_rollups = env.metrics_write_rollups.unwrap_or(true);
+        let metrics_rollup_write_mode =
+            env.metrics_rollup_write_mode
+                .unwrap_or(if legacy_metrics_write_rollups {
+                    MetricsRollupWriteMode::Sync
+                } else {
+                    MetricsRollupWriteMode::Off
+                });
+
         Self {
             database_url: env.database_url,
             database_max_connections: env.database_max_connections.unwrap_or(20),
@@ -121,7 +157,16 @@ impl AppConfig {
                 .auth_password_concurrency
                 .unwrap_or(DEFAULT_AUTH_PASSWORD_CONCURRENCY)
                 .max(1),
-            metrics_write_rollups: env.metrics_write_rollups.unwrap_or(true),
+            metrics_rollup_write_mode,
+            metrics_rollup_worker_enabled: env.metrics_rollup_worker_enabled.unwrap_or(false),
+            metrics_rollup_worker_interval_seconds: window_seconds(
+                env.metrics_rollup_worker_interval_seconds,
+                DEFAULT_METRICS_ROLLUP_WORKER_INTERVAL_SECONDS,
+            ),
+            metrics_rollup_worker_batch_size: env
+                .metrics_rollup_worker_batch_size
+                .unwrap_or(DEFAULT_METRICS_ROLLUP_WORKER_BATCH_SIZE)
+                .max(1),
             dashboard_use_rollups: env.dashboard_use_rollups.unwrap_or(false),
             rate_limit_metrics_max_requests: max_requests(
                 env.rate_limit_metrics_max_requests,
@@ -214,6 +259,13 @@ mod tests {
         assert_eq!(config.rate_limit_default_max_requests, 300);
         assert_eq!(config.rate_limit_default_window_seconds, 60);
         assert_eq!(config.auth_password_concurrency, 8);
+        assert_eq!(
+            config.metrics_rollup_write_mode,
+            MetricsRollupWriteMode::Sync
+        );
+        assert!(!config.metrics_rollup_worker_enabled);
+        assert_eq!(config.metrics_rollup_worker_interval_seconds, 5);
+        assert_eq!(config.metrics_rollup_worker_batch_size, 100);
     }
 
     #[test]
@@ -235,6 +287,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_metrics_write_rollups_controls_default_rollup_mode() {
+        let mut env = minimal_env_config();
+        env.metrics_write_rollups = Some(false);
+
+        let config = AppConfig::from_env_config(env);
+
+        assert_eq!(
+            config.metrics_rollup_write_mode,
+            MetricsRollupWriteMode::Off
+        );
+    }
+
+    #[test]
+    fn metrics_rollup_write_mode_overrides_legacy_rollup_bool() {
+        let mut env = minimal_env_config();
+        env.metrics_write_rollups = Some(false);
+        env.metrics_rollup_write_mode = Some(MetricsRollupWriteMode::DirtyAsync);
+
+        let config = AppConfig::from_env_config(env);
+
+        assert_eq!(
+            config.metrics_rollup_write_mode,
+            MetricsRollupWriteMode::DirtyAsync
+        );
+    }
+
+    #[test]
     fn config_reads_rate_limit_environment_variables() -> anyhow::Result<()> {
         let env: EnvConfig = envy::from_iter(
             [
@@ -250,6 +329,10 @@ mod tests {
                 ("RATE_LIMIT_METRICS_MAX_REQUESTS", "48"),
                 ("RATE_LIMIT_METRICS_WINDOW_SECONDS", "75"),
                 ("AUTH_PASSWORD_CONCURRENCY", "4"),
+                ("METRICS_ROLLUP_WRITE_MODE", "dirty_async"),
+                ("METRICS_ROLLUP_WORKER_ENABLED", "true"),
+                ("METRICS_ROLLUP_WORKER_INTERVAL_SECONDS", "9"),
+                ("METRICS_ROLLUP_WORKER_BATCH_SIZE", "42"),
             ]
             .into_iter()
             .map(|(key, value)| (key.to_string(), value.to_string())),
@@ -266,6 +349,13 @@ mod tests {
         assert_eq!(config.rate_limit_metrics_max_requests, 48);
         assert_eq!(config.rate_limit_metrics_window_seconds, 75);
         assert_eq!(config.auth_password_concurrency, 4);
+        assert_eq!(
+            config.metrics_rollup_write_mode,
+            MetricsRollupWriteMode::DirtyAsync
+        );
+        assert!(config.metrics_rollup_worker_enabled);
+        assert_eq!(config.metrics_rollup_worker_interval_seconds, 9);
+        assert_eq!(config.metrics_rollup_worker_batch_size, 42);
         Ok(())
     }
 
@@ -285,6 +375,10 @@ mod tests {
             cas_upload_concurrency: None,
             auth_password_concurrency: None,
             metrics_write_rollups: None,
+            metrics_rollup_write_mode: None,
+            metrics_rollup_worker_enabled: None,
+            metrics_rollup_worker_interval_seconds: None,
+            metrics_rollup_worker_batch_size: None,
             dashboard_use_rollups: None,
             rate_limit_metrics_max_requests: None,
             rate_limit_metrics_window_seconds: None,

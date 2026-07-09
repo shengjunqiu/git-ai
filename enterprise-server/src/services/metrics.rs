@@ -1,9 +1,13 @@
 //! Metrics service - handles decoding, storing, and querying metrics events
 
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
+use crate::config::MetricsRollupWriteMode;
 use crate::error::AppError;
 use crate::models::metrics::{
     DecodedMetricEvent, MetricEvent, MetricUploadError, MetricsUploadResponse,
@@ -19,7 +23,7 @@ pub async fn process_metrics_batch(
     user_id: Option<Uuid>,
     org_id: Option<Uuid>,
     distinct_id: Option<String>,
-    write_rollups: bool,
+    rollup_write_mode: MetricsRollupWriteMode,
 ) -> MetricsUploadResponse {
     let decode_started = Instant::now();
     let mut errors = Vec::new();
@@ -56,7 +60,7 @@ pub async fn process_metrics_batch(
     let mut failed_chunks = 0usize;
 
     for chunk in rows.chunks(METRICS_INSERT_CHUNK_SIZE) {
-        if let Err(e) = insert_metrics_chunk(pool, chunk, write_rollups).await {
+        if let Err(e) = insert_metrics_chunk(pool, chunk, rollup_write_mode).await {
             failed_chunks += 1;
             tracing::warn!(
                 "Failed to bulk insert metrics chunk with {} events: {}",
@@ -79,7 +83,7 @@ pub async fn process_metrics_batch(
         errors = errors.len(),
         inserted_chunks,
         failed_chunks,
-        write_rollups,
+        rollup_write_mode = rollup_write_mode.as_str(),
         decode_prepare_ms,
         storage_ms,
         "metrics batch processing timing"
@@ -244,10 +248,17 @@ struct PreparedDailyRollup {
     ai_accepted: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RollupDirtyScope {
+    day: chrono::NaiveDate,
+    org_id: Uuid,
+    user_id: Uuid,
+}
+
 async fn insert_metrics_chunk(
     pool: &PgPool,
     rows: &[PreparedMetricRow],
-    write_rollups: bool,
+    rollup_write_mode: MetricsRollupWriteMode,
 ) -> Result<(), AppError> {
     if rows.is_empty() {
         return Ok(());
@@ -267,12 +278,23 @@ async fn insert_metrics_chunk(
         insert_metrics_tool_model_events_chunk(&mut tx, rows, &metric_event_ids).await?;
     let tool_model_insert_ms = tool_events_started.elapsed().as_secs_f64() * 1000.0;
 
-    let (daily_rollup_rows, daily_rollup_upsert_ms) = if write_rollups {
-        let rollups_started = Instant::now();
-        let row_count = upsert_metrics_daily_rollups(&mut tx, rows).await?;
-        (row_count, rollups_started.elapsed().as_secs_f64() * 1000.0)
+    let rollups_started = Instant::now();
+    let (daily_rollup_rows, dirty_scope_rows) = match rollup_write_mode {
+        MetricsRollupWriteMode::Sync => (upsert_metrics_daily_rollups(&mut tx, rows).await?, 0),
+        MetricsRollupWriteMode::DirtyAsync => {
+            (0, mark_metrics_rollup_dirty_scopes(&mut tx, rows).await?)
+        }
+        MetricsRollupWriteMode::Off => (0, 0),
+    };
+    let daily_rollup_upsert_ms = if matches!(rollup_write_mode, MetricsRollupWriteMode::Sync) {
+        rollups_started.elapsed().as_secs_f64() * 1000.0
     } else {
-        (0, 0.0)
+        0.0
+    };
+    let dirty_scope_mark_ms = if matches!(rollup_write_mode, MetricsRollupWriteMode::DirtyAsync) {
+        rollups_started.elapsed().as_secs_f64() * 1000.0
+    } else {
+        0.0
     };
 
     let commit_started = Instant::now();
@@ -284,11 +306,14 @@ async fn insert_metrics_chunk(
         rows = rows.len(),
         tool_model_rows,
         daily_rollup_rows,
-        write_rollups,
+        dirty_scope_rows,
+        write_rollups = matches!(rollup_write_mode, MetricsRollupWriteMode::Sync),
+        rollup_write_mode = rollup_write_mode.as_str(),
         tx_begin_ms,
         events_insert_ms,
         tool_model_insert_ms,
         daily_rollup_upsert_ms,
+        dirty_scope_mark_ms,
         tx_commit_ms,
         total_ms,
         "metrics chunk write timing"
@@ -629,6 +654,231 @@ async fn upsert_metrics_daily_rollups(
     Ok(rollup_count)
 }
 
+fn prepare_rollup_dirty_scopes(rows: &[PreparedMetricRow]) -> Vec<RollupDirtyScope> {
+    let mut scopes = HashSet::new();
+
+    for row in rows {
+        if row.event_type != 1 {
+            continue;
+        }
+
+        scopes.insert(RollupDirtyScope {
+            day: metric_day(row.timestamp),
+            org_id: row.org_id.unwrap_or_else(Uuid::nil),
+            user_id: row.user_id.unwrap_or_else(Uuid::nil),
+        });
+    }
+
+    let mut scopes: Vec<_> = scopes.into_iter().collect();
+    scopes.sort_by(|left, right| {
+        left.day
+            .cmp(&right.day)
+            .then_with(|| left.org_id.cmp(&right.org_id))
+            .then_with(|| left.user_id.cmp(&right.user_id))
+    });
+    scopes
+}
+
+async fn mark_metrics_rollup_dirty_scopes(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &[PreparedMetricRow],
+) -> Result<usize, AppError> {
+    let scopes = prepare_rollup_dirty_scopes(rows);
+    if scopes.is_empty() {
+        return Ok(0);
+    }
+    let scope_count = scopes.len();
+
+    let mut builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("INSERT INTO metrics_rollup_dirty_scopes (day, org_id, user_id) ");
+
+    builder.push_values(&scopes, |mut row_builder, scope| {
+        row_builder
+            .push_bind(scope.day)
+            .push_bind(scope.org_id)
+            .push_bind(scope.user_id);
+    });
+
+    builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(scope_count)
+}
+
+pub fn spawn_metrics_rollup_worker(
+    pool: PgPool,
+    interval: Duration,
+    batch_size: i64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+
+        loop {
+            ticker.tick().await;
+
+            match process_metrics_rollup_dirty_scopes(&pool, batch_size).await {
+                Ok(processed) if processed > 0 => {
+                    tracing::info!(
+                        processed_scopes = processed,
+                        "processed metrics rollup dirty scopes"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to process metrics rollup dirty scopes");
+                }
+            }
+        }
+    })
+}
+
+pub async fn process_metrics_rollup_dirty_scopes(
+    pool: &PgPool,
+    batch_size: i64,
+) -> Result<u64, AppError> {
+    let mut tx = pool.begin().await.map_err(AppError::Database)?;
+    let batch_size = batch_size.max(1);
+
+    let dirty_rows: Vec<(i64, chrono::NaiveDate, Uuid, Uuid)> = sqlx::query_as(
+        r#"SELECT id, day, org_id, user_id
+           FROM metrics_rollup_dirty_scopes
+           WHERE claimed_at IS NULL OR claimed_at < now() - interval '5 minutes'
+           ORDER BY id
+           LIMIT $1
+           FOR UPDATE SKIP LOCKED"#,
+    )
+    .bind(batch_size)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    if dirty_rows.is_empty() {
+        tx.commit().await.map_err(AppError::Database)?;
+        return Ok(0);
+    }
+
+    let dirty_row_ids: Vec<i64> = dirty_rows.iter().map(|row| row.0).collect();
+    let mut scope_set = HashSet::new();
+    for (_, day, org_id, user_id) in &dirty_rows {
+        scope_set.insert(RollupDirtyScope {
+            day: *day,
+            org_id: *org_id,
+            user_id: *user_id,
+        });
+    }
+
+    let mut scopes: Vec<_> = scope_set.into_iter().collect();
+    scopes.sort_by(|left, right| {
+        left.day
+            .cmp(&right.day)
+            .then_with(|| left.org_id.cmp(&right.org_id))
+            .then_with(|| left.user_id.cmp(&right.user_id))
+    });
+
+    for scope in &scopes {
+        rebuild_metrics_daily_rollups_for_scope(&mut tx, scope.day, scope.org_id, scope.user_id)
+            .await?;
+    }
+
+    sqlx::query("DELETE FROM metrics_rollup_dirty_scopes WHERE id = ANY($1)")
+        .bind(&dirty_row_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    let processed = scopes.len() as u64;
+    tx.commit().await.map_err(AppError::Database)?;
+    Ok(processed)
+}
+
+async fn rebuild_metrics_daily_rollups_for_scope(
+    tx: &mut Transaction<'_, Postgres>,
+    day: chrono::NaiveDate,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"DELETE FROM metrics_daily_rollups
+           WHERE day = $1 AND org_id = $2 AND user_id = $3"#,
+    )
+    .bind(day)
+    .bind(org_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    sqlx::query(
+        r#"INSERT INTO metrics_daily_rollups (
+               day, org_id, user_id, repo_url, tool_model,
+               commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
+           )
+           SELECT
+               $1::date AS day,
+               $2::uuid AS org_id,
+               $3::uuid AS user_id,
+               COALESCE(repo_url, '') AS repo_url,
+               '' AS tool_model,
+               COUNT(*)::bigint AS commits,
+               COALESCE(SUM(git_diff_added_lines), 0)::bigint AS total_lines,
+               COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines,
+               COALESCE(SUM(GREATEST(COALESCE(git_diff_added_lines, 0) - COALESCE(ai_additions, 0), 0)), 0)::bigint AS human_lines,
+               COALESCE(SUM(mixed_additions), 0)::bigint AS mixed_lines,
+               COALESCE(SUM(ai_accepted), 0)::bigint AS ai_accepted
+           FROM metrics_events
+           WHERE event_type = 1
+             AND (to_timestamp(timestamp) AT TIME ZONE 'UTC')::date = $1
+             AND COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid) = $2
+             AND COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid) = $3
+           GROUP BY COALESCE(repo_url, '')"#,
+    )
+    .bind(day)
+    .bind(org_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    sqlx::query(
+        r#"INSERT INTO metrics_daily_rollups (
+               day, org_id, user_id, repo_url, tool_model,
+               commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
+           )
+           SELECT
+               $1::date AS day,
+               $2::uuid AS org_id,
+               $3::uuid AS user_id,
+               COALESCE(m.repo_url, '') AS repo_url,
+               t.tool_model,
+               COUNT(DISTINCT m.id)::bigint AS commits,
+               0::bigint AS total_lines,
+               COALESCE(SUM(t.ai_additions), 0)::bigint AS ai_lines,
+               0::bigint AS human_lines,
+               COALESCE(SUM(t.mixed_additions), 0)::bigint AS mixed_lines,
+               COALESCE(SUM(t.ai_accepted), 0)::bigint AS ai_accepted
+           FROM metrics_events m
+           JOIN metrics_tool_model_events t ON t.metric_event_id = m.id
+           WHERE m.event_type = 1
+             AND (to_timestamp(m.timestamp) AT TIME ZONE 'UTC')::date = $1
+             AND COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid) = $2
+             AND COALESCE(m.user_id, '00000000-0000-0000-0000-000000000000'::uuid) = $3
+             AND t.tool_model != 'all'
+             AND t.tool_model != ''
+           GROUP BY COALESCE(m.repo_url, ''), t.tool_model"#,
+    )
+    .bind(day)
+    .bind(org_id)
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(())
+}
+
 fn aggregate_rollup(values: Option<&[i32]>, tool_model_pairs: Option<&[String]>) -> i32 {
     let Some(values) = values else {
         return 0;
@@ -765,7 +1015,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
@@ -795,7 +1045,7 @@ mod tests {
             Some(user_id),
             None,
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
@@ -834,7 +1084,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
@@ -899,7 +1149,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
-            false,
+            MetricsRollupWriteMode::Off,
         )
         .await;
 
@@ -907,6 +1157,94 @@ mod tests {
         assert_eq!(metrics_count(&db.pool).await?, 1);
         assert_eq!(rollups_count(&db.pool).await?, 0);
         assert_eq!(tool_model_events_count(&db.pool).await?, 1);
+        assert_eq!(rollup_dirty_scopes_count(&db.pool).await?, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_batch_marks_dirty_scope_for_async_rollups() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event()],
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+            MetricsRollupWriteMode::DirtyAsync,
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        assert_eq!(metrics_count(&db.pool).await?, 1);
+        assert_eq!(rollups_count(&db.pool).await?, 0);
+        assert_eq!(tool_model_events_count(&db.pool).await?, 1);
+        assert_eq!(rollup_dirty_scopes_count(&db.pool).await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_rollup_dirty_scopes_rebuilds_daily_rollups() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+        let events: Vec<MetricEvent> = (0..10).map(committed_metric_event_with_seed).collect();
+
+        let response = process_metrics_batch(
+            &db.pool,
+            events,
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+            MetricsRollupWriteMode::DirtyAsync,
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        assert_eq!(rollups_count(&db.pool).await?, 0);
+        assert_eq!(rollup_dirty_scopes_count(&db.pool).await?, 1);
+
+        assert_eq!(process_metrics_rollup_dirty_scopes(&db.pool, 100).await?, 1);
+        assert_eq!(rollup_dirty_scopes_count(&db.pool).await?, 0);
+        assert_eq!(
+            summary_rollup_totals(&db.pool, org_id, user_id).await?,
+            (10, 300, 200, 100)
+        );
+        assert_eq!(
+            tool_rollup_ai_lines(&db.pool, org_id, user_id, "codex::gpt-5").await?,
+            50
+        );
+
+        assert_eq!(process_metrics_rollup_dirty_scopes(&db.pool, 100).await?, 0);
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event_with_seed(10)],
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+            MetricsRollupWriteMode::DirtyAsync,
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        assert_eq!(process_metrics_rollup_dirty_scopes(&db.pool, 100).await?, 1);
+        assert_eq!(
+            summary_rollup_totals(&db.pool, org_id, user_id).await?,
+            (11, 330, 220, 110)
+        );
+        assert_eq!(
+            tool_rollup_ai_lines(&db.pool, org_id, user_id, "codex::gpt-5").await?,
+            55
+        );
 
         db.cleanup().await?;
         Ok(())
@@ -928,7 +1266,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
@@ -956,7 +1294,7 @@ mod tests {
             Some(user_id),
             Some(org_id),
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
@@ -985,19 +1323,17 @@ mod tests {
             None,
             Some(missing_org_id),
             Some("metrics-test-device".into()),
-            true,
+            MetricsRollupWriteMode::Sync,
         )
         .await;
 
         assert_eq!(response.errors.len(), 2);
         assert_eq!(response.errors[0].index, 0);
         assert_eq!(response.errors[1].index, 1);
-        assert!(
-            response
-                .errors
-                .iter()
-                .all(|error| error.error.starts_with("Storage error:"))
-        );
+        assert!(response
+            .errors
+            .iter()
+            .all(|error| error.error.starts_with("Storage error:")));
         assert_eq!(metrics_count(&db.pool).await?, 0);
 
         db.cleanup().await?;
@@ -1141,6 +1477,51 @@ mod tests {
                 .fetch_one(pool)
                 .await?,
         )
+    }
+
+    async fn rollup_dirty_scopes_count(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM metrics_rollup_dirty_scopes")
+                .fetch_one(pool)
+                .await?,
+        )
+    }
+
+    async fn summary_rollup_totals(
+        pool: &PgPool,
+        org_id: Uuid,
+        user_id: Uuid,
+    ) -> anyhow::Result<(i64, i64, i64, i64)> {
+        Ok(sqlx::query_as(
+            "SELECT COALESCE(SUM(commits), 0)::bigint,
+                    COALESCE(SUM(total_lines), 0)::bigint,
+                    COALESCE(SUM(ai_lines), 0)::bigint,
+                    COALESCE(SUM(human_lines), 0)::bigint
+             FROM metrics_daily_rollups
+             WHERE org_id = $1 AND user_id = $2 AND tool_model = ''",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?)
+    }
+
+    async fn tool_rollup_ai_lines(
+        pool: &PgPool,
+        org_id: Uuid,
+        user_id: Uuid,
+        tool_model: &str,
+    ) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT COALESCE(SUM(ai_lines), 0)::bigint
+             FROM metrics_daily_rollups
+             WHERE org_id = $1 AND user_id = $2 AND tool_model = $3",
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .bind(tool_model)
+        .fetch_one(pool)
+        .await?)
     }
 
     async fn tool_model_events_count(pool: &PgPool) -> anyhow::Result<i64> {

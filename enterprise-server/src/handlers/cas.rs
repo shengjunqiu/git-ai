@@ -204,8 +204,8 @@ mod tests {
     use crate::models::cas::CasObject;
     use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
     use object_store::local::LocalFileSystem;
-    use sqlx::PgPool;
     use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
     use std::collections::HashMap;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -413,8 +413,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn upload_cas_concurrent_same_hash_different_content_rejects_mismatch()
-    -> anyhow::Result<()> {
+    async fn upload_cas_concurrent_same_hash_different_content_rejects_mismatch(
+    ) -> anyhow::Result<()> {
         let object_store_dir = tempfile::tempdir()?;
         let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
             return Ok(());
@@ -479,8 +479,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn process_cas_uploads_with_concurrency_one_preserves_serial_result_order()
-    -> anyhow::Result<()> {
+    async fn process_cas_uploads_with_concurrency_one_preserves_serial_result_order(
+    ) -> anyhow::Result<()> {
         let object_store_dir = tempfile::tempdir()?;
         let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
             return Ok(());
@@ -714,7 +714,10 @@ mod tests {
             s3_region: "us-east-1".to_string(),
             cas_upload_concurrency: 8,
             auth_password_concurrency: 8,
-            metrics_write_rollups: true,
+            metrics_rollup_write_mode: crate::config::MetricsRollupWriteMode::Sync,
+            metrics_rollup_worker_enabled: false,
+            metrics_rollup_worker_interval_seconds: 5,
+            metrics_rollup_worker_batch_size: 100,
             dashboard_use_rollups: false,
             rate_limit_metrics_max_requests: 60,
             rate_limit_metrics_window_seconds: 60,

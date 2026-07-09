@@ -76,6 +76,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "018_users_lower_email_index",
         include_str!("../../migrations/018_users_lower_email_index.sql"),
     ),
+    (
+        "019_metrics_rollup_dirty_scopes",
+        include_str!("../../migrations/019_metrics_rollup_dirty_scopes.sql"),
+    ),
 ];
 
 /// Run all database migrations
@@ -222,6 +226,55 @@ mod tests {
         .fetch_one(&test_pool)
         .await?;
         assert!(lower_email_index_exists);
+
+        let dirty_scopes_table_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = 'metrics_rollup_dirty_scopes'
+            )",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(dirty_scopes_table_exists);
+
+        let dirty_claim_index_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'idx_metrics_rollup_dirty_claim'
+            )",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(dirty_claim_index_exists);
+
+        let dirty_scope_id_column_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'metrics_rollup_dirty_scopes'
+                  AND column_name = 'id'
+            )",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(dirty_scope_id_column_exists);
+
+        let dirty_scope_index_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'idx_metrics_rollup_dirty_scope'
+            )",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(dirty_scope_index_exists);
 
         test_pool.close().await;
         drop_database(&admin_pool, &db_name).await?;
