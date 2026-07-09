@@ -1,0 +1,35 @@
+enterprise-server/src/services/passwords.rs
+  a73676cfded0c055 4,46,49-56,61,65-87,91-130,168,173,185
+enterprise-server/src/handlers/auth_api.rs
+  a73676cfded0c055 152,261
+enterprise-server/deploy/README.md
+  a73676cfded0c055 220-247
+docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
+  a73676cfded0c055 770,774-775,779-780,788,804,808,812-858
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "3658ed7c24642f8689e6ef5a9fa8d914540220a4",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 190,
+      "total_deletions": 27,
+      "accepted_lines": 22803,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/c4f454f77adebb0e9c64713a83c92f87bfb8d003541cc77fabd5622cfb7642d2"
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
