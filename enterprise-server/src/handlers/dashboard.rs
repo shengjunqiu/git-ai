@@ -954,7 +954,9 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     const total = t.total_ai_additions || ai;
                     const source = t.source === 'report'
                         ? '<span class="badge human" style="margin-left:0.5rem">报告</span>'
-                        : '<span class="badge ai" style="margin-left:0.5rem">指标</span>';
+                        : t.source === 'report+metrics'
+                            ? '<span class="badge human" style="margin-left:0.5rem">报告+指标</span>'
+                            : '<span class="badge ai" style="margin-left:0.5rem">指标</span>';
                     return `<tr>
                         <td><strong>${{t.tool_model}}</strong>${{source}}</td>
                         <td>${{fmt(ai)}}</td>
@@ -1659,6 +1661,80 @@ type ToolMetricRow = (
     Option<i64>,
     Option<i64>,
 );
+
+#[derive(Debug, Default)]
+struct ToolAggregate {
+    has_report: bool,
+    has_metrics: bool,
+    ai_additions: i64,
+    mixed_additions: i64,
+    ai_accepted: i64,
+    total_ai_additions: i64,
+    total_ai_deletions: i64,
+    commits: i64,
+}
+
+impl ToolAggregate {
+    fn add_report_row(
+        &mut self,
+        ai_additions: i64,
+        mixed_additions: i64,
+        ai_accepted: i64,
+        total_ai_additions: i64,
+        total_ai_deletions: i64,
+    ) {
+        self.has_report = true;
+        self.add_values(
+            ai_additions,
+            mixed_additions,
+            ai_accepted,
+            total_ai_additions,
+            total_ai_deletions,
+        );
+    }
+
+    fn add_metrics_row(
+        &mut self,
+        ai_additions: i64,
+        mixed_additions: i64,
+        ai_accepted: i64,
+        total_ai_additions: i64,
+        total_ai_deletions: i64,
+    ) {
+        self.has_metrics = true;
+        self.add_values(
+            ai_additions,
+            mixed_additions,
+            ai_accepted,
+            total_ai_additions,
+            total_ai_deletions,
+        );
+    }
+
+    fn add_values(
+        &mut self,
+        ai_additions: i64,
+        mixed_additions: i64,
+        ai_accepted: i64,
+        total_ai_additions: i64,
+        total_ai_deletions: i64,
+    ) {
+        self.ai_additions += ai_additions;
+        self.mixed_additions += mixed_additions;
+        self.ai_accepted += ai_accepted;
+        self.total_ai_additions += total_ai_additions.max(ai_additions);
+        self.total_ai_deletions += total_ai_deletions;
+    }
+
+    fn source(&self) -> &'static str {
+        match (self.has_report, self.has_metrics) {
+            (true, true) => "report+metrics",
+            (true, false) => "report",
+            (false, true) => "metrics",
+            (false, false) => "metrics",
+        }
+    }
+}
 type AgentMetricRow = (
     String,
     Option<i64>,
@@ -2765,32 +2841,35 @@ pub async fn aggregate_tools(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let mut tools: Vec<Value> = Vec::new();
+    let mut tools_by_model: std::collections::BTreeMap<String, ToolAggregate> =
+        std::collections::BTreeMap::new();
 
     // Add report-based tool stats
     for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &report_rows {
-        tools.push(json!({
-            "tool_model": tool_model,
-            "source": "report",
-            "ai_additions": ai_add.unwrap_or(0),
-            "mixed_additions": mixed_add.unwrap_or(0),
-            "ai_accepted": ai_accept.unwrap_or(0),
-            "total_ai_additions": total_ai_add.unwrap_or(0),
-            "total_ai_deletions": total_ai_del.unwrap_or(0),
-        }));
+        tools_by_model
+            .entry(tool_model.clone())
+            .or_default()
+            .add_report_row(
+                ai_add.unwrap_or(0),
+                mixed_add.unwrap_or(0),
+                ai_accept.unwrap_or(0),
+                total_ai_add.unwrap_or(0),
+                total_ai_del.unwrap_or(0),
+            );
     }
 
     // Add metrics-based committed-event stats.
     for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &metrics_rows {
-        tools.push(json!({
-            "tool_model": tool_model,
-            "source": "metrics",
-            "ai_additions": ai_add.unwrap_or(0),
-            "mixed_additions": mixed_add.unwrap_or(0),
-            "ai_accepted": ai_accept.unwrap_or(0),
-            "total_ai_additions": total_ai_add.unwrap_or(0),
-            "total_ai_deletions": total_ai_del.unwrap_or(0),
-        }));
+        tools_by_model
+            .entry(tool_model.clone())
+            .or_default()
+            .add_metrics_row(
+                ai_add.unwrap_or(0),
+                mixed_add.unwrap_or(0),
+                ai_accept.unwrap_or(0),
+                total_ai_add.unwrap_or(0),
+                total_ai_del.unwrap_or(0),
+            );
     }
 
     // Also add Checkpoint/AgentUsage events which have tool/model directly.
@@ -2803,16 +2882,27 @@ pub async fn aggregate_tools(
             format!("{}::{}", tool_name, model_name)
         };
 
-        tools.push(json!({
-            "tool_model": tool_model,
-            "source": "metrics",
-            "ai_additions": ai_add.unwrap_or(0),
-            "mixed_additions": 0,
-            "ai_accepted": 0,
-            "total_ai_additions": 0,
-            "total_ai_deletions": 0,
-        }));
+        let ai_additions = ai_add.unwrap_or(0);
+        tools_by_model
+            .entry(tool_model)
+            .or_default()
+            .add_metrics_row(ai_additions, 0, 0, ai_additions, 0);
     }
+
+    let mut tools: Vec<Value> = tools_by_model
+        .into_iter()
+        .map(|(tool_model, stats)| {
+            json!({
+                "tool_model": tool_model,
+                "source": stats.source(),
+                "ai_additions": stats.ai_additions,
+                "mixed_additions": stats.mixed_additions,
+                "ai_accepted": stats.ai_accepted,
+                "total_ai_additions": stats.total_ai_additions,
+                "total_ai_deletions": stats.total_ai_deletions,
+            })
+        })
+        .collect();
 
     // Sort by ai_additions descending
     tools.sort_by(|a, b| {
@@ -2976,61 +3066,60 @@ pub async fn aggregate_agent_comparison(
     )
     .await?;
 
-    let mut comparisons: Vec<Value> = Vec::new();
+    let mut comparisons_by_model: std::collections::BTreeMap<String, ToolAggregate> =
+        std::collections::BTreeMap::new();
 
     // Report-based
     for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del) in &report_rows {
-        let ai_add = ai_add.unwrap_or(0);
-        let ai_accept = ai_accept.unwrap_or(0);
-        let total_ai_add = total_ai_add.unwrap_or(0);
-        let acceptance_rate = if ai_add > 0 {
-            (ai_accept as f64 / ai_add as f64) * 100.0
-        } else {
-            0.0
-        };
-        let net_ai = total_ai_add - total_ai_del.unwrap_or(0);
-
-        comparisons.push(json!({
-            "tool_model": tool_model,
-            "source": "report",
-            "ai_additions": ai_add,
-            "mixed_additions": mixed_add.unwrap_or(0),
-            "ai_accepted": ai_accept,
-            "total_ai_additions": total_ai_add,
-            "total_ai_deletions": total_ai_del.unwrap_or(0),
-            "net_ai_lines": net_ai,
-            "acceptance_rate": (acceptance_rate * 100.0).round() / 100.0,
-        }));
+        comparisons_by_model
+            .entry(tool_model.clone())
+            .or_default()
+            .add_report_row(
+                ai_add.unwrap_or(0),
+                mixed_add.unwrap_or(0),
+                ai_accept.unwrap_or(0),
+                total_ai_add.unwrap_or(0),
+                total_ai_del.unwrap_or(0),
+            );
     }
 
     // Metrics-based (supplementary)
     for (tool_model, ai_add, mixed_add, ai_accept, total_ai_add, total_ai_del, commits) in
         &metrics_rows
     {
-        let ai_add = ai_add.unwrap_or(0);
-        let ai_accept = ai_accept.unwrap_or(0);
-        let total_ai_add = total_ai_add.unwrap_or(0);
-        let total_ai_del = total_ai_del.unwrap_or(0);
-        let acceptance_rate = if ai_add > 0 {
-            (ai_accept as f64 / ai_add as f64) * 100.0
-        } else {
-            0.0
-        };
-        let net_ai = total_ai_add - total_ai_del;
-
-        comparisons.push(json!({
-            "tool_model": tool_model,
-            "source": "metrics",
-            "ai_additions": ai_add,
-            "mixed_additions": mixed_add.unwrap_or(0),
-            "ai_accepted": ai_accept,
-            "total_ai_additions": total_ai_add,
-            "total_ai_deletions": total_ai_del,
-            "net_ai_lines": net_ai,
-            "commits": commits.unwrap_or(0),
-            "acceptance_rate": (acceptance_rate * 100.0).round() / 100.0,
-        }));
+        let aggregate = comparisons_by_model.entry(tool_model.clone()).or_default();
+        aggregate.add_metrics_row(
+            ai_add.unwrap_or(0),
+            mixed_add.unwrap_or(0),
+            ai_accept.unwrap_or(0),
+            total_ai_add.unwrap_or(0),
+            total_ai_del.unwrap_or(0),
+        );
+        aggregate.commits += commits.unwrap_or(0);
     }
+
+    let mut comparisons: Vec<Value> = comparisons_by_model
+        .into_iter()
+        .map(|(tool_model, stats)| {
+            let acceptance_rate = if stats.ai_additions > 0 {
+                (stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0
+            } else {
+                0.0
+            };
+            json!({
+                "tool_model": tool_model,
+                "source": stats.source(),
+                "ai_additions": stats.ai_additions,
+                "mixed_additions": stats.mixed_additions,
+                "ai_accepted": stats.ai_accepted,
+                "total_ai_additions": stats.total_ai_additions,
+                "total_ai_deletions": stats.total_ai_deletions,
+                "net_ai_lines": stats.total_ai_additions - stats.total_ai_deletions,
+                "commits": stats.commits,
+                "acceptance_rate": (acceptance_rate * 100.0).round() / 100.0,
+            })
+        })
+        .collect();
 
     // Sort by ai_additions descending
     comparisons.sort_by(|a, b| {
@@ -3156,6 +3245,21 @@ mod tests {
             parse_epoch_seconds_param("since", Some("not-a-date")),
             Err(AppError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn tool_aggregate_merges_sources_and_fills_missing_totals() {
+        let mut aggregate = ToolAggregate::default();
+
+        aggregate.add_report_row(10, 2, 8, 12, 1);
+        aggregate.add_metrics_row(5, 1, 4, 0, 0);
+
+        assert_eq!(aggregate.source(), "report+metrics");
+        assert_eq!(aggregate.ai_additions, 15);
+        assert_eq!(aggregate.mixed_additions, 3);
+        assert_eq!(aggregate.ai_accepted, 12);
+        assert_eq!(aggregate.total_ai_additions, 17);
+        assert_eq!(aggregate.total_ai_deletions, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -144,6 +144,58 @@ fn test_codex_preset_structured_hook_input() {
 }
 
 #[test]
+fn test_codex_stop_without_paths_skips_checkpoint() {
+    let fixture = fixture_path("codex-session-simple.jsonl");
+    let hook_input = json!({
+        "session_id": "session-stop-no-paths",
+        "cwd": "/Users/test/projects/git-ai",
+        "hook_event_name": "Stop",
+        "transcript_path": fixture.to_str().unwrap()
+    })
+    .to_string();
+
+    match CodexPreset.run(AgentCheckpointFlags {
+        hook_input: Some(hook_input),
+    }) {
+        Err(GitAiError::PresetError(message)) => {
+            assert!(
+                message.contains("Skipping Codex Stop checkpoint"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("expected Codex Stop skip PresetError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_codex_stop_uses_dirty_files_as_explicit_scope() {
+    let fixture = fixture_path("codex-session-simple.jsonl");
+    let hook_input = json!({
+        "session_id": "session-stop-dirty-files",
+        "cwd": "/Users/test/projects/git-ai",
+        "hook_event_name": "Stop",
+        "dirty_files": {
+            "src/main.rs": "fn main() {}\n"
+        },
+        "transcript_path": fixture.to_str().unwrap()
+    })
+    .to_string();
+
+    let result = CodexPreset
+        .run(AgentCheckpointFlags {
+            hook_input: Some(hook_input),
+        })
+        .expect("Codex Stop with dirty_files should run");
+
+    assert_eq!(result.checkpoint_kind, CheckpointKind::AiAgent);
+    assert_eq!(
+        result.edited_filepaths,
+        Some(vec!["src/main.rs".to_string()]),
+        "dirty_files keys should scope the Stop checkpoint"
+    );
+}
+
+#[test]
 fn test_codex_preset_bash_pre_tool_use_skips_checkpoint_after_capturing_snapshot() {
     use crate::repos::test_repo::TestRepo;
 
@@ -371,6 +423,47 @@ fn test_codex_apply_patch_post_tool_use_attributes_new_file_to_ai() {
 
     let mut generated = repo.filename("generated.py");
     generated.assert_lines_and_blame(crate::lines!["print('tracked by codex')".ai()]);
+}
+
+#[test]
+fn test_codex_stop_without_paths_does_not_claim_external_dirty_file() {
+    use crate::repos::test_repo::TestRepo;
+
+    let repo = TestRepo::new();
+    let repo_root = repo.canonical_path();
+    fs::write(repo_root.join("README.md"), "Project README\n").unwrap();
+    repo.stage_all_and_commit("Initial README")
+        .expect("initial commit should succeed");
+
+    let fixture = fixture_path("codex-session-simple.jsonl");
+    let transcript_path = repo_root.join("codex-stop-rollout.jsonl");
+    fs::copy(&fixture, &transcript_path).unwrap();
+
+    fs::write(
+        repo_root.join("README.md"),
+        "Project README\nEdited by CodeBuddy\n",
+    )
+    .unwrap();
+
+    let stop_hook_input = json!({
+        "session_id": "session-stop-external-dirty",
+        "cwd": repo_root.to_string_lossy().to_string(),
+        "hook_event_name": "Stop",
+        "transcript_path": transcript_path.to_string_lossy().to_string()
+    })
+    .to_string();
+
+    repo.git_ai(&["checkpoint", "codex", "--hook-input", &stop_hook_input])
+        .expect("Codex Stop skip should exit successfully for hooks");
+
+    let checkpoints = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("checkpoints should be readable");
+    assert!(
+        checkpoints.is_empty(),
+        "Codex Stop without explicit paths must not claim external dirty files"
+    );
 }
 
 #[test]
@@ -893,10 +986,13 @@ crate::reuse_tests_in_worktree!(
     test_parse_codex_rollout_transcript,
     test_codex_preset_legacy_hook_input,
     test_codex_preset_structured_hook_input,
+    test_codex_stop_without_paths_skips_checkpoint,
+    test_codex_stop_uses_dirty_files_as_explicit_scope,
     test_codex_preset_bash_pre_tool_use_skips_checkpoint_after_capturing_snapshot,
     test_codex_preset_bash_pre_tool_use_supports_camel_case_hook_event_name,
     test_codex_preset_bash_post_tool_use_detects_changed_files,
     test_codex_apply_patch_post_tool_use_attributes_new_file_to_ai,
+    test_codex_stop_without_paths_does_not_claim_external_dirty_file,
     test_find_rollout_path_for_session_in_home,
     test_codex_e2e_commit_resync_uses_latest_rollout,
     test_codex_commit_inside_bash_inflight_is_attributed_to_codex,

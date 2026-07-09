@@ -86,6 +86,10 @@ impl AgentCheckpointPreset for CodexPreset {
             CodexPreset::string_array_field(&hook_data, &["edited_filepaths", "editedFilepaths"]);
         let hook_dirty_files =
             CodexPreset::string_map_field(&hook_data, &["dirty_files", "dirtyFiles"]);
+        let hook_dirty_filepaths = hook_dirty_files.as_ref().map(CodexPreset::dirty_filepaths);
+        let hook_target_filepaths = hook_edited_filepaths
+            .clone()
+            .or_else(|| hook_dirty_filepaths.clone());
 
         let agent_id = AgentId {
             tool: "codex".to_string(),
@@ -164,13 +168,23 @@ impl AgentCheckpointPreset for CodexPreset {
                     checkpoint_kind: CheckpointKind::AiAgent,
                     transcript: Some(transcript),
                     repo_working_dir: Some(cwd.to_string()),
-                    edited_filepaths: edited_filepaths.or_else(|| hook_edited_filepaths.clone()),
+                    edited_filepaths: edited_filepaths
+                        .or_else(|| hook_edited_filepaths.clone())
+                        .or_else(|| hook_dirty_filepaths.clone()),
                     will_edit_filepaths: None,
                     dirty_files: hook_dirty_files.clone(),
                     captured_checkpoint_id: bash_captured_checkpoint_id,
                 });
             }
-            Some("Stop") | None => {}
+            Some("Stop") => {
+                if hook_target_filepaths.is_none() {
+                    return Err(GitAiError::PresetError(
+                        "Skipping Codex Stop checkpoint without explicit edited_filepaths or dirty_files"
+                            .to_string(),
+                    ));
+                }
+            }
+            None => {}
             Some(other) => {
                 return Err(GitAiError::PresetError(format!(
                     "Unsupported Codex hook_event_name: {}",
@@ -185,7 +199,7 @@ impl AgentCheckpointPreset for CodexPreset {
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
             repo_working_dir: Some(cwd.to_string()),
-            edited_filepaths: hook_edited_filepaths,
+            edited_filepaths: hook_target_filepaths,
             will_edit_filepaths: None,
             dirty_files: hook_dirty_files,
             captured_checkpoint_id: None,
@@ -227,6 +241,15 @@ impl CodexPreset {
                     .collect::<HashMap<_, _>>()
             })
             .filter(|values| !values.is_empty())
+    }
+
+    fn dirty_filepaths(dirty_files: &HashMap<String, String>) -> Vec<String> {
+        dirty_files
+            .keys()
+            .map(|path| path.trim())
+            .filter(|path| !path.is_empty())
+            .map(ToString::to_string)
+            .collect()
     }
 
     fn session_id_from_hook_data(hook_data: &serde_json::Value) -> Option<String> {
