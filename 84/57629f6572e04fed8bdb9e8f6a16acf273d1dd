@@ -1,0 +1,69 @@
+docs/enterprise/enterprise-server-performance-task-plan.md
+  a73676cfded0c055 277,347,712,1241,1342,1355,1410,1483,1549
+docs/architecture/repository-layout.md
+  a73676cfded0c055 1-50
+docs/guides/local-run-guide.md
+  a73676cfded0c055 1-483
+docs/architecture/system-roles-and-usage.md
+  a73676cfded0c055 3,697-698
+docs/guides/report-summary-guide.md
+  a73676cfded0c055 1-380
+docs/README.md
+  h_8c00d195f87269 1-42
+docs/enterprise/enterprise-auth-login-performance-task-plan.md
+  a73676cfded0c055 129,141,320,467,536,674,768,842,918
+docs/plans/developer-registration-and-cli-auth-plan.md
+  a73676cfded0c055 140,1456-1458,1475-1477
+docs/architecture/data-flow.md
+  a73676cfded0c055 287
+docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
+  a73676cfded0c055 48,181,294,355,386,524,537,586,600,653,670,706,718-719,776,831
+docs/enterprise/enterprise-server-planning.md
+  a73676cfded0c055 1-2455
+docs/enterprise/enterprise-server-deployment.md
+  a73676cfded0c055 5
+docs/guides/developer-end-to-end-workflow.md
+  a73676cfded0c055 1-531
+docs/guides/developer-install-guide.md
+  a73676cfded0c055 1-189
+docs/architecture/user-system-architecture.md
+  a73676cfded0c055 1-475
+docs/guides/server-deployment.md
+  a73676cfded0c055 1-356
+AGENTS.md
+  a73676cfded0c055 5
+docs/reference/COVERAGE.md
+  a73676cfded0c055 1-91
+docs/enterprise/enterprise-server-performance-optimization-plan.md
+  a73676cfded0c055 3
+docs/enterprise/enterprise-server-concurrency-task-plan.md
+  a73676cfded0c055 1-643
+docs/enterprise/enterprise-server-concurrency-optimization.md
+  a73676cfded0c055 1-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "8457629f6572e04fed8bdb9e8f6a16acf273d1dd",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 18937,
+      "total_deletions": 106,
+      "accepted_lines": 18890,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/4a263697342cccd4c7dfc84b2e7147a1876e083bd10701f76c1ace59e5a4986c"
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
