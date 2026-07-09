@@ -1,0 +1,38 @@
+tests/integration/main.rs
+  d2a37ee3fcb7cddb 34
+src/commands/checkpoint_agent/agent_presets.rs
+  d2a37ee3fcb7cddb 161,173
+tests/integration/codebuddy.rs
+  d2a37ee3fcb7cddb 1-125
+src/mdm/agents/mod.rs
+  d2a37ee3fcb7cddb 3,18,37
+src/commands/checkpoint_agent/bash_tool.rs
+  d2a37ee3fcb7cddb 430-434,496,1893-1899
+src/commands/git_ai_handlers.rs
+  d2a37ee3fcb7cddb 10-11,267,458-473,2199,2226-2233,2291
+src/mdm/agents/codebuddy.rs
+  d2a37ee3fcb7cddb 1-445
+src/commands/checkpoint_agent/agent_presets/codebuddy.rs
+  d2a37ee3fcb7cddb 1-395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "4c44d969c3cf2d9205d52f724e0b13aa01a7eaa7",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1035,
+      "total_deletions": 27,
+      "accepted_lines": 1013,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/65569de3ca69c6e3728540db80661e435f424f120f7863073717ce644643fe34"
+    }
+  }
+}
