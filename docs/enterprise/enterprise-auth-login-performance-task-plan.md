@@ -126,7 +126,7 @@ rg -n "pub async fn register|pub async fn login|hash_password|verify_password|de
 提交建议：
 
 ```bash
-git add docs/enterprise-auth-login-performance-task-plan.md
+git add docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Add enterprise auth login performance task plan"
 ```
 
@@ -138,7 +138,7 @@ git commit -m "Add enterprise auth login performance task plan"
 
 | 项目 | 结果 |
 | --- | --- |
-| `git status --short` | 只有 `docs/enterprise-auth-login-performance-task-plan.md` 未跟踪 |
+| `git status --short` | 只有 `docs/enterprise/enterprise-auth-login-performance-task-plan.md` 未跟踪 |
 | `docker compose up -d postgres redis minio` | Postgres、Redis、MinIO 均已运行 |
 | `docker compose ps` | API healthy，Postgres healthy，Redis healthy，MinIO running |
 | `pg_isready` | `/var/run/postgresql:5432 - accepting connections` |
@@ -317,7 +317,7 @@ python3 ../scripts/benchmarks/enterprise/bench_dashboard.py \
 提交建议：
 
 ```bash
-git add enterprise-server/docker-compose.yml enterprise-server/.env.example enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/docker-compose.yml enterprise-server/.env.example enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Enable enterprise rollup configuration"
 ```
 
@@ -464,7 +464,7 @@ RATE_LIMIT_OAUTH_MAX_REQUESTS=3 RATE_LIMIT_OAUTH_WINDOW_SECONDS=60 cargo test ra
 提交建议：
 
 ```bash
-git add enterprise-server/src/config.rs enterprise-server/src/services/rate_limit.rs enterprise-server/.env.example enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/src/config.rs enterprise-server/src/services/rate_limit.rs enterprise-server/.env.example enterprise-server/deploy/.env.example enterprise-server/deploy/README.md docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Make enterprise auth rate limits configurable"
 ```
 
@@ -533,7 +533,7 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise -c "\di idx_us
 提交建议：
 
 ```bash
-git add enterprise-server/migrations/018_users_lower_email_index.sql enterprise-server/deploy/migrations/018_users_lower_email_index.sql enterprise-server/src/db/migrations.rs docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/migrations/018_users_lower_email_index.sql enterprise-server/deploy/migrations/018_users_lower_email_index.sql enterprise-server/src/db/migrations.rs docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Index enterprise users by normalized email"
 ```
 
@@ -671,7 +671,7 @@ cargo test
 提交建议：
 
 ```bash
-git add enterprise-server/src/config.rs enterprise-server/src/routes.rs enterprise-server/src/main.rs enterprise-server/src/services/passwords.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/src/config.rs enterprise-server/src/routes.rs enterprise-server/src/main.rs enterprise-server/src/services/passwords.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Run enterprise password hashing on blocking workers"
 ```
 
@@ -765,7 +765,7 @@ cargo test
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/registration.rs enterprise-server/src/handlers/auth_api.rs docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/src/services/registration.rs enterprise-server/src/handlers/auth_api.rs docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Reduce enterprise registration database round trips"
 ```
 
@@ -839,7 +839,7 @@ cargo test
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/audit.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/cli_authorize.rs docs/enterprise-auth-login-performance-task-plan.md
+git add enterprise-server/src/services/audit.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/cli_authorize.rs docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Write enterprise auth audit logs asynchronously"
 ```
 
@@ -915,7 +915,7 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py --help
 提交建议：
 
 ```bash
-git add scripts/benchmarks/enterprise/bench_auth_login.py scripts/benchmarks/enterprise/README.md docs/enterprise-auth-login-performance-task-plan.md
+git add scripts/benchmarks/enterprise/bench_auth_login.py scripts/benchmarks/enterprise/README.md docs/enterprise/enterprise-auth-login-performance-task-plan.md
 git commit -m "Add enterprise auth login benchmark script"
 ```
 

@@ -284,7 +284,7 @@ git-ai report summary --server <url>
 
 它生成 `git-ai-summary/1.0.0`，按开发者聚合全历史统计，并可附加 org、dept、reporter、period 等元数据。
 
-现有 `docs/report-summary-guide.md` 和 `docs/server-deployment.md` 主要讲的是这个旧版 `git-ai report server` / SQLite / 8787 流程；enterprise-server 当前还额外支持 `/api/v1/reports` 和认证后的 dashboard 数据隔离。
+现有 `docs/guides/report-summary-guide.md` 和 `docs/guides/server-deployment.md` 主要讲的是这个旧版 `git-ai report server` / SQLite / 8787 流程；enterprise-server 当前还额外支持 `/api/v1/reports` 和认证后的 dashboard 数据隔离。
 
 ## Enterprise Server 数据流
 

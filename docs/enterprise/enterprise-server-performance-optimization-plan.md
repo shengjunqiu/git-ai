@@ -1,6 +1,6 @@
 # Enterprise Server 性能优化执行计划
 
-本文档记录 `enterprise-server/` 当前服务端并发性能现状、主要瓶颈、优化优先级、具体实现建议和验收方式。它关注吞吐、延迟和大数据量查询性能；并发一致性问题另见 `docs/enterprise-server-concurrency-optimization.md`。
+本文档记录 `enterprise-server/` 当前服务端并发性能现状、主要瓶颈、优化优先级、具体实现建议和验收方式。它关注吞吐、延迟和大数据量查询性能；并发一致性问题另见 `docs/enterprise/enterprise-server-concurrency-optimization.md`。
 
 ## 结论摘要
 

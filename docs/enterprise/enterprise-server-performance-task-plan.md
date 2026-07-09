@@ -274,7 +274,7 @@ git commit -m "Reuse Redis connection manager for rate limits"
 - `enterprise-server/src/main.rs`
 - `enterprise-server/.env.example`
 - `enterprise-server/deploy/.env.example`
-- 如有需要，同步更新 `docs/enterprise-server-deployment.md`
+- 如有需要，同步更新 `docs/enterprise/enterprise-server-deployment.md`
 
 实现步骤：
 
@@ -344,7 +344,7 @@ DATABASE_MAX_CONNECTIONS=30 cargo run
 提交建议：
 
 ```bash
-git add enterprise-server/src/config.rs enterprise-server/src/main.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-server-deployment.md
+git add enterprise-server/src/config.rs enterprise-server/src/main.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise/enterprise-server-deployment.md
 git commit -m "Make enterprise database pool configurable"
 ```
 
@@ -709,7 +709,7 @@ CAS_UPLOAD_CONCURRENCY: 1, 4, 8
 提交建议：
 
 ```bash
-git add enterprise-server/src/handlers/cas.rs enterprise-server/src/config.rs enterprise-server/src/auth/jwt.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/report.rs enterprise-server/src/handlers/release.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-server-deployment.md docs/enterprise-server-performance-task-plan.md
+git add enterprise-server/src/handlers/cas.rs enterprise-server/src/config.rs enterprise-server/src/auth/jwt.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/handlers/oauth.rs enterprise-server/src/handlers/report.rs enterprise-server/src/handlers/release.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise/enterprise-server-deployment.md docs/enterprise/enterprise-server-performance-task-plan.md
 git commit -m "Process CAS uploads with bounded concurrency"
 ```
 
@@ -1238,7 +1238,7 @@ cargo test
 提交建议：
 
 ```bash
-git add docs/enterprise-server-performance-task-plan.md enterprise-server/src/handlers/dashboard.rs
+git add docs/enterprise/enterprise-server-performance-task-plan.md enterprise-server/src/handlers/dashboard.rs
 git commit -m "Read dashboard aggregates from rollups"
 ```
 
@@ -1339,7 +1339,7 @@ cargo test
 提交建议：
 
 ```bash
-git add docs/enterprise-server-performance-task-plan.md enterprise-server/migrations/017_metrics_tool_model_events.sql enterprise-server/deploy/migrations/017_metrics_tool_model_events.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/dashboard.rs
+git add docs/enterprise/enterprise-server-performance-task-plan.md enterprise-server/migrations/017_metrics_tool_model_events.sql enterprise-server/deploy/migrations/017_metrics_tool_model_events.sql enterprise-server/src/db/migrations.rs enterprise-server/src/services/metrics.rs enterprise-server/src/handlers/dashboard.rs
 git commit -m "Store structured metrics tool model rows"
 ```
 
@@ -1352,7 +1352,7 @@ git commit -m "Store structured metrics tool model rows"
 涉及文件：
 
 - `scripts/benchmarks/enterprise/`
-- 可选：`docs/enterprise-server-performance-task-plan.md`
+- 可选：`docs/enterprise/enterprise-server-performance-task-plan.md`
 
 实现步骤：
 
@@ -1407,7 +1407,7 @@ BENCH_REQUESTS=1000
 提交建议：
 
 ```bash
-git add docs/enterprise-server-performance-task-plan.md scripts/benchmarks/enterprise
+git add docs/enterprise/enterprise-server-performance-task-plan.md scripts/benchmarks/enterprise
 git commit -m "Add enterprise server benchmark scripts"
 ```
 
@@ -1480,7 +1480,7 @@ Dashboard 30 天查询结果，每个 endpoint 100 requests、concurrency 20：
 提交建议：
 
 ```bash
-git add docs/enterprise-server-performance-task-plan.md enterprise-server/src/services/metrics.rs scripts/benchmarks/enterprise
+git add docs/enterprise/enterprise-server-performance-task-plan.md enterprise-server/src/services/metrics.rs scripts/benchmarks/enterprise
 git commit -m "Stabilize enterprise metrics rollup validation"
 ```
 
@@ -1546,7 +1546,7 @@ GROUP BY state;
 提交建议：
 
 ```bash
-git add docs/enterprise-server-performance-task-plan.md enterprise-server/docker-compose.yml enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/README.md scripts/benchmarks/enterprise/README.md scripts/benchmarks/enterprise/postgres_observability.sql
+git add docs/enterprise/enterprise-server-performance-task-plan.md enterprise-server/docker-compose.yml enterprise-server/deploy/docker-compose.yml enterprise-server/deploy/README.md scripts/benchmarks/enterprise/README.md scripts/benchmarks/enterprise/postgres_observability.sql
 git commit -m "Add enterprise Postgres observability queries"
 ```
 

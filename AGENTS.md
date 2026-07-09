@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-本仓库是 Rust 2024 项目，核心代码在 `src/`。`src/main.rs` 根据调用名分派：`git-ai` 进入 CLI 子命令，作为 `git` 调用时进入 Git 代理。`src/commands/` 放命令处理，`src/commands/hooks/` 放 commit、rebase、stash、reset 等 Git 钩子逻辑；`src/authorship/` 负责 checkpoint、working log、Git Notes 和行级归属；`src/git/` 封装 Git CLI 调用与仓库状态；`src/daemon/` 是后台服务路径。`tests/integration/` 是主要测试套件，`tests/fixtures/` 和 `tests/**/snapshots/` 保存夹具与 insta 快照。编辑器/agent 集成在 `agent-support/`，企业服务在 `enterprise-server/`，文档与规范在 `docs/`、`specs/`。更详细的目录边界见 `docs/repository-layout.md`。
+本仓库是 Rust 2024 项目，核心代码在 `src/`。`src/main.rs` 根据调用名分派：`git-ai` 进入 CLI 子命令，作为 `git` 调用时进入 Git 代理。`src/commands/` 放命令处理，`src/commands/hooks/` 放 commit、rebase、stash、reset 等 Git 钩子逻辑；`src/authorship/` 负责 checkpoint、working log、Git Notes 和行级归属；`src/git/` 封装 Git CLI 调用与仓库状态；`src/daemon/` 是后台服务路径。`tests/integration/` 是主要测试套件，`tests/fixtures/` 和 `tests/**/snapshots/` 保存夹具与 insta 快照。编辑器/agent 集成在 `agent-support/`，企业服务在 `enterprise-server/`，文档与规范在 `docs/`、`specs/`。更详细的目录边界见 `docs/architecture/repository-layout.md`。
 
 ## 构建、测试与本地开发
 

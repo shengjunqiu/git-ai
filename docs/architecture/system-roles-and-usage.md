@@ -1,6 +1,6 @@
 # 系统角色与使用方式
 
-本文档从实际实现角度说明 `git-ai` 系统里的角色、各角色如何使用系统，以及这些角色之间的数据如何流转。它补充 `docs/data-flow.md` 的数据流视角，重点放在“谁在用系统、用系统做什么、系统内部如何响应”。
+本文档从实际实现角度说明 `git-ai` 系统里的角色、各角色如何使用系统，以及这些角色之间的数据如何流转。它补充 `docs/architecture/data-flow.md` 的数据流视角，重点放在“谁在用系统、用系统做什么、系统内部如何响应”。
 
 ## 1. 系统定位
 
@@ -694,8 +694,8 @@ git-ai push-authorship-notes
 
 如果要继续理解或改造系统，建议按这个顺序读：
 
-1. `docs/repository-layout.md`：先看仓库边界。
-2. `docs/data-flow.md`：理解数据从 checkpoint 到 Git Notes 再到企业服务的流向。
+1. `docs/architecture/repository-layout.md`：先看仓库边界。
+2. `docs/architecture/data-flow.md`：理解数据从 checkpoint 到 Git Notes 再到企业服务的流向。
 3. 本文档：理解系统中每个角色如何参与。
 4. `src/main.rs`、`src/commands/git_handlers.rs`：理解入口和 Git 代理。
 5. `src/commands/checkpoint.rs`、`src/authorship/post_commit.rs`：理解归属生成。

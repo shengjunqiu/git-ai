@@ -45,7 +45,7 @@
 
 涉及文件：
 
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 - `scripts/benchmarks/enterprise/`
 
 ### 0.1 确认工作区和服务状态
@@ -178,7 +178,7 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
 提交建议：
 
 ```bash
-git add docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Record next enterprise concurrency baseline"
 ```
 
@@ -291,7 +291,7 @@ git commit -m "Record next enterprise concurrency baseline"
 - `enterprise-server/src/services/metrics.rs`
 - 可选：`enterprise-server/src/config.rs`
 - 可选：`enterprise-server/.env.example`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 1.1 增加 metrics 写入阶段耗时日志
 
@@ -352,7 +352,7 @@ docker compose up -d --force-recreate --no-deps api
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/metrics.rs docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/src/services/metrics.rs docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Instrument enterprise metrics write phases"
 ```
 
@@ -383,7 +383,7 @@ git commit -m "Instrument enterprise metrics write phases"
 - 可选：`enterprise-server/src/services/metrics_rollups.rs`
 - `enterprise-server/.env.example`
 - `enterprise-server/deploy/.env.example`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 2.1 增加 rollup 模式配置
 
@@ -521,7 +521,7 @@ FOR UPDATE SKIP LOCKED;
 提交建议：
 
 ```bash
-git add enterprise-server/migrations/019_metrics_rollup_dirty_scopes.sql enterprise-server/deploy/migrations/019_metrics_rollup_dirty_scopes.sql enterprise-server/src/db/migrations.rs enterprise-server/src/config.rs enterprise-server/src/main.rs enterprise-server/src/services/metrics.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/migrations/019_metrics_rollup_dirty_scopes.sql enterprise-server/deploy/migrations/019_metrics_rollup_dirty_scopes.sql enterprise-server/src/db/migrations.rs enterprise-server/src/config.rs enterprise-server/src/main.rs enterprise-server/src/services/metrics.rs enterprise-server/.env.example enterprise-server/deploy/.env.example docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Add async metrics rollup rebuild mode"
 ```
 
@@ -534,7 +534,7 @@ git commit -m "Add async metrics rollup rebuild mode"
 - `enterprise-server/src/services/metrics.rs`
 - 可选：`enterprise-server/migrations/020_metrics_tool_model_write_indexes.sql`
 - `scripts/benchmarks/enterprise/bench_metrics_upload.py`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 3.1 记录 tool-model 行数放大
 
@@ -583,7 +583,7 @@ git commit -m "Add async metrics rollup rebuild mode"
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/metrics.rs docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/src/services/metrics.rs docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Tune metrics tool model event writes"
 ```
 
@@ -597,7 +597,7 @@ git commit -m "Tune metrics tool model event writes"
 - `enterprise-server/src/handlers/auth_api.rs`
 - `enterprise-server/src/config.rs`
 - `scripts/benchmarks/enterprise/bench_auth_login.py`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 4.1 增加密码计算阶段耗时
 
@@ -650,7 +650,7 @@ git commit -m "Tune metrics tool model event writes"
 提交建议：
 
 ```bash
-git add enterprise-server/src/services/passwords.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/config.rs docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/src/services/passwords.rs enterprise-server/src/handlers/auth_api.rs enterprise-server/src/config.rs docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Instrument enterprise password verification latency"
 ```
 
@@ -667,7 +667,7 @@ git commit -m "Instrument enterprise password verification latency"
 
 - `enterprise-server/src/handlers/cas.rs`
 - `enterprise-server/src/services/cas.rs`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 5.1 保留对象存储并发，合并 DB 写入
 
@@ -703,7 +703,7 @@ cargo test
 提交建议：
 
 ```bash
-git add enterprise-server/src/handlers/cas.rs docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/src/handlers/cas.rs docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Batch database writes for CAS uploads"
 ```
 
@@ -715,8 +715,8 @@ git commit -m "Batch database writes for CAS uploads"
 
 - `enterprise-server/deploy/README.md`
 - `enterprise-server/deploy/docker-compose.yml`
-- `docs/enterprise-server-deployment.md`
-- `docs/enterprise-server-next-concurrency-optimization-task-plan.md`
+- `docs/enterprise/enterprise-server-deployment.md`
+- `docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md`
 
 ### 6.1 连接池容量计算
 
@@ -773,7 +773,7 @@ api_instances * DATABASE_MAX_CONNECTIONS + migration/admin/psql_reserved < postg
 提交建议：
 
 ```bash
-git add enterprise-server/deploy/README.md docs/enterprise-server-deployment.md docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add enterprise-server/deploy/README.md docs/enterprise/enterprise-server-deployment.md docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Document enterprise concurrency capacity planning"
 ```
 
@@ -828,7 +828,7 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py --mode login --request
 提交建议：
 
 ```bash
-git add docs/enterprise-server-next-concurrency-optimization-task-plan.md
+git add docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Record enterprise concurrency optimization results"
 ```
 

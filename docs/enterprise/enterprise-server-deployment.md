@@ -2,7 +2,7 @@
 
 本文档说明如何把当前仓库里的 `enterprise-server` 部署到一台 Linux 服务器，并让开发者客户端把 AI 代码追踪数据上传到 dashboard。
 
-注意：`docs/server-deployment.md` 和 `docs/report-summary-guide.md` 主要描述旧版 `git-ai report server`，默认端口 `8787`，SQLite 存储，不是当前企业服务。部署企业 dashboard、登录、Postgres、Redis、MinIO、CAS 和 metrics 时，以本文档为准。
+注意：`docs/guides/server-deployment.md` 和 `docs/guides/report-summary-guide.md` 主要描述旧版 `git-ai report server`，默认端口 `8787`，SQLite 存储，不是当前企业服务。部署企业 dashboard、登录、Postgres、Redis、MinIO、CAS 和 metrics 时，以本文档为准。
 
 ## 目标架构
 

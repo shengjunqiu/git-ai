@@ -137,7 +137,7 @@ task build
 基线确认：
 
 - `git status --short` 显示已有不相关源码改动：`src/commands/git_handlers.rs`。
-- `docs/developer-registration-and-cli-auth-plan.md` 是本任务文档，当前为未跟踪文件。
+- `docs/plans/developer-registration-and-cli-auth-plan.md` 是本任务文档，当前为未跟踪文件。
 - `src/commands/login.rs` 当前仍调用 `OAuthClient::start_device_flow()` 和 `OAuthClient::poll_for_token()`。
 - `src/auth/client.rs` 当前仍实现 device flow、refresh token 和 install nonce 兑换。
 - `enterprise-server/src/handlers/oauth.rs` 当前 `/worker/oauth/token` 支持 3 类 grant：device code、refresh token、install nonce。
@@ -1453,9 +1453,9 @@ git-ai whoami
 
 改动范围：
 
-- `docs/developer-end-to-end-workflow.md`
-- `docs/developer-install-guide.md`
-- `docs/local-run-guide.md`
+- `docs/guides/developer-end-to-end-workflow.md`
+- `docs/guides/developer-install-guide.md`
+- `docs/guides/local-run-guide.md`
 
 执行步骤：
 
@@ -1472,9 +1472,9 @@ git-ai whoami
 
 改动范围：
 
-- `docs/server-deployment.md`
-- `docs/enterprise-server-deployment.md`
-- `docs/system-roles-and-usage.md`
+- `docs/guides/server-deployment.md`
+- `docs/enterprise/enterprise-server-deployment.md`
+- `docs/architecture/system-roles-and-usage.md`
 
 执行步骤：
 
