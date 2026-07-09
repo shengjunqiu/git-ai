@@ -834,9 +834,9 @@ git commit -m "Paginate pull request aggregation"
 
 实现步骤：
 
-- [ ] 为 `aggregate_developers` 增加 `limit` 和 `cursor`。
-- [ ] 保持当前排序语义：`ai_added_lines DESC, total_commits DESC, name ASC`。
-- [ ] cursor 包含：
+- [x] 为 `aggregate_developers` 增加 `limit` 和 `cursor`。
+- [x] 保持当前排序语义：`ai_added_lines DESC, total_commits DESC, name ASC`。
+- [x] cursor 包含：
 
 ```json
 {
@@ -847,9 +847,9 @@ git commit -m "Paginate pull request aggregation"
 }
 ```
 
-- [ ] 将排序和 cursor 条件放到 SQL 最终查询中。
-- [ ] 查询 `limit + 1` 条。
-- [ ] 确保 `git_identities` JSON 聚合只对当前页或候选页执行；如果 SQL 结构复杂，先用 CTE 得到分页 user ids，再 join identities。
+- [x] 将排序和 cursor 条件放到 SQL 最终查询中。
+- [x] 查询 `limit + 1` 条。
+- [x] 确保 `git_identities` JSON 聚合只对当前页或候选页执行；如果 SQL 结构复杂，先用 CTE 得到分页 user ids，再 join identities。
 
 推荐 SQL 结构：
 
@@ -860,9 +860,9 @@ git commit -m "Paginate pull request aggregation"
 
 验收标准：
 
-- [ ] 排序和改造前一致。
-- [ ] 第一页和第二页没有重复开发者。
-- [ ] `since/until/org` 过滤仍然生效。
+- [x] 排序和改造前一致。
+- [x] 第一页和第二页没有重复开发者。
+- [x] `since/until/org` 过滤仍然生效。
 - [ ] 大数据集下 `EXPLAIN ANALYZE` 显示返回行数和后续 join 行数明显降低。
 
 ### 5.2 改造 projects aggregation
@@ -881,10 +881,10 @@ git commit -m "Paginate pull request aggregation"
 
 实现步骤：
 
-- [ ] 用 SQL `UNION ALL` 统一 metrics source 和 report source。
-- [ ] 在 SQL 中按项目 key 聚合。
-- [ ] 在 SQL 中完成排序和分页。
-- [ ] Rust handler 只负责序列化当前页。
+- [x] 用 SQL `UNION ALL` 统一 metrics source 和 report source。
+- [x] 在 SQL 中按项目 key 聚合。
+- [x] 在 SQL 中完成排序和分页。
+- [x] Rust handler 只负责序列化当前页。
 
 推荐方案 B：新增项目 rollup 表。
 
@@ -903,14 +903,14 @@ git commit -m "Paginate pull request aggregation"
 
 第一版建议：
 
-- [ ] 先做方案 A，避免引入新的写入路径复杂度。
+- [x] 先做方案 A，避免引入新的写入路径复杂度。
 - [ ] 如果压测仍然慢，再进入 rollup 表方案。
 
 验收标准：
 
-- [ ] 不再出现两个大 `fetch_all` 后 Rust merge 全量数据的路径。
-- [ ] 分页发生在 SQL 层。
-- [ ] 项目名称排序稳定。
+- [x] 不再出现两个大 `fetch_all` 后 Rust merge 全量数据的路径。
+- [x] 分页发生在 SQL 层。
+- [x] 项目名称排序稳定。
 - [ ] 同一个项目来自 metrics/report 两套来源时仍正确合并。
 
 ### 5.3 改造 organizations、departments、tools
@@ -921,18 +921,18 @@ git commit -m "Paginate pull request aggregation"
 
 实现步骤：
 
-- [ ] `aggregate_organizations` 支持 `limit/cursor`，排序 `(organization_name, org_slug)`。
-- [ ] `aggregate_departments` 支持 `limit/cursor`，排序 `(organization_name, department_name, dept_slug)`。
-- [ ] `aggregate_tools` 支持 `limit/cursor` 或 `limit/top_n`。
-- [ ] 对 tools 保持当前排序 `ai_additions DESC`，cursor 使用 `(ai_additions, tool_model)`。
-- [ ] 如果 tools 仍需从三套来源 merge，先在 SQL/rollup 层合并；不能只切最终 `Vec`。
+- [x] `aggregate_organizations` 支持 `limit/cursor`，排序 `(organization_name, org_slug)`。
+- [x] `aggregate_departments` 支持 `limit/cursor`，排序 `(organization_name, department_name, dept_slug)`。
+- [x] `aggregate_tools` 支持 `limit/cursor` 或 `limit/top_n`。
+- [x] 对 tools 保持当前排序 `ai_additions DESC`，cursor 使用 `(ai_additions, tool_model)`。
+- [x] 如果 tools 仍需从三套来源 merge，先在 SQL/rollup 层合并；不能只切最终 `Vec`。
 
 验收标准：
 
-- [ ] 每个接口旧字段名保持不变。
-- [ ] 新增 `pagination`。
-- [ ] 排序稳定。
-- [ ] 过滤条件和 cursor 同时生效。
+- [x] 每个接口旧字段名保持不变。
+- [x] 新增 `pagination`。
+- [x] 排序稳定。
+- [x] 过滤条件和 cursor 同时生效。
 
 ### 5.4 dashboard 聚合性能验证
 
@@ -966,6 +966,35 @@ SELECT ...
 git add enterprise-server/src enterprise-server/migrations
 git commit -m "Paginate dashboard aggregate APIs"
 ```
+
+### 阶段 5 执行记录
+
+执行日期：2026-07-09
+
+实现内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `enterprise-server/src/handlers/dashboard.rs` | dashboard 聚合接口增加 `limit/cursor`、cursor 编解码、数据库层排序分页和 handler 级分页测试 |
+| `enterprise-server/migrations/023_department_rollup_indexes.sql` | 保留既有 department rollup 查询索引 |
+| `enterprise-server/migrations/024_dashboard_aggregate_pagination_indexes.sql` | 新增 dashboard 聚合分页相关复合索引 |
+| `enterprise-server/src/db/migrations.rs` | 注册 `023_department_rollup_indexes` 和 `024_dashboard_aggregate_pagination_indexes` |
+
+验证结果：
+
+| 命令或检查 | 结果 |
+| --- | --- |
+| `cd enterprise-server && cargo test dashboard` | 9 passed, 0 failed |
+| `cd enterprise-server && cargo test db::migrations` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test` | 141 passed, 0 failed |
+| `cargo run -- --migrate` | 当前开发库已应用 `024_dashboard_aggregate_pagination_indexes`；`023_department_rollup_indexes` 已处于 applied 状态 |
+
+备注：
+
+- `organizations`、`departments`、`projects`、`developers`、`tools` 旧列表字段保留，仅新增 `pagination`。
+- `projects` 已改为 SQL CTE 聚合和分页，不再在 Rust 中对两个全量 `fetch_all` 结果做 `HashMap` merge 后切片。
+- `tools` 已改为 SQL 层合并 report、metrics、checkpoint 来源后分页。
+- 本阶段尚未做大数据集 `EXPLAIN ANALYZE` 和前后性能对比，阶段 5.4 保持未完成。
 
 ## 阶段 6: 时间序列和生命周期接口保护
 

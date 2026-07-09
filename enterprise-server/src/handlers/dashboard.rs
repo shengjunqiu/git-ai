@@ -412,6 +412,7 @@ fn parse_epoch_filters(
 
 type SummaryMetricRow = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
 type TrendMetricRow = (chrono::NaiveDate, Option<i64>, Option<i64>, Option<i64>);
+#[cfg(test)]
 type ToolMetricRow = (
     String,
     Option<i64>,
@@ -766,6 +767,7 @@ async fn fetch_trend_rows(
         .map_err(|e| AppError::Database(e))
 }
 
+#[cfg(test)]
 async fn fetch_metrics_tool_rows(
     pool: &sqlx::PgPool,
     use_rollups: bool,
@@ -2364,6 +2366,8 @@ pub fn build_data_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AppConfig, MetricsRollupWriteMode};
+    use crate::models::user::{AuthIdentity, AuthMethod};
     use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
     use uuid::Uuid;
@@ -2527,10 +2531,264 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn organization_and_department_aggregates_cursor_paginate() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let state = db.state()?;
+        let auth = global_admin_auth(Uuid::new_v4());
+        let (alpha_org_id, _) = insert_organization(&db.pool, "Alpha Org").await?;
+        let (beta_org_id, _) = insert_organization(&db.pool, "Beta Org").await?;
+        insert_organization(&db.pool, "Gamma Org").await?;
+        insert_department(&db.pool, alpha_org_id, "Alpha Dept").await?;
+        insert_department(&db.pool, alpha_org_id, "Beta Dept").await?;
+        insert_department(&db.pool, beta_org_id, "Gamma Dept").await?;
+
+        let Json(first_org_page) = aggregate_organizations(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(None, None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_org_page, "organizations", "organization"),
+            vec!["Alpha Org", "Beta Org"]
+        );
+        assert_eq!(
+            first_org_page["pagination"]["has_more"].as_bool(),
+            Some(true)
+        );
+
+        let Json(second_org_page) = aggregate_organizations(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(
+                None,
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_org_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_org_page, "organizations", "organization"),
+            vec!["Gamma Org"]
+        );
+        assert_eq!(
+            second_org_page["pagination"]["has_more"].as_bool(),
+            Some(false)
+        );
+
+        let Json(first_department_page) = aggregate_departments(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(None, None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            pair_values(
+                &first_department_page,
+                "departments",
+                "organization",
+                "department"
+            ),
+            vec![
+                ("Alpha Org".to_string(), "Alpha Dept".to_string()),
+                ("Alpha Org".to_string(), "Beta Dept".to_string())
+            ]
+        );
+
+        let Json(second_department_page) = aggregate_departments(
+            State(state),
+            auth,
+            Query(aggregate_query(
+                None,
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_department_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            pair_values(
+                &second_department_page,
+                "departments",
+                "organization",
+                "department"
+            ),
+            vec![("Beta Org".to_string(), "Gamma Dept".to_string())]
+        );
+        assert_eq!(
+            second_department_page["pagination"]["has_more"].as_bool(),
+            Some(false)
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_stat_aggregates_cursor_paginate() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let state = db.state()?;
+        let (org_id, org_slug) = insert_organization(&db.pool, "Stats Org").await?;
+        let admin_id = insert_user(&db.pool, org_id, "Admin User", "admin", None).await?;
+        let alice_id = insert_user(&db.pool, org_id, "Alice", "member", None).await?;
+        let bob_id = insert_user(&db.pool, org_id, "Bob", "member", None).await?;
+        let carol_id = insert_user(&db.pool, org_id, "Carol", "member", None).await?;
+        let auth = org_admin_auth(admin_id, org_id, &org_slug);
+
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            alice_id,
+            org_id,
+            1_700_000_000,
+            "https://example.com/alpha.git",
+            "alpha-1",
+            80,
+            60,
+            "codex::gpt-5",
+            60,
+            0,
+            0,
+        )
+        .await?;
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            bob_id,
+            org_id,
+            1_700_000_100,
+            "https://example.com/beta.git",
+            "beta-1",
+            50,
+            25,
+            "qoder::unknown",
+            25,
+            0,
+            0,
+        )
+        .await?;
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            bob_id,
+            org_id,
+            1_700_000_200,
+            "https://example.com/beta.git",
+            "beta-2",
+            50,
+            25,
+            "qoder::unknown",
+            25,
+            0,
+            0,
+        )
+        .await?;
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            carol_id,
+            org_id,
+            1_700_000_300,
+            "https://example.com/gamma.git",
+            "gamma-1",
+            70,
+            40,
+            "trae::unknown",
+            40,
+            0,
+            0,
+        )
+        .await?;
+
+        let Json(first_developer_page) = aggregate_developers(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(Some(org_slug.clone()), None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_developer_page, "developers", "name"),
+            vec!["Alice", "Bob"]
+        );
+        let Json(second_developer_page) = aggregate_developers(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_developer_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_developer_page, "developers", "name"),
+            vec!["Carol"]
+        );
+
+        let Json(first_project_page) = aggregate_projects(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(Some(org_slug.clone()), None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_project_page, "projects", "project_name"),
+            vec!["alpha", "beta"]
+        );
+        let Json(second_project_page) = aggregate_projects(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_project_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_project_page, "projects", "project_name"),
+            vec!["gamma"]
+        );
+
+        let Json(first_tool_page) = aggregate_tools(
+            State(state.clone()),
+            auth.clone(),
+            Query(aggregate_query(Some(org_slug.clone()), None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_tool_page, "tools", "tool_model"),
+            vec!["codex::gpt-5", "qoder::unknown"]
+        );
+        let Json(second_tool_page) = aggregate_tools(
+            State(state),
+            auth,
+            Query(aggregate_query(
+                Some(org_slug),
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_tool_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_tool_page, "tools", "tool_model"),
+            vec!["trae::unknown"]
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     struct TestDatabase {
         pool: PgPool,
         admin_pool: PgPool,
         db_name: String,
+        database_url: String,
     }
 
     impl TestDatabase {
@@ -2572,7 +2830,24 @@ mod tests {
                 pool,
                 admin_pool,
                 db_name,
+                database_url: test_url,
             }))
+        }
+
+        fn state(&self) -> anyhow::Result<AppState> {
+            let config = test_config(&self.database_url);
+            let redis = redis::Client::open(config.redis_url.clone())?;
+            let auth_password_limiter = crate::routes::auth_password_limiter(&config);
+            let cas_store = crate::services::cas::CasStore::new(&config)?;
+
+            Ok(AppState {
+                db: self.pool.clone(),
+                redis,
+                config,
+                cas_store,
+                rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+                auth_password_limiter,
+            })
         }
 
         async fn cleanup(self) -> anyhow::Result<()> {
@@ -2608,6 +2883,71 @@ mod tests {
             .await?;
 
         Ok((user_id, org_id))
+    }
+
+    async fn insert_organization(pool: &PgPool, name: &str) -> anyhow::Result<(Uuid, String)> {
+        let org_id = Uuid::new_v4();
+        let slug = format!(
+            "{}-{}",
+            name.to_ascii_lowercase().replace(' ', "-"),
+            org_id.simple()
+        );
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind(name)
+            .bind(&slug)
+            .execute(pool)
+            .await?;
+
+        Ok((org_id, slug))
+    }
+
+    async fn insert_department(pool: &PgPool, org_id: Uuid, name: &str) -> anyhow::Result<Uuid> {
+        let department_id = Uuid::new_v4();
+        let slug = format!(
+            "{}-{}",
+            name.to_ascii_lowercase().replace(' ', "-"),
+            department_id.simple()
+        );
+
+        sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
+            .bind(department_id)
+            .bind(org_id)
+            .bind(name)
+            .bind(slug)
+            .execute(pool)
+            .await?;
+
+        Ok(department_id)
+    }
+
+    async fn insert_user(
+        pool: &PgPool,
+        org_id: Uuid,
+        name: &str,
+        role: &str,
+        department_id: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind(name)
+            .bind(org_id)
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO org_members (user_id, org_id, department_id, role) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(user_id)
+        .bind(org_id)
+        .bind(department_id)
+        .bind(role)
+        .execute(pool)
+        .await?;
+
+        Ok(user_id)
     }
 
     async fn insert_dashboard_metrics_fixture(
@@ -2659,15 +2999,74 @@ mod tests {
         tool_mixed_lines: i32,
         tool_accepted: i32,
     ) -> anyhow::Result<()> {
+        insert_dashboard_metric_row_with_tool(
+            pool,
+            user_id,
+            org_id,
+            timestamp,
+            repo_url,
+            commit_sha,
+            total_lines,
+            total_ai_lines,
+            "codex::gpt-5",
+            tool_ai_lines,
+            tool_mixed_lines,
+            tool_accepted,
+        )
+        .await?;
+
+        sqlx::query(
+            r#"UPDATE metrics_tool_model_events
+            SET mixed_additions = $1, ai_accepted = $2
+            WHERE org_id = $3 AND user_id = $4 AND timestamp = $5 AND tool_model = 'codex::gpt-5'"#,
+        )
+        .bind(i64::from(tool_mixed_lines))
+        .bind(i64::from(tool_accepted))
+        .bind(org_id)
+        .bind(user_id)
+        .bind(timestamp)
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"UPDATE metrics_daily_rollups
+            SET mixed_lines = $1, ai_accepted = $2
+            WHERE org_id = $3 AND user_id = $4 AND repo_url = $5 AND tool_model = 'codex::gpt-5'"#,
+        )
+        .bind(i64::from(tool_mixed_lines))
+        .bind(i64::from(tool_accepted))
+        .bind(org_id)
+        .bind(user_id)
+        .bind(repo_url)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_dashboard_metric_row_with_tool(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        timestamp: i64,
+        repo_url: &str,
+        commit_sha: &str,
+        total_lines: i32,
+        total_ai_lines: i32,
+        tool_model: &str,
+        tool_ai_lines: i32,
+        tool_mixed_lines: i32,
+        tool_accepted: i32,
+    ) -> anyhow::Result<()> {
         let raw_values = serde_json::json!({
-            "3": ["all", "codex::gpt-5"],
-            "4": [tool_mixed_lines, tool_mixed_lines],
+            "3": ["all", tool_model],
+            "4": [0, 0],
             "5": [total_ai_lines, tool_ai_lines],
-            "6": [tool_accepted, tool_accepted],
+            "6": [0, 0],
             "7": [total_ai_lines, tool_ai_lines],
             "8": [0, 0],
         });
-        let tool_model_pairs = serde_json::json!(["all", "codex::gpt-5"]);
+        let tool_model_pairs = serde_json::json!(["all", tool_model]);
 
         let metric_event_id: i64 = sqlx::query_scalar(
             r#"INSERT INTO metrics_events (
@@ -2698,16 +3097,16 @@ mod tests {
                 metric_event_id, org_id, user_id, timestamp, tool_model,
                 ai_additions, mixed_additions, ai_accepted,
                 total_ai_additions, total_ai_deletions
-            ) VALUES ($1, $2, $3, $4, 'codex::gpt-5', $5, $6, $7, $8, 0)"#,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $6, 0)"#,
         )
         .bind(metric_event_id)
         .bind(org_id)
         .bind(user_id)
         .bind(timestamp)
+        .bind(tool_model)
         .bind(i64::from(tool_ai_lines))
         .bind(i64::from(tool_mixed_lines))
         .bind(i64::from(tool_accepted))
-        .bind(i64::from(tool_ai_lines))
         .execute(pool)
         .await?;
 
@@ -2717,7 +3116,7 @@ mod tests {
                 commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
             ) VALUES
             ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, '', 1, $5, $6, $7, $8, $9),
-            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, 'codex::gpt-5', 1, 0, $10, 0, $11, $12)"#,
+            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, $10, 1, 0, $11, 0, $12, $13)"#,
         )
         .bind(timestamp)
         .bind(org_id)
@@ -2726,8 +3125,9 @@ mod tests {
         .bind(i64::from(total_lines))
         .bind(i64::from(total_ai_lines))
         .bind(i64::from(total_lines - total_ai_lines))
-        .bind(i64::from(tool_mixed_lines))
-        .bind(i64::from(tool_accepted))
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(tool_model)
         .bind(i64::from(tool_ai_lines))
         .bind(i64::from(tool_mixed_lines))
         .bind(i64::from(tool_accepted))
@@ -2735,6 +3135,136 @@ mod tests {
         .await?;
 
         Ok(())
+    }
+
+    fn aggregate_query(
+        org: Option<String>,
+        since: Option<String>,
+        limit: Option<i64>,
+        cursor: Option<String>,
+    ) -> AggregateQuery {
+        AggregateQuery {
+            org,
+            since,
+            until: None,
+            limit,
+            cursor,
+        }
+    }
+
+    fn global_admin_auth(user_id: Uuid) -> DashboardAuth {
+        DashboardAuth(AuthIdentity {
+            user_id,
+            email: format!("{user_id}@example.com"),
+            name: "Global Admin".into(),
+            org_id: None,
+            org_slug: None,
+            department_id: None,
+            role: Some("owner".into()),
+            scopes: vec![],
+            auth_method: AuthMethod::BearerToken,
+        })
+    }
+
+    fn org_admin_auth(user_id: Uuid, org_id: Uuid, org_slug: &str) -> DashboardAuth {
+        DashboardAuth(AuthIdentity {
+            user_id,
+            email: format!("{user_id}@example.com"),
+            name: "Org Admin".into(),
+            org_id: Some(org_id),
+            org_slug: Some(org_slug.to_string()),
+            department_id: None,
+            role: Some("admin".into()),
+            scopes: vec![],
+            auth_method: AuthMethod::BearerToken,
+        })
+    }
+
+    fn string_values(page: &Value, list_key: &str, field: &str) -> Vec<String> {
+        page[list_key]
+            .as_array()
+            .expect("response field should be an array")
+            .iter()
+            .map(|entry| {
+                entry[field]
+                    .as_str()
+                    .expect("field should be a string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn pair_values(
+        page: &Value,
+        list_key: &str,
+        first_field: &str,
+        second_field: &str,
+    ) -> Vec<(String, String)> {
+        page[list_key]
+            .as_array()
+            .expect("response field should be an array")
+            .iter()
+            .map(|entry| {
+                (
+                    entry[first_field]
+                        .as_str()
+                        .expect("first field should be a string")
+                        .to_string(),
+                    entry[second_field]
+                        .as_str()
+                        .expect("second field should be a string")
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn required_next_cursor(page: &Value) -> String {
+        page["pagination"]["next_cursor"]
+            .as_str()
+            .expect("page should include next_cursor")
+            .to_string()
+    }
+
+    fn test_config(database_url: &str) -> AppConfig {
+        AppConfig {
+            database_url: database_url.to_string(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: "dashboard-test-secret".to_string(),
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_bucket: "git-ai-cas".to_string(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_region: "us-east-1".to_string(),
+            cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
+            metrics_rollup_write_mode: MetricsRollupWriteMode::Sync,
+            metrics_rollup_worker_enabled: false,
+            metrics_rollup_worker_interval_seconds: 5,
+            metrics_rollup_worker_batch_size: 100,
+            dashboard_use_rollups: false,
+            rate_limit_metrics_max_requests: 60,
+            rate_limit_metrics_window_seconds: 60,
+            rate_limit_cas_upload_max_requests: 30,
+            rate_limit_cas_upload_window_seconds: 60,
+            rate_limit_cas_read_max_requests: 100,
+            rate_limit_cas_read_window_seconds: 60,
+            rate_limit_oauth_max_requests: 600,
+            rate_limit_oauth_window_seconds: 60,
+            rate_limit_auth_max_requests: 300,
+            rate_limit_auth_window_seconds: 60,
+            rate_limit_admin_max_requests: 300,
+            rate_limit_admin_window_seconds: 60,
+            rate_limit_default_max_requests: 300,
+            rate_limit_default_window_seconds: 60,
+            base_url: "http://localhost:8080".to_string(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
     }
 
     fn test_database_url() -> String {
