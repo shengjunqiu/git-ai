@@ -4,7 +4,7 @@ use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::auth::middleware::{AdminGuard, request_id_middleware};
+use crate::auth::middleware::{request_id_middleware, AdminGuard};
 use crate::config::AppConfig;
 use crate::services::cas::CasStore;
 use crate::services::rate_limit::RateLimiter;
@@ -42,26 +42,18 @@ pub fn build_router(state: AppState) -> Router {
             "/worker/oauth/device/code",
             post(crate::handlers::oauth::device_code),
         )
-        .route(
-            "/worker/oauth/token",
-            post(crate::handlers::oauth::token),
-        )
+        .route("/worker/oauth/token", post(crate::handlers::oauth::token))
         // OAuth verification page
         .route(
             "/verify",
-            get(crate::handlers::verify::verify_page)
-                .post(crate::handlers::verify::verify_submit),
+            get(crate::handlers::verify::verify_page).post(crate::handlers::verify::verify_submit),
         )
         // Dashboard login / logout
         .route(
             "/login",
-            get(crate::handlers::login::login_page)
-                .post(crate::handlers::login::login_submit),
+            get(crate::handlers::login::login_page).post(crate::handlers::login::login_submit),
         )
-        .route(
-            "/logout",
-            get(crate::handlers::login::logout),
-        )
+        .route("/logout", get(crate::handlers::login::logout))
         // Developer account auth / CLI browser authorization
         .route(
             "/auth/register",
@@ -70,13 +62,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/auth/login",
-            get(crate::handlers::auth_pages::login_page)
-                .post(crate::handlers::auth_api::login),
+            get(crate::handlers::auth_pages::login_page).post(crate::handlers::auth_api::login),
         )
-        .route(
-            "/auth/logout",
-            post(crate::handlers::auth_api::logout),
-        )
+        .route("/auth/logout", post(crate::handlers::auth_api::logout))
         .route(
             "/auth/organizations",
             get(crate::handlers::auth_api::organizations),
@@ -100,14 +88,8 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::handlers::client_status::update_client_status),
         )
         // CAS
-        .route(
-            "/worker/cas/upload",
-            post(crate::handlers::cas::upload_cas),
-        )
-        .route(
-            "/worker/cas",
-            get(crate::handlers::cas::read_cas),
-        )
+        .route("/worker/cas/upload", post(crate::handlers::cas::upload_cas))
+        .route("/worker/cas", get(crate::handlers::cas::read_cas))
         // Releases
         .route(
             "/worker/releases",
@@ -146,16 +128,17 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::handlers::report::upload_summary),
         )
         // Bundles
-        .route(
-            "/api/bundles",
-            post(crate::handlers::bundle::create_bundle),
-        )
+        .route("/api/bundles", post(crate::handlers::bundle::create_bundle))
         // Bundle public share page
         .route(
             "/bundle/{id}",
             get(crate::handlers::bundle_view::view_bundle),
         )
         // Dashboard
+        .route(
+            "/static/{*path}",
+            get(crate::handlers::dashboard::dashboard_static_asset),
+        )
         .route("/me", get(crate::handlers::dashboard::dashboard_me))
         .route(
             "/api/v1/aggregate/summary",
@@ -236,8 +219,7 @@ pub fn build_router(state: AppState) -> Router {
         // Admin: API Keys
         .route(
             "/api/admin/api-keys",
-            post(crate::handlers::admin::create_api_key)
-                .get(crate::handlers::admin::list_api_keys),
+            post(crate::handlers::admin::create_api_key).get(crate::handlers::admin::list_api_keys),
         )
         .route(
             "/api/admin/api-keys/{id}",

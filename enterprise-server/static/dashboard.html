@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>git-ai 企业仪表盘</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <script>
+        const isAdmin = __GITAI_IS_ADMIN__;
+        const currentUserId = __GITAI_CURRENT_USER_ID_JSON__;
+    </script>
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="sidebar-logo"><span>git-ai</span> Enterprise</div>
+            <div class="sidebar-subtitle">AI 代码归属分析平台</div>
+
+            <div class="nav-section">数据概览</div>
+            <a class="nav-item active" onclick="showSection('overview')">
+                <span class="nav-icon">📊</span> 总览
+            </a>
+            <a class="nav-item" onclick="showSection('trends')">
+                <span class="nav-icon">📈</span> 趋势分析
+            </a>
+            <a class="nav-item" onclick="showSection('organizations')">
+                <span class="nav-icon">🏢</span> 组织
+            </a>
+            <a class="nav-item" onclick="showSection('departments')">
+                <span class="nav-icon">🏷️</span> 部门
+            </a>
+            <a class="nav-item" onclick="showSection('developers')">
+                <span class="nav-icon">👥</span> 开发者
+            </a>
+            <a class="nav-item" onclick="showSection('projects')">
+                <span class="nav-icon">📁</span> 项目
+            </a>
+            <a class="nav-item" onclick="showSection('tools')">
+                <span class="nav-icon">🤖</span> AI 工具
+            </a>
+
+            <div class="nav-section" id="admin-nav-section">系统管理</div>
+            <a class="nav-item" id="admin-nav-users" onclick="showSection('users')">
+                <span class="nav-icon">👤</span> 用户管理
+            </a>
+            <a class="nav-item" id="admin-nav-apikeys" onclick="showSection('apikeys')">
+                <span class="nav-icon">🔑</span> API 密钥
+            </a>
+
+            <div class="sidebar-footer">
+                <div class="sidebar-user">
+                    <div class="sidebar-user-avatar">__GITAI_USER_INITIAL__</div>
+                    <div class="sidebar-user-meta">
+                        <div class="sidebar-user-top">
+                            <div class="sidebar-user-name" title="__GITAI_USER_NAME__">__GITAI_USER_NAME__</div>
+                            <div class="sidebar-user-role">__GITAI_USER_ROLE_LABEL__</div>
+                        </div>
+                        <div class="sidebar-user-email" title="__GITAI_USER_EMAIL__">__GITAI_USER_EMAIL__</div>
+                    </div>
+                    <div class="sidebar-gitai" id="sidebar-gitai">
+                        <span class="sidebar-gitai-dot" id="sidebar-gitai-dot"></span>
+                        <div class="sidebar-gitai-content">
+                            <div class="sidebar-gitai-status" id="sidebar-gitai-status">git-ai 检测中</div>
+                            <div class="sidebar-gitai-detail" id="sidebar-gitai-detail">正在读取状态</div>
+                        </div>
+                    </div>
+                </div>
+                <button class="logout-btn" onclick="window.location.href='/logout'">
+                    <span>↪</span> 退出登录
+                </button>
+            </div>
+        </aside>
+
+        <main class="main">
+            <!-- Overview Section -->
+            <div id="section-overview" class="section active">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">数据总览</div>
+                        <div class="page-subtitle">AI 代码归属分析 - 组织级概览</div>
+                    </div>
+                    <div class="toolbar">
+                        <select id="time-range" onchange="refreshCurrentSection()">
+                            <option value="7d">最近 7 天</option>
+                            <option value="30d" selected>最近 30 天</option>
+                            <option value="90d">最近 90 天</option>
+                            <option value="all">全部时间</option>
+                        </select>
+                        <div class="refresh-info">
+                            <span class="refresh-dot"></span>
+                            <span id="last-refresh">刷新中...</span>
+                        </div>
+                        <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                    </div>
+                </div>
+                <div class="stats-grid" id="overview-stats">
+                    <div class="stat-card" id="gitai-status-card" style="display:none"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
+                    <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
+                    <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
+                    <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
+                    <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
+                    <div class="stat-card" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
+                    <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-title" id="overview-trend-title">AI 代码趋势（最近 30 天）</div>
+                    <div class="chart-container">
+                        <canvas id="overview-trend-chart"></canvas>
+                        <div id="overview-trend-empty" class="empty-state" style="display:none;padding:2rem"><p>暂无趋势数据</p></div>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <div class="table-header">
+                        <div class="table-title">AI 使用量 Top 开发者</div>
+                    </div>
+                    <div id="top-developers" style="padding: 1rem;">
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trends Section -->
+            <div id="section-trends" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">趋势分析</div>
+                        <div class="page-subtitle">AI 代码归属随时间的变化趋势</div>
+                    </div>
+                    <div class="toolbar">
+                        <select id="trend-metric" onchange="loadTrends()">
+                            <option value="ai_ratio">AI 占比</option>
+                            <option value="ai_lines">AI 代码行数</option>
+                            <option value="human_lines">非 AI 代码行数</option>
+                            <option value="commits">提交数</option>
+                        </select>
+                        <select id="trend-granularity" onchange="loadTrends()">
+                            <option value="day">按天</option>
+                            <option value="week" selected>按周</option>
+                            <option value="month">按月</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <div class="chart-title" id="trend-chart-title">AI 代码占比趋势（按周）</div>
+                    <div class="chart-container" style="height: 400px;"><canvas id="trend-chart"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <div class="chart-title">AI 工具对比</div>
+                    <div class="chart-container" style="height: 350px;"><canvas id="agent-comparison-chart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Organizations Section -->
+            <div id="section-organizations" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">组织</div>
+                        <div class="page-subtitle">按组织查看 AI 代码归属分析</div>
+                    </div>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                        <tbody id="org-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Developers Section -->
+            <div id="section-developers" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">开发者</div>
+                        <div class="page-subtitle">开发者个人 AI 使用统计</div>
+                    </div>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>开发者</th><th>部门</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th><th>操作</th></tr></thead>
+                        <tbody id="dev-table"><tr><td colspan="8">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Projects Section -->
+            <div id="section-projects" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">项目</div>
+                        <div class="page-subtitle">项目级 AI 代码归属分析</div>
+                    </div>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                        <tbody id="proj-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tools Section -->
+            <div id="section-tools" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">AI 工具</div>
+                        <div class="page-subtitle">各 AI 工具和模型的使用情况</div>
+                    </div>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>工具 / 模型</th><th>AI 代码行</th><th>混合代码行</th><th>AI 采纳数</th><th>AI 总代码</th></tr></thead>
+                        <tbody id="tools-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Users Management Section -->
+            <div id="section-users" class="section admin-only">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">用户管理</div>
+                        <div class="page-subtitle">管理系统用户及其关联的 API 密钥</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="showCreateUserModal()">+ 创建用户</button>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>用户名</th><th>邮箱</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+                        <tbody id="users-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Departments Section -->
+            <div id="section-departments" class="section">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">部门</div>
+                        <div class="page-subtitle">按部门查看 AI 代码归属分析</div>
+                    </div>
+                    <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>组织</th><th>部门</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                        <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- API Keys Management Section -->
+            <div id="section-apikeys" class="section admin-only">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">API 密钥管理</div>
+                        <div class="page-subtitle">创建和管理 API 访问密钥</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="showCreateApiKeyModal()">+ 创建密钥</button>
+                </div>
+                <div class="table-card">
+                    <table>
+                        <thead><tr><th>名称</th><th>前缀</th><th>权限范围</th><th>创建时间</th><th>过期时间</th><th>最后使用</th><th>操作</th></tr></thead>
+                        <tbody id="apikeys-table"><tr><td colspan="7">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal Container -->
+    <div id="modal-container"></div>
+
+    <script>
+        const name = __GITAI_USER_NAME_JSON__;
+        const email = __GITAI_USER_EMAIL_JSON__;
+    </script>
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

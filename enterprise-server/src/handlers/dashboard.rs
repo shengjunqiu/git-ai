@@ -1,8 +1,10 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::path::{Component, PathBuf};
 use url::Url;
 use uuid::Uuid;
 
@@ -17,8 +19,51 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         Some(a) => a,
         None => return Redirect::to("/auth/login?return_to=/me").into_response(),
     };
+
+    match render_dashboard_template(&auth) {
+        Ok(html) => Html(html).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// GET /static/*path — Dashboard static assets.
+pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl IntoResponse {
+    let relative_path = match sanitize_static_asset_path(&asset_path) {
+        Some(path) => path,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let static_dir = match dashboard_static_dir() {
+        Ok(path) => path,
+        Err(error) => return error.into_response(),
+    };
+    let file_path = static_dir.join(relative_path);
+    let bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let content_type = dashboard_asset_content_type(&file_path);
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result<String, AppError> {
+    let template_path = dashboard_template_path()?;
+    let template = std::fs::read_to_string(&template_path).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to read dashboard template {}: {}",
+            template_path.display(),
+            error
+        ))
+    })?;
+
     let is_admin = auth.is_admin();
-    let user_id_str = auth.user_id.to_string();
     let user_initial = auth
         .name
         .chars()
@@ -26,1532 +71,97 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .unwrap_or('G')
         .to_string();
     let user_role_label = if is_admin { "管理员" } else { "开发者" };
-    Html(format!(
-        r##"<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>git-ai 企业仪表盘</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <style>
-        :root {{
-            font-size: 112.5%;
-            --bg-primary: #0f172a;
-            --bg-card: #1e293b;
-            --bg-card-hover: #263548;
-            --border: #334155;
-            --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent: #818cf8;
-            --accent-light: #6366f1;
-            --success: #34d399;
-            --warning: #fbbf24;
-            --danger: #f87171;
-        }}
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        html, body {{ height: 100%; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-                background: var(--bg-primary); color: var(--text-primary); overflow: hidden; }}
-        .layout {{ display: flex; height: 100vh; height: 100dvh; min-height: 100vh; overflow: hidden; }}
 
-        /* Sidebar */
-        .sidebar {{ width: 260px; background: var(--bg-card); border-right: 1px solid var(--border);
-                    padding: 1.5rem; flex-shrink: 0; display: flex; flex-direction: column;
-                    height: 100vh; height: 100dvh; min-height: 0; overflow-y: auto; }}
-        .sidebar-logo {{ font-size: 1.25rem; font-weight: 800; margin-bottom: 0.25rem; }}
-        .sidebar-logo span {{ color: var(--accent); }}
-        .sidebar-subtitle {{ color: var(--text-muted); font-size: 0.75rem; margin-bottom: 2rem; }}
-        .nav-item {{ display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem;
-                     border-radius: 8px; color: var(--text-secondary); text-decoration: none;
-                     font-size: 0.875rem; margin-bottom: 0.25rem; transition: all 0.15s; cursor: pointer; }}
-        .nav-item:hover {{ background: var(--bg-card-hover); color: var(--text-primary); }}
-        .nav-item.active {{ background: rgba(129,140,248,0.15); color: var(--accent); }}
-        .nav-icon {{ width: 20px; text-align: center; font-size: 1rem; }}
-        .nav-section {{ color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase;
-                        letter-spacing: 0.1em; margin: 1.5rem 0 0.5rem 0.75rem; }}
-        .sidebar-footer {{ margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.6rem; }}
-        .sidebar-user {{ display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 0.65rem; align-items: center; padding: 0.75rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 10px; background: rgba(15,23,42,0.42); }}
-        .sidebar-user-avatar {{ width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.95rem; font-weight: 700; background: linear-gradient(135deg, var(--accent-light), var(--accent)); box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset; }}
-        .sidebar-user-meta {{ min-width: 0; }}
-        .sidebar-user-top {{ display: flex; align-items: center; gap: 0.45rem; min-width: 0; }}
-        .sidebar-user-name {{ min-width: 0; color: var(--text-primary); font-size: 0.86rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .sidebar-user-role {{ flex-shrink: 0; padding: 0.08rem 0.35rem; border-radius: 999px; color: var(--accent); background: rgba(129,140,248,0.12); border: 1px solid rgba(129,140,248,0.18); font-size: 0.62rem; font-weight: 650; line-height: 1.4; }}
-        .sidebar-user-email {{ margin-top: 0.18rem; color: var(--text-muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-        .sidebar-gitai {{ display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 0.55rem; align-items: center; margin: 0.75rem 0 0; min-width: 0; padding: 0.55rem 0.65rem; border: 1px solid rgba(148,163,184,0.14); border-radius: 8px; background: rgba(15,23,42,0.38); }}
-        .sidebar-gitai.online {{ border-color: rgba(52,211,153,0.18); background: rgba(52,211,153,0.07); }}
-        .sidebar-gitai.offline {{ border-color: rgba(248,113,113,0.18); background: rgba(248,113,113,0.07); }}
-        .sidebar-gitai.error {{ border-color: rgba(251,191,36,0.2); background: rgba(251,191,36,0.07); }}
-        .sidebar-gitai-dot {{ width: 7px; height: 7px; border-radius: 999px; background: var(--text-muted); }}
-        .sidebar-gitai-dot.online {{ background: var(--success); }}
-        .sidebar-gitai-dot.offline {{ background: var(--danger); }}
-        .sidebar-gitai-dot.error {{ background: var(--warning); }}
-        .sidebar-gitai-content {{ min-width: 0; line-height: 1.25; }}
-        .sidebar-gitai-status {{ color: var(--text-primary); font-size: 0.72rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .sidebar-gitai-detail {{ color: var(--text-muted); font-size: 0.66rem; margin-top: 0.16rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .logout-btn {{ display: flex; align-items: center; justify-content: center; gap: 0.45rem; padding: 0.58rem 0.75rem; color: var(--text-secondary);
-                       font-size: 0.78rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; background: transparent; width: 100%;
-                       border-radius: 8px; transition: all 0.15s; }}
-        .logout-btn:hover {{ background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.16); color: var(--danger); }}
-
-        /* Main content */
-        .main {{ flex: 1; min-width: 0; height: 100vh; height: 100dvh; min-height: 0; padding: 2rem; overflow-y: auto; }}
-        .page-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }}
-        .page-title {{ font-size: 1.75rem; font-weight: 700; }}
-        .page-subtitle {{ color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.25rem; }}
-
-        /* Toolbar */
-        .toolbar {{ display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }}
-        .refresh-info {{ color: var(--text-muted); font-size: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }}
-        .refresh-dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: pulse 2s infinite; }}
-        @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.4; }} }}
-        .btn {{ padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border);
-                background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem;
-                cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 0.5rem; }}
-        .btn:hover {{ background: var(--bg-card-hover); border-color: var(--accent); }}
-        .btn-primary {{ background: linear-gradient(135deg, #6366f1, #818cf8); border: none; color: white; }}
-        .btn-primary:hover {{ opacity: 0.9; }}
-        .btn-danger {{ border-color: var(--danger); color: var(--danger); }}
-        .btn-danger:hover {{ background: rgba(248,113,113,0.1); }}
-        .btn-sm {{ padding: 0.35rem 0.75rem; font-size: 0.75rem; }}
-        select {{ padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border);
-                  background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem; cursor: pointer; }}
-        select:focus {{ outline: none; border-color: var(--accent); }}
-
-        /* Stats cards */
-        .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                       gap: 1rem; margin-bottom: 2rem; }}
-        .stat-card {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-                      padding: 1.25rem; transition: border-color 0.15s; }}
-        .stat-card:hover {{ border-color: var(--accent); }}
-        .stat-label {{ color: var(--text-muted); font-size: 0.75rem; letter-spacing: 0.05em; margin-bottom: 0.5rem; }}
-        .stat-value {{ font-size: 1.75rem; font-weight: 700; }}
-        .stat-value.ai {{ color: var(--accent); }}
-        .stat-value.human {{ color: var(--success); }}
-        .stat-value.total {{ color: var(--text-primary); }}
-        .stat-value.pct {{ color: var(--warning); }}
-        .stat-detail {{ color: var(--text-muted); font-size: 0.75rem; margin-top: 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-
-        /* Data tables */
-        .table-card {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-                       overflow: hidden; margin-bottom: 1.5rem; }}
-        .table-header {{ display: flex; justify-content: space-between; align-items: center;
-                         padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }}
-        .table-title {{ font-size: 1rem; font-weight: 600; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th {{ text-align: left; padding: 0.75rem 1.25rem; color: var(--text-muted); font-size: 0.75rem;
-              text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border);
-              white-space: nowrap; }}
-        td {{ padding: 0.75rem 1.25rem; font-size: 0.875rem; border-bottom: 1px solid var(--border); }}
-        tr:last-child td {{ border-bottom: none; }}
-        tr:hover {{ background: var(--bg-card-hover); }}
-        .bar {{ height: 6px; border-radius: 3px; background: var(--border); min-width: 80px; }}
-        .bar-fill {{ height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent-light), var(--accent)); }}
-        .badge {{ display: inline-block; padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.7rem;
-                  font-weight: 600; }}
-        .badge.ai {{ background: rgba(129,140,248,0.2); color: var(--accent); }}
-        .badge.human {{ background: rgba(52,211,153,0.2); color: var(--success); }}
-        .badge.active {{ background: rgba(52,211,153,0.2); color: var(--success); }}
-        .badge.revoked {{ background: rgba(248,113,113,0.2); color: var(--danger); }}
-        .badge.role {{ background: rgba(129,140,248,0.2); color: var(--accent); }}
-
-        /* Sections */
-        .section {{ display: none; }}
-        .section.active {{ display: block; }}
-
-        /* Chart */
-        .chart-card {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-                       padding: 1.5rem; margin-bottom: 1.5rem; }}
-        .chart-title {{ font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }}
-        .chart-container {{ position: relative; height: 300px; }}
-        .chart-bar {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }}
-        .chart-label {{ width: 140px; text-align: right; font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .chart-track {{ flex: 1; height: 24px; background: var(--bg-primary); border-radius: 6px; overflow: hidden; position: relative; }}
-        .chart-fill {{ height: 100%; border-radius: 6px; display: flex; transition: width 0.5s ease; }}
-        .chart-fill .ai-part {{ background: var(--accent); flex-shrink: 0; }}
-        .chart-fill .human-part {{ background: var(--success); flex-shrink: 0; }}
-        .chart-value {{ font-size: 0.75rem; color: var(--text-muted); min-width: 50px; }}
-
-        /* Modal */
-        .modal-overlay {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                          background: rgba(0,0,0,0.6); display: flex; align-items: center;
-                          justify-content: center; z-index: 1000; }}
-        .modal {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
-                  padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto; }}
-        .modal-title {{ font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; }}
-        .form-group {{ margin-bottom: 1rem; }}
-        .form-label {{ display: block; color: var(--text-secondary); font-size: 0.8rem;
-                       margin-bottom: 0.5rem; font-weight: 500; }}
-        .form-input {{ width: 100%; padding: 0.625rem 0.875rem; border-radius: 8px;
-                       border: 1px solid var(--border); background: var(--bg-primary);
-                       color: var(--text-primary); font-size: 0.875rem; }}
-        .form-input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.2); }}
-        .form-input::placeholder {{ color: var(--text-muted); }}
-        .form-actions {{ display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem; }}
-        .api-key-display {{ background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px;
-                            padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem;
-                            color: var(--warning); word-break: break-all; margin-top: 0.5rem;
-                            position: relative; }}
-        .detail-list {{ border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }}
-        .detail-row {{ display: flex; justify-content: space-between; gap: 1rem; padding: 0.75rem 0.875rem;
-                       border-bottom: 1px solid var(--border); background: var(--bg-primary); }}
-        .detail-row:last-child {{ border-bottom: none; }}
-        .detail-label {{ color: var(--text-muted); font-size: 0.75rem; white-space: nowrap; }}
-        .detail-value {{ color: var(--text-primary); font-size: 0.875rem; text-align: right; overflow-wrap: anywhere; }}
-        .git-identity-list {{ display: grid; gap: 0.75rem; margin-top: 0.75rem; }}
-        .git-identity-item {{ border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); padding: 0.875rem; }}
-        .git-identity-name {{ color: var(--text-primary); font-weight: 600; margin-bottom: 0.25rem; }}
-        .git-identity-email {{ color: var(--text-secondary); font-size: 0.8rem; overflow-wrap: anywhere; }}
-        .copy-btn {{ position: absolute; top: 0.5rem; right: 0.5rem; padding: 0.25rem 0.5rem;
-                     font-size: 0.7rem; border-radius: 4px; border: 1px solid var(--border);
-                     background: var(--bg-card); color: var(--text-secondary); cursor: pointer; }}
-        .copy-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
-        .empty-state {{ text-align: center; padding: 3rem; color: var(--text-muted); }}
-        .empty-icon {{ font-size: 2.5rem; margin-bottom: 1rem; }}
-
-        /* Toast */
-        .toast {{ position: fixed; top: 1rem; right: 1rem; padding: 0.75rem 1.25rem;
-                   border-radius: 8px; font-size: 0.85rem; z-index: 2000;
-                   animation: slideIn 0.3s ease, fadeOut 0.3s ease 2.7s; }}
-        .toast.success {{ background: #065f46; color: #6ee7b7; border: 1px solid #059669; }}
-        .toast.error {{ background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }}
-        .toast.info {{ background: #1e3a5f; color: #93c5fd; border: 1px solid #3b82f6; }}
-        @keyframes slideIn {{ from {{ transform: translateX(100%); opacity: 0; }} to {{ transform: translateX(0); opacity: 1; }} }}
-        @keyframes fadeOut {{ from {{ opacity: 1; }} to {{ opacity: 0; }} }}
-
-        /* Responsive */
-        @media (max-width: 768px) {{
-            .sidebar {{ display: none; }}
-            .stats-grid {{ grid-template-columns: 1fr 1fr; }}
-            .page-header {{ flex-direction: column; align-items: flex-start; }}
-        }}
-    </style>
-    <script>
-        const isAdmin = {is_admin};
-        const currentUserId = '{user_id_str}';
-    </script>
-</head>
-<body>
-    <div class="layout">
-        <aside class="sidebar">
-            <div class="sidebar-logo"><span>git-ai</span> Enterprise</div>
-            <div class="sidebar-subtitle">AI 代码归属分析平台</div>
-
-            <div class="nav-section">数据概览</div>
-            <a class="nav-item active" onclick="showSection('overview')">
-                <span class="nav-icon">📊</span> 总览
-            </a>
-            <a class="nav-item" onclick="showSection('trends')">
-                <span class="nav-icon">📈</span> 趋势分析
-            </a>
-            <a class="nav-item" onclick="showSection('organizations')">
-                <span class="nav-icon">🏢</span> 组织
-            </a>
-            <a class="nav-item" onclick="showSection('departments')">
-                <span class="nav-icon">🏷️</span> 部门
-            </a>
-            <a class="nav-item" onclick="showSection('developers')">
-                <span class="nav-icon">👥</span> 开发者
-            </a>
-            <a class="nav-item" onclick="showSection('projects')">
-                <span class="nav-icon">📁</span> 项目
-            </a>
-            <a class="nav-item" onclick="showSection('tools')">
-                <span class="nav-icon">🤖</span> AI 工具
-            </a>
-
-            <div class="nav-section" id="admin-nav-section">系统管理</div>
-            <a class="nav-item" id="admin-nav-users" onclick="showSection('users')">
-                <span class="nav-icon">👤</span> 用户管理
-            </a>
-            <a class="nav-item" id="admin-nav-apikeys" onclick="showSection('apikeys')">
-                <span class="nav-icon">🔑</span> API 密钥
-            </a>
-
-            <div class="sidebar-footer">
-                <div class="sidebar-user">
-                    <div class="sidebar-user-avatar">{user_initial}</div>
-                    <div class="sidebar-user-meta">
-                        <div class="sidebar-user-top">
-                            <div class="sidebar-user-name" title="{name}">{name}</div>
-                            <div class="sidebar-user-role">{user_role_label}</div>
-                        </div>
-                        <div class="sidebar-user-email" title="{email}">{email}</div>
-                    </div>
-                    <div class="sidebar-gitai" id="sidebar-gitai">
-                        <span class="sidebar-gitai-dot" id="sidebar-gitai-dot"></span>
-                        <div class="sidebar-gitai-content">
-                            <div class="sidebar-gitai-status" id="sidebar-gitai-status">git-ai 检测中</div>
-                            <div class="sidebar-gitai-detail" id="sidebar-gitai-detail">正在读取状态</div>
-                        </div>
-                    </div>
-                </div>
-                <button class="logout-btn" onclick="window.location.href='/logout'">
-                    <span>↪</span> 退出登录
-                </button>
-            </div>
-        </aside>
-
-        <main class="main">
-            <!-- Overview Section -->
-            <div id="section-overview" class="section active">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">数据总览</div>
-                        <div class="page-subtitle">AI 代码归属分析 - 组织级概览</div>
-                    </div>
-                    <div class="toolbar">
-                        <select id="time-range" onchange="refreshCurrentSection()">
-                            <option value="7d">最近 7 天</option>
-                            <option value="30d" selected>最近 30 天</option>
-                            <option value="90d">最近 90 天</option>
-                            <option value="all">全部时间</option>
-                        </select>
-                        <div class="refresh-info">
-                            <span class="refresh-dot"></span>
-                            <span id="last-refresh">刷新中...</span>
-                        </div>
-                        <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
-                    </div>
-                </div>
-                <div class="stats-grid" id="overview-stats">
-                    <div class="stat-card" id="gitai-status-card" style="display:none"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
-                    <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
-                    <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
-                    <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
-                    <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
-                    <div class="stat-card" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
-                    <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
-                </div>
-
-                <div class="chart-card">
-                    <div class="chart-title" id="overview-trend-title">AI 代码趋势（最近 30 天）</div>
-                    <div class="chart-container">
-                        <canvas id="overview-trend-chart"></canvas>
-                        <div id="overview-trend-empty" class="empty-state" style="display:none;padding:2rem"><p>暂无趋势数据</p></div>
-                    </div>
-                </div>
-
-                <div class="table-card">
-                    <div class="table-header">
-                        <div class="table-title">AI 使用量 Top 开发者</div>
-                    </div>
-                    <div id="top-developers" style="padding: 1rem;">
-                        <p style="color: var(--text-muted); font-size: 0.875rem;">加载中...</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Trends Section -->
-            <div id="section-trends" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">趋势分析</div>
-                        <div class="page-subtitle">AI 代码归属随时间的变化趋势</div>
-                    </div>
-                    <div class="toolbar">
-                        <select id="trend-metric" onchange="loadTrends()">
-                            <option value="ai_ratio">AI 占比</option>
-                            <option value="ai_lines">AI 代码行数</option>
-                            <option value="human_lines">非 AI 代码行数</option>
-                            <option value="commits">提交数</option>
-                        </select>
-                        <select id="trend-granularity" onchange="loadTrends()">
-                            <option value="day">按天</option>
-                            <option value="week" selected>按周</option>
-                            <option value="month">按月</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="chart-card">
-                    <div class="chart-title" id="trend-chart-title">AI 代码占比趋势（按周）</div>
-                    <div class="chart-container" style="height: 400px;"><canvas id="trend-chart"></canvas></div>
-                </div>
-                <div class="chart-card">
-                    <div class="chart-title">AI 工具对比</div>
-                    <div class="chart-container" style="height: 350px;"><canvas id="agent-comparison-chart"></canvas></div>
-                </div>
-            </div>
-
-            <!-- Organizations Section -->
-            <div id="section-organizations" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">组织</div>
-                        <div class="page-subtitle">按组织查看 AI 代码归属分析</div>
-                    </div>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="org-table"><tr><td colspan="5">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Developers Section -->
-            <div id="section-developers" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">开发者</div>
-                        <div class="page-subtitle">开发者个人 AI 使用统计</div>
-                    </div>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>开发者</th><th>部门</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th><th>操作</th></tr></thead>
-                        <tbody id="dev-table"><tr><td colspan="8">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Projects Section -->
-            <div id="section-projects" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">项目</div>
-                        <div class="page-subtitle">项目级 AI 代码归属分析</div>
-                    </div>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="proj-table"><tr><td colspan="6">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Tools Section -->
-            <div id="section-tools" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">AI 工具</div>
-                        <div class="page-subtitle">各 AI 工具和模型的使用情况</div>
-                    </div>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>工具 / 模型</th><th>AI 代码行</th><th>混合代码行</th><th>AI 采纳数</th><th>AI 总代码</th></tr></thead>
-                        <tbody id="tools-table"><tr><td colspan="5">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Users Management Section -->
-            <div id="section-users" class="section admin-only">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">用户管理</div>
-                        <div class="page-subtitle">管理系统用户及其关联的 API 密钥</div>
-                    </div>
-                    <button class="btn btn-primary" onclick="showCreateUserModal()">+ 创建用户</button>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>用户名</th><th>邮箱</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
-                        <tbody id="users-table"><tr><td colspan="5">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Departments Section -->
-            <div id="section-departments" class="section">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">部门</div>
-                        <div class="page-subtitle">按部门查看 AI 代码归属分析</div>
-                    </div>
-                    <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>组织</th><th>部门</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- API Keys Management Section -->
-            <div id="section-apikeys" class="section admin-only">
-                <div class="page-header">
-                    <div>
-                        <div class="page-title">API 密钥管理</div>
-                        <div class="page-subtitle">创建和管理 API 访问密钥</div>
-                    </div>
-                    <button class="btn btn-primary" onclick="showCreateApiKeyModal()">+ 创建密钥</button>
-                </div>
-                <div class="table-card">
-                    <table>
-                        <thead><tr><th>名称</th><th>前缀</th><th>权限范围</th><th>创建时间</th><th>过期时间</th><th>最后使用</th><th>操作</th></tr></thead>
-                        <tbody id="apikeys-table"><tr><td colspan="7">加载中...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- Modal Container -->
-    <div id="modal-container"></div>
-
-    <script>
-        const name = "{name}";
-        const email = "{email}";
-        const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
-        const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${{Math.min(pct,100)}}%"></div></div>`;
-        function escapeHtml(value) {{
-            const div = document.createElement('div');
-            div.textContent = value ?? '';
-            return div.innerHTML;
-        }}
-        function fmtTimeAgo(value) {{
-            if (!value) return '从未';
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) return '未知';
-            const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-            if (seconds < 60) return '刚刚';
-            const minutes = Math.floor(seconds / 60);
-            if (minutes < 60) return `${{minutes}} 分钟前`;
-            const hours = Math.floor(minutes / 60);
-            if (hours < 24) return `${{hours}} 小时前`;
-            const days = Math.floor(hours / 24);
-            return `${{days}} 天前`;
-        }}
-
-        // --- Auto refresh ---
-        let refreshInterval = null;
-        const AUTO_REFRESH_MS = 60000; // 60 seconds
-        let currentSection = 'overview';
-
-        // Role-based UI: hide admin sections for non-admin users
-        if (!isAdmin) {{
-            document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
-            document.getElementById('admin-nav-section').style.display = 'none';
-            document.getElementById('admin-nav-users').style.display = 'none';
-            document.getElementById('admin-nav-apikeys').style.display = 'none';
-            document.getElementById('gitai-status-card').style.display = '';
-            document.getElementById('developer-count-card').style.display = 'none';
-        }}
-        document.getElementById('sidebar-gitai').style.display = 'none';
-
-        function startAutoRefresh() {{
-            stopAutoRefresh();
-            refreshInterval = setInterval(() => refreshCurrentSection(), AUTO_REFRESH_MS);
-        }}
-        function stopAutoRefresh() {{
-            if (refreshInterval) {{ clearInterval(refreshInterval); refreshInterval = null; }}
-        }}
-        function updateRefreshTime() {{
-            const now = new Date();
-            document.getElementById('last-refresh').textContent =
-                `上次刷新: ${{now.getHours().toString().padStart(2,'0')}}:${{now.getMinutes().toString().padStart(2,'0')}}:${{now.getSeconds().toString().padStart(2,'0')}}`;
-        }}
-
-        function refreshCurrentSection() {{
-            loadSection(currentSection);
-            if (!isAdmin) loadClientStatus();
-            updateRefreshTime();
-        }}
-
-        // --- Navigation ---
-        function showSection(id) {{
-            // Non-admin users cannot access admin sections
-            if (!isAdmin && (id === 'users' || id === 'apikeys')) {{
-                return;
-            }}
-            currentSection = id;
-            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.getElementById('section-' + id).classList.add('active');
-            event.currentTarget.classList.add('active');
-            loadSection(id);
-        }}
-
-        function loadSection(id) {{
-            switch(id) {{
-                case 'overview': loadOverview(); break;
-                case 'trends': loadTrends(); break;
-                case 'organizations': loadOrgs(); break;
-                case 'developers': loadDevs(); break;
-                case 'projects': loadProjects(); break;
-                case 'tools': loadTools(); break;
-                case 'users': loadUsers(); break;
-                case 'departments': loadDepartments(); break;
-                case 'apikeys': loadApiKeys(); break;
-            }}
-        }}
-
-        // --- Toast notifications ---
-        function showToast(message, type = 'info') {{
-            const existing = document.querySelector('.toast');
-            if (existing) existing.remove();
-            const toast = document.createElement('div');
-            toast.className = `toast ${{type}}`;
-            toast.textContent = message;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
-        }}
-
-        // --- Time range helper ---
-        function getTimeRangeParams() {{
-            const range = document.getElementById('time-range')?.value || '30d';
-            if (range === 'all') return '';
-            const days = parseInt(range);
-            const since = new Date(Date.now() - days * 86400000).toISOString();
-            return `since=${{encodeURIComponent(since)}}`;
-        }}
-        function withTimeRange(url) {{
-            const params = getTimeRangeParams();
-            if (!params) return url;
-            return `${{url}}${{url.includes('?') ? '&' : '?'}}${{params}}`;
-        }}
-        function getTimeRangeLabel() {{
-            const range = document.getElementById('time-range')?.value || '30d';
-            if (range === 'all') return '全部时间';
-            return `最近 ${{parseInt(range)}} 天`;
-        }}
-
-        // --- Chart instances ---
-        let overviewTrendChart = null;
-        let trendChart = null;
-        let agentComparisonChart = null;
-        let developerGitInfo = new Map();
-
-        // --- Overview ---
-        async function loadOverview() {{
-            const rangeLabel = getTimeRangeLabel();
-            document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${{rangeLabel}}）`;
-
-            const summaryPromise = (async () => {{
-                const r = await fetch(withTimeRange('/api/v1/aggregate/summary'));
-                const d = await r.json();
-                document.getElementById('s-commits').textContent = fmt(d.total_commits);
-                document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
-                document.getElementById('s-human-lines').textContent = fmt(d.total_human_lines);
-                document.getElementById('s-ai-pct').textContent = (d.pct_ai_lines || 0).toFixed(1) + '%';
-                if (isAdmin) document.getElementById('s-devs').textContent = fmt(d.total_developers);
-                document.getElementById('s-projects').textContent = fmt(d.total_projects);
-            }})().catch(e => console.error(e));
-
-            const developersPromise = (async () => {{
-                const r = await fetch(withTimeRange('/api/v1/aggregate/developers'));
-                const d = await r.json();
-                const top = [...(d.developers || [])]
-                    .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
-                    .slice(0, 5);
-                const maxLines = top.length ? Math.max(...top.map(x => x.total_added_lines || 0)) : 1;
-                document.getElementById('top-developers').innerHTML = top.map(dev => {{
-                    const total = dev.total_added_lines || 0;
-                    const ai = dev.ai_added_lines || 0;
-                    const human = dev.human_added_lines || 0;
-                    const aiW = maxLines > 0 ? (ai/maxLines*100) : 0;
-                    const humanW = maxLines > 0 ? (human/maxLines*100) : 0;
-                    const displayName = escapeHtml(dev.name || dev.email || '未知');
-                    const displayEmail = escapeHtml(dev.email || '');
-                    return `<div class="chart-bar">
-                        <div class="chart-label" title="${{displayName}} ${{displayEmail}}">${{displayName}}</div>
-                        <div class="chart-track"><div class="chart-fill"><div class="ai-part" style="width:${{aiW}}%"></div><div class="human-part" style="width:${{humanW}}%"></div></div></div>
-                        <div class="chart-value">${{fmt(total)}} <span class="badge ai">${{(ai/(total||1)*100).toFixed(0)}}% AI</span></div>
-                    </div>`;
-                }}).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
-            }})().catch(e => console.error(e));
-
-            const trendPromise = loadOverviewTrend();
-            await Promise.allSettled([summaryPromise, developersPromise, trendPromise]);
-        }}
-
-        async function loadClientStatus() {{
-            if (isAdmin) return;
-            const cardEl = document.getElementById('sidebar-gitai');
-            const statusEl = document.getElementById('sidebar-gitai-status');
-            const detailEl = document.getElementById('sidebar-gitai-detail');
-            const dotEl = document.getElementById('sidebar-gitai-dot');
-            const overviewStatusEl = document.getElementById('s-gitai-status');
-            const overviewDetailEl = document.getElementById('s-gitai-detail');
-            if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
-            try {{
-                const r = await fetch('/api/v1/client/status');
-                const d = await r.json();
-                if (!d.detected) {{
-                    if (overviewStatusEl) {{
-                        overviewStatusEl.textContent = '未检测到';
-                        overviewStatusEl.className = 'stat-value human';
-                    }}
-                    if (overviewDetailEl) {{
-                        overviewDetailEl.textContent = 'CLI 登录后会显示同步信息';
-                        overviewDetailEl.title = overviewDetailEl.textContent;
-                    }}
-                    if (statusEl && cardEl && dotEl && detailEl) {{
-                        statusEl.textContent = 'git-ai 未检测到';
-                        cardEl.className = 'sidebar-gitai';
-                        dotEl.className = 'sidebar-gitai-dot';
-                        detailEl.textContent = 'CLI 登录后会显示状态';
-                        detailEl.title = '';
-                    }}
-                    return;
-                }}
-
-                const loggedIn = d.status === 'logged_in';
-                const statusLabel = d.status_label || (loggedIn ? '已登录' : '已登出');
-                if (overviewStatusEl) {{
-                    overviewStatusEl.textContent = statusLabel;
-                    overviewStatusEl.className = loggedIn ? 'stat-value ai' : 'stat-value human';
-                }}
-                if (statusEl && cardEl && dotEl) {{
-                    statusEl.textContent = `git-ai ${{statusLabel}}`;
-                    cardEl.className = loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline';
-                    dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
-                }}
-
-                const parts = [];
-                if (d.last_seen_at) {{
-                    parts.push(`最近同步 ${{fmtTimeAgo(d.last_seen_at)}}`);
-                }} else if (d.last_status_at) {{
-                    parts.push(`最近状态 ${{fmtTimeAgo(d.last_status_at)}}`);
-                }}
-                if ((d.device_count || 0) > 1) parts.push(`${{d.device_count}} 台设备`);
-                if (d.cli_version) parts.push(`v${{d.cli_version}}`);
-                const syncDetail = parts.join(' · ') || '暂无同步记录';
-                if (overviewDetailEl) {{
-                    overviewDetailEl.textContent = syncDetail;
-                    overviewDetailEl.title = syncDetail;
-                }}
-                if (detailEl) detailEl.textContent = syncDetail;
-                const titleParts = [...parts];
-                if (d.hostname) titleParts.push(d.hostname);
-                if (d.os || d.arch) titleParts.push([d.os, d.arch].filter(Boolean).join('/'));
-                if (Array.isArray(d.devices) && d.devices.length > 1) {{
-                    titleParts.push(d.devices.map(device => {{
-                        const deviceName = device.hostname || device.device_key || 'unknown';
-                        const deviceStatus = device.status === 'logged_in' ? '已登录' : '已登出';
-                        return `${{deviceName}}: ${{deviceStatus}}`;
-                    }}).join(' / '));
-                }}
-                if (detailEl) detailEl.title = titleParts.join(' · ');
-            }} catch(e) {{
-                console.error(e);
-                if (overviewStatusEl) {{
-                    overviewStatusEl.textContent = '检测失败';
-                    overviewStatusEl.className = 'stat-value pct';
-                }}
-                if (overviewDetailEl) {{
-                    overviewDetailEl.textContent = '无法读取同步信息';
-                    overviewDetailEl.title = overviewDetailEl.textContent;
-                }}
-                if (statusEl && cardEl && dotEl && detailEl) {{
-                    statusEl.textContent = 'git-ai 检测失败';
-                    cardEl.className = 'sidebar-gitai error';
-                    dotEl.className = 'sidebar-gitai-dot error';
-                    detailEl.textContent = '无法读取状态';
-                    detailEl.title = '';
-                }}
-            }}
-        }}
-
-        async function loadOverviewTrend() {{
-            try {{
-                const r = await fetch(withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'));
-                const d = await r.json();
-                const data = d.data || [];
-                const canvas = document.getElementById('overview-trend-chart');
-                const empty = document.getElementById('overview-trend-empty');
-                if (data.length === 0) {{
-                    if (overviewTrendChart) {{
-                        overviewTrendChart.destroy();
-                        overviewTrendChart = null;
-                    }}
-                    canvas.style.display = 'none';
-                    empty.style.display = 'block';
-                    return;
-                }}
-                canvas.style.display = 'block';
-                empty.style.display = 'none';
-
-                const labels = data.map(p => p.period);
-                const aiValues = data.map(p => p.ai_lines);
-                const humanValues = data.map(p => p.human_lines);
-
-                if (overviewTrendChart) overviewTrendChart.destroy();
-                const ctx = canvas.getContext('2d');
-                overviewTrendChart = new Chart(ctx, {{
-                    type: 'line',
-                    data: {{
-                        labels,
-                        datasets: [
-                            {{ label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 }},
-                            {{ label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 }},
-                        ]
-                    }},
-                    options: {{
-                        responsive: true, maintainAspectRatio: false,
-                        plugins: {{ legend: {{ labels: {{ color: '#94a3b8' }} }} }},
-                        scales: {{
-                            x: {{ ticks: {{ color: '#64748b', maxRotation: 45 }}, grid: {{ color: '#1e293b' }} }},
-                            y: {{ ticks: {{ color: '#64748b' }}, grid: {{ color: '#1e293b' }} }},
-                        }}
-                    }}
-                }});
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        // --- Trends ---
-        async function loadTrends() {{
-            const metric = document.getElementById('trend-metric').value;
-            const granularity = document.getElementById('trend-granularity').value;
-
-            const metricLabels = {{ ai_ratio: 'AI 占比', ai_lines: 'AI 代码行数', human_lines: '非 AI 代码行数', commits: '提交数' }};
-            const granLabels = {{ day: '按天', week: '按周', month: '按月' }};
-            document.getElementById('trend-chart-title').textContent =
-                `${{metricLabels[metric]}}趋势（${{granLabels[granularity]}}）`;
-
-            try {{
-                const r = await fetch(`/api/v1/aggregate/trends?metric=${{metric}}&granularity=${{granularity}}`);
-                const d = await r.json();
-                const data = d.data || [];
-
-                const labels = data.map(p => p.period);
-                const values = data.map(p => p.value);
-
-                if (trendChart) trendChart.destroy();
-                const ctx = document.getElementById('trend-chart').getContext('2d');
-                trendChart = new Chart(ctx, {{
-                    type: 'line',
-                    data: {{
-                        labels,
-                        datasets: [{{
-                            label: metricLabels[metric],
-                            data: values,
-                            borderColor: '#818cf8',
-                            backgroundColor: 'rgba(129,140,248,0.15)',
-                            fill: true, tension: 0.3, pointRadius: 3,
-                        }}]
-                    }},
-                    options: {{
-                        responsive: true, maintainAspectRatio: false,
-                        plugins: {{ legend: {{ labels: {{ color: '#94a3b8' }} }} }},
-                        scales: {{
-                            x: {{ ticks: {{ color: '#64748b', maxRotation: 45 }}, grid: {{ color: '#1e293b' }} }},
-                            y: {{ ticks: {{ color: '#64748b' }}, grid: {{ color: '#1e293b' }} }},
-                        }}
-                    }}
-                }});
-            }} catch(e) {{ console.error(e); }}
-
-            // Agent comparison chart
-            try {{
-                const r = await fetch('/api/v1/aggregate/agent-comparison');
-                const d = await r.json();
-                const comps = (d.comparisons || []).slice(0, 10);
-                if (comps.length > 0) {{
-                    const labels = comps.map(c => c.tool_model);
-                    const aiData = comps.map(c => c.ai_additions || 0);
-
-                    if (agentComparisonChart) agentComparisonChart.destroy();
-                    const ctx = document.getElementById('agent-comparison-chart').getContext('2d');
-                    agentComparisonChart = new Chart(ctx, {{
-                        type: 'bar',
-                        data: {{
-                            labels,
-                            datasets: [{{
-                                label: 'AI 代码行数',
-                                data: aiData,
-                                backgroundColor: 'rgba(129,140,248,0.7)',
-                                borderColor: '#818cf8',
-                                borderWidth: 1,
-                            }}]
-                        }},
-                        options: {{
-                            responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-                            plugins: {{ legend: {{ labels: {{ color: '#94a3b8' }} }} }},
-                            scales: {{
-                                x: {{ ticks: {{ color: '#64748b' }}, grid: {{ color: '#1e293b' }} }},
-                                y: {{ ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#1e293b' }} }},
-                            }}
-                        }}
-                    }});
-                }}
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        // --- Organizations ---
-        async function loadOrgs() {{
-            try {{
-                const r = await fetch('/api/v1/aggregate/organizations');
-                const d = await r.json();
-                document.getElementById('org-table').innerHTML = (d.organizations || []).map(o => {{
-                    return `<tr>
-                        <td><strong>${{o.organization}}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${{o.org_slug || ''}}</span></td>
-                        <td>${{fmt(o.total_commits)}}</td>
-                        <td>${{fmt(o.w_ai)}}</td>
-                        <td>${{fmt(o.w_human)}}</td>
-                        <td>${{pctBar(o.pct_ai || 0)}} <span style="font-size:0.8rem">${{(o.pct_ai || 0).toFixed(1)}}%</span></td>
-                    </tr>`;
-                }}).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">暂无组织数据</td></tr>';
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        // --- Developers ---
-        async function loadDevs() {{
-            try {{
-                const r = await fetch('/api/v1/aggregate/developers');
-                const d = await r.json();
-                const developers = d.developers || [];
-                developerGitInfo = new Map();
-                if (developers.length === 0) {{
-                    document.getElementById('dev-table').innerHTML =
-                        '<tr><td colspan="8" style="color:var(--text-muted)">暂无开发者数据</td></tr>';
-                    return;
-                }}
-
-                document.getElementById('dev-table').innerHTML = developers.map(dev => {{
-                    const total = dev.total_added_lines || 0;
-                    const ai = dev.ai_added_lines || 0;
-                    const devId = dev.id || dev.email || '';
-                    const emailDisplay = escapeHtml(dev.email || '—');
-                    const nameDisplay = escapeHtml(dev.name || '');
-                    const departmentDisplay = escapeHtml(dev.department || '未设置');
-                    const label = dev.name && dev.name !== dev.email
-                        ? `<strong>${{nameDisplay}}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${{emailDisplay}}</span>`
-                        : `<strong>${{emailDisplay}}</strong>`;
-                    developerGitInfo.set(devId, {{
-                        name: dev.name || '',
-                        email: dev.email || '',
-                        department: dev.department || '',
-                        gitIdentities: dev.git_identities || []
-                    }});
-                    return `<tr>
-                        <td>${{label}}</td>
-                        <td>${{departmentDisplay}}</td>
-                        <td>${{fmt(dev.total_commits)}}</td>
-                        <td>${{fmt(total)}}</td>
-                        <td>${{fmt(ai)}}</td>
-                        <td>${{fmt(dev.human_added_lines)}}</td>
-                        <td>${{pctBar(dev.pct_ai || 0)}} <span style="font-size:0.8rem">${{(dev.pct_ai || 0).toFixed(1)}}%</span></td>
-                        <td><button class="btn btn-sm" onclick="showDeveloperGitInfo('${{devId}}')">Git 信息</button></td>
-                    </tr>`;
-                }}).join('');
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        function showDeveloperGitInfo(devId) {{
-            const info = developerGitInfo.get(devId);
-            if (!info) {{
-                showToast('未找到开发者 Git 信息', 'error');
-                return;
-            }}
-
-            const identities = info.gitIdentities || [];
-            const platformName = escapeHtml(info.name || '—');
-            const platformEmail = escapeHtml(info.email || '—');
-            const department = escapeHtml(info.department || '未设置');
-            const gitList = identities.length > 0
-                ? identities.map(identity => {{
-                    const gitName = escapeHtml(identity.name || '—');
-                    const gitEmail = escapeHtml(identity.email || '—');
-                    return `<div class="git-identity-item">
-                        <div class="git-identity-name">${{gitName}}</div>
-                        <div class="git-identity-email">${{gitEmail}}</div>
-                    </div>`;
-                }}).join('')
-                : '<div class="empty-state"><div class="empty-icon">ℹ️</div><p>暂无 Git 用户名和邮箱信息</p></div>';
-
-            document.getElementById('modal-container').innerHTML = `
-            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-                <div class="modal">
-                    <div class="modal-title">Git 信息</div>
-                    <div class="detail-list">
-                        <div class="detail-row"><span class="detail-label">平台注册用户名</span><span class="detail-value">${{platformName}}</span></div>
-                        <div class="detail-row"><span class="detail-label">平台注册邮箱</span><span class="detail-value">${{platformEmail}}</span></div>
-                        <div class="detail-row"><span class="detail-label">部门</span><span class="detail-value">${{department}}</span></div>
-                    </div>
-                    <div class="form-label">Git 用户名和邮箱</div>
-                    <div class="git-identity-list">${{gitList}}</div>
-                    <div class="form-actions">
-                        <button class="btn" onclick="closeModal()">关闭</button>
-                    </div>
-                </div>
-            </div>`;
-        }}
-
-        // --- Projects ---
-        async function loadProjects() {{
-            try {{
-                const r = await fetch('/api/v1/aggregate/projects');
-                const d = await r.json();
-                document.getElementById('proj-table').innerHTML = (d.projects || []).map(p => {{
-                    const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
-                    const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
-                    const branch = escapeHtml(p.branch || '—');
-                    return `<tr>
-                        <td title="${{displayUrl}}"><strong>${{displayName}}</strong></td>
-                        <td>${{branch}}</td>
-                        <td>${{fmt(p.total_commits)}}</td>
-                        <td>${{fmt(p.total_ai)}}</td>
-                        <td>${{fmt(p.total_human)}}</td>
-                        <td>${{pctBar(p.pct_ai || 0)}} <span style="font-size:0.8rem">${{(p.pct_ai || 0).toFixed(1)}}%</span></td>
-                    </tr>`;
-                }}).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无项目数据</td></tr>';
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        // --- Tools ---
-        async function loadTools() {{
-            try {{
-                const r = await fetch('/api/v1/aggregate/tools');
-                const d = await r.json();
-                const tools = (d.tools || []);
-                if (tools.length === 0) {{
-                    document.getElementById('tools-table').innerHTML =
-                        '<tr><td colspan="5" style="color:var(--text-muted)">暂无工具使用数据，数据将在报告上传或指标事件后显示</td></tr>';
-                    return;
-                }}
-                document.getElementById('tools-table').innerHTML = tools.map(t => {{
-                    const ai = t.ai_additions || 0;
-                    const mixed = t.mixed_additions || 0;
-                    const accepted = t.ai_accepted || 0;
-                    const total = t.total_ai_additions || ai;
-                    const source = t.source === 'report'
-                        ? '<span class="badge human" style="margin-left:0.5rem">报告</span>'
-                        : t.source === 'report+metrics'
-                            ? '<span class="badge human" style="margin-left:0.5rem">报告+指标</span>'
-                            : '<span class="badge ai" style="margin-left:0.5rem">指标</span>';
-                    return `<tr>
-                        <td><strong>${{t.tool_model}}</strong>${{source}}</td>
-                        <td>${{fmt(ai)}}</td>
-                        <td>${{fmt(mixed)}}</td>
-                        <td>${{fmt(accepted)}}</td>
-                        <td>${{fmt(total)}}</td>
-                    </tr>`;
-                }}).join('');
-            }} catch(e) {{ console.error(e); }}
-        }}
-
-        // --- Users Management ---
-        async function loadUsers() {{
-            try {{
-                const r = await fetch('/api/admin/users/list');
-                const d = await r.json();
-                const users = d.users || [];
-                if (users.length === 0) {{
-                    document.getElementById('users-table').innerHTML =
-                        '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
-                    return;
-                }}
-                document.getElementById('users-table').innerHTML = users.map(u => {{
-                    const apiKeys = u.api_keys || [];
-                    const keyCount = apiKeys.length;
-                    const keyBadges = apiKeys.slice(0, 3).map(k =>
-                        `<span class="badge ai" style="margin-right:0.25rem">${{k.key_prefix}}...</span>`
-                    ).join('');
-                    const moreKeys = keyCount > 3 ? `<span style="color:var(--text-muted);font-size:0.75rem">+${{keyCount-3}}</span>` : '';
-                    const created = u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '—';
-                    return `<tr>
-                        <td><strong>${{u.name || '—'}}</strong></td>
-                        <td>${{u.email}}</td>
-                        <td>${{keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}}</td>
-                        <td>${{created}}</td>
-                        <td>
-                            <button class="btn btn-sm" onclick="showCreateApiKeyForUser('${{u.id}}','${{u.name || u.email}}')">🔑 创建密钥</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteUser('${{u.id}}','${{u.name || u.email}}')">删除</button>
-                        </td>
-                    </tr>`;
-                }}).join('');
-            }} catch(e) {{
-                console.error(e);
-                document.getElementById('users-table').innerHTML =
-                    '<tr><td colspan="5" style="color:var(--danger)">加载用户列表失败</td></tr>';
-            }}
-        }}
-
-        function showCreateUserModal() {{
-            document.getElementById('modal-container').innerHTML = `
-            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-                <div class="modal">
-                    <div class="modal-title">创建用户</div>
-                    <div class="form-group">
-                        <label class="form-label">用户名</label>
-                        <input type="text" id="create-user-name" class="form-input" placeholder="请输入用户名" />
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">邮箱</label>
-                        <input type="email" id="create-user-email" class="form-input" placeholder="请输入邮箱地址" />
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">组织</label>
-                        <select id="create-user-org" class="form-input" disabled>
-                            <option value="">加载组织中...</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">部门</label>
-                        <select id="create-user-dept" class="form-input" disabled>
-                            <option value="">请先选择组织</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label style="display:flex;align-items:center;gap:0.5rem;color:var(--text-secondary);font-size:0.85rem;cursor:pointer">
-                            <input type="checkbox" id="create-user-nonce" checked />
-                            生成安装令牌（一次性登录凭证）
-                        </label>
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn" onclick="closeModal()">取消</button>
-                        <button class="btn btn-primary" onclick="createUser()">创建</button>
-                    </div>
-                </div>
-            </div>`;
-            document.getElementById('create-user-org').addEventListener('change', event => {{
-                loadCreateUserDepartments(event.currentTarget.value);
-            }});
-            populateCreateUserOrganizations();
-        }}
-
-        async function populateCreateUserOrganizations() {{
-            const orgSelect = document.getElementById('create-user-org');
-            const deptSelect = document.getElementById('create-user-dept');
-            try {{
-                const orgs = await loadAdminOrganizations();
-                if (orgs.length === 0) {{
-                    orgSelect.innerHTML = '<option value="">暂无可选组织</option>';
-                    deptSelect.innerHTML = '<option value="">暂无可选部门</option>';
-                    showToast('请先创建组织', 'error');
-                    return;
-                }}
-
-                orgSelect.innerHTML = '<option value="">请选择组织</option>' + orgs.map(org => {{
-                    const label = `${{escapeHtml(org.name || org.slug)}}${{org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}}`;
-                    return `<option value="${{org.id}}">${{label}}</option>`;
-                }}).join('');
-                orgSelect.disabled = false;
-
-                if (orgs.length === 1) {{
-                    orgSelect.value = orgs[0].id;
-                    await loadCreateUserDepartments(orgs[0].id);
-                }}
-            }} catch(e) {{
-                orgSelect.innerHTML = '<option value="">组织加载失败</option>';
-                deptSelect.innerHTML = '<option value="">请先选择组织</option>';
-                showToast(e.message || '加载组织列表失败', 'error');
-            }}
-        }}
-
-        async function loadCreateUserDepartments(orgId) {{
-            const deptSelect = document.getElementById('create-user-dept');
-            deptSelect.disabled = true;
-            if (!orgId) {{
-                deptSelect.innerHTML = '<option value="">请先选择组织</option>';
-                return;
-            }}
-
-            deptSelect.innerHTML = '<option value="">加载部门中...</option>';
-            try {{
-                const r = await fetch(`/api/admin/departments?org_id=${{encodeURIComponent(orgId)}}`);
-                const d = await r.json();
-                if (!r.ok) {{
-                    throw new Error(d.error || '加载部门列表失败');
-                }}
-
-                const departments = d.departments || [];
-                if (departments.length === 0) {{
-                    deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
-                    return;
-                }}
-
-                deptSelect.innerHTML = '<option value="">请选择部门</option>' + departments.map(dept => {{
-                    const label = escapeHtml(dept.name || dept.slug || '未命名部门');
-                    return `<option value="${{dept.id}}">${{label}}</option>`;
-                }}).join('');
-                deptSelect.disabled = false;
-
-                if (departments.length === 1) {{
-                    deptSelect.value = departments[0].id;
-                }}
-            }} catch(e) {{
-                deptSelect.innerHTML = '<option value="">部门加载失败</option>';
-                showToast(e.message || '加载部门列表失败', 'error');
-            }}
-        }}
-
-        async function createUser() {{
-            const name = document.getElementById('create-user-name').value.trim();
-            const emailVal = document.getElementById('create-user-email').value.trim();
-            const orgId = document.getElementById('create-user-org').value;
-            const departmentId = document.getElementById('create-user-dept').value;
-            const genNonce = document.getElementById('create-user-nonce').checked;
-
-            if (!name || !emailVal || !orgId || !departmentId) {{
-                showToast('请填写用户名、邮箱、组织和部门', 'error');
-                return;
-            }}
-
-            try {{
-                const r = await fetch('/api/admin/users', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{
-                        name,
-                        email: emailVal,
-                        org_id: orgId,
-                        department_id: departmentId,
-                        generate_nonce: genNonce
-                    }})
-                }});
-                const d = await r.json();
-                if (r.ok) {{
-                    let msg = `用户 ${{name}} 创建成功！`;
-                    if (d.install_nonce) msg += `\\n安装令牌: ${{d.install_nonce}}`;
-                    showToast(msg, 'success');
-                    closeModal();
-                    loadUsers();
-                }} else {{
-                    showToast(`创建失败: ${{d.error || '未知错误'}}`, 'error');
-                }}
-            }} catch(e) {{
-                showToast('创建用户时发生错误', 'error');
-            }}
-        }}
-
-        async function deleteUser(userId, userName) {{
-            if (!confirm(`确定要删除用户「${{userName}}」吗？此操作不可撤销。`)) return;
-            try {{
-                const r = await fetch(`/api/admin/users/${{userId}}`, {{ method: 'DELETE' }});
-                if (r.ok) {{
-                    showToast(`用户「${{userName}}」已删除`, 'success');
-                    loadUsers();
-                }} else {{
-                    const d = await r.json();
-                    showToast(`删除失败: ${{d.error || '未知错误'}}`, 'error');
-                }}
-            }} catch(e) {{
-                showToast('删除用户时发生错误', 'error');
-            }}
-        }}
-
-        // --- Departments Management ---
-        let adminOrganizationsCache = null;
-
-        async function loadAdminOrganizations() {{
-            if (adminOrganizationsCache) return adminOrganizationsCache;
-            const r = await fetch('/api/admin/organizations/list?include_personal=false');
-            const d = await r.json();
-            if (!r.ok) {{
-                throw new Error(d.error || '加载组织列表失败');
-            }}
-            adminOrganizationsCache = d.organizations || [];
-            return adminOrganizationsCache;
-        }}
-
-        async function loadDepartments() {{
-            try {{
-                const r = await fetch('/api/v1/aggregate/departments');
-                const d = await r.json();
-                if (!r.ok) {{
-                    throw new Error(d.error || '加载部门列表失败');
-                }}
-                const departments = d.departments || [];
-                if (departments.length === 0) {{
-                    document.getElementById('departments-table').innerHTML =
-                        '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
-                    return;
-                }}
-
-                document.getElementById('departments-table').innerHTML = departments.map(dept => {{
-                    const departmentName = escapeHtml(dept.department || '—');
-                    const orgName = escapeHtml(dept.organization || '—');
-                    const ai = dept.w_ai || 0;
-                    const human = dept.w_human || 0;
-                    const total = dept.w_total || (ai + human);
-                    const pct = total > 0 ? (ai / total * 100) : 0;
-                    return `<tr>
-                        <td><strong>${{orgName}}</strong></td>
-                        <td><strong>${{departmentName}}</strong></td>
-                        <td>${{fmt(dept.total_commits || 0)}}</td>
-                        <td>${{fmt(ai)}}</td>
-                        <td>${{fmt(human)}}</td>
-                        <td>${{pctBar(pct)}} <span style="font-size:0.8rem">${{pct.toFixed(1)}}%</span></td>
-                    </tr>`;
-                }}).join('');
-            }} catch(e) {{
-                console.error(e);
-                document.getElementById('departments-table').innerHTML =
-                    '<tr><td colspan="6" style="color:var(--danger)">加载部门列表失败</td></tr>';
-            }}
-        }}
-
-        async function showCreateDepartmentModal() {{
-            let orgs = [];
-            try {{
-                orgs = await loadAdminOrganizations();
-            }} catch(e) {{
-                showToast(e.message || '加载组织列表失败', 'error');
-                return;
-            }}
-            if (orgs.length === 0) {{
-                showToast('请先创建组织', 'error');
-                return;
-            }}
-            const orgOptions = orgs.map(org => {{
-                const label = `${{escapeHtml(org.name || org.slug)}}${{org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}}`;
-                return `<option value="${{org.id}}">${{label}}</option>`;
-            }}).join('');
-
-            document.getElementById('modal-container').innerHTML = `
-            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-                <div class="modal">
-                    <div class="modal-title">新增部门</div>
-                    <div class="form-group">
-                        <label class="form-label">所属组织</label>
-                        <select id="create-dept-org" class="form-input">${{orgOptions}}</select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">部门名称</label>
-                        <input type="text" id="create-dept-name" class="form-input" placeholder="例如：技术中心" />
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn" onclick="closeModal()">取消</button>
-                        <button class="btn btn-primary" onclick="createDepartment()">新增</button>
-                    </div>
-                </div>
-            </div>`;
-        }}
-
-        async function createDepartment() {{
-            const org_id = document.getElementById('create-dept-org').value;
-            const name = document.getElementById('create-dept-name').value.trim();
-
-            if (!org_id || !name) {{
-                showToast('请填写组织和部门名称', 'error');
-                return;
-            }}
-
-            try {{
-                const r = await fetch('/api/admin/departments', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ org_id, name }})
-                }});
-                const d = await r.json();
-                if (r.ok) {{
-                    showToast(`部门「${{name}}」已新增`, 'success');
-                    closeModal();
-                    loadDepartments();
-                }} else {{
-                    showToast(`新增失败: ${{d.error || '未知错误'}}`, 'error');
-                }}
-            }} catch(e) {{
-                showToast('新增部门时发生错误', 'error');
-            }}
-        }}
-
-        // --- API Key Management ---
-        async function loadApiKeys() {{
-            try {{
-                const r = await fetch('/api/admin/api-keys');
-                const d = await r.json();
-                const keys = d.api_keys || [];
-                if (keys.length === 0) {{
-                    document.getElementById('apikeys-table').innerHTML =
-                        '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔑</div><p>暂无 API 密钥，点击上方按钮创建</p></div></td></tr>';
-                    return;
-                }}
-                document.getElementById('apikeys-table').innerHTML = keys.map(k => {{
-                    const created = k.created_at ? new Date(k.created_at).toLocaleDateString('zh-CN') : '—';
-                    const expires = k.expires_at ? new Date(k.expires_at).toLocaleDateString('zh-CN') : '永不过期';
-                    const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未使用';
-                    const scopes = (k.scopes || []).map(s => `<span class="badge role" style="margin:0.1rem">${{s}}</span>`).join(' ');
-                    return `<tr>
-                        <td><strong>${{k.name || '未命名'}}</strong></td>
-                        <td><code style="color:var(--accent);font-size:0.8rem">${{k.key_prefix}}...</code></td>
-                        <td>${{scopes}}</td>
-                        <td>${{created}}</td>
-                        <td>${{expires}}</td>
-                        <td style="font-size:0.8rem">${{lastUsed}}</td>
-                        <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey('${{k.id}}','${{k.name || k.key_prefix}}')">撤销</button></td>
-                    </tr>`;
-                }}).join('');
-            }} catch(e) {{
-                console.error(e);
-                document.getElementById('apikeys-table').innerHTML =
-                    '<tr><td colspan="7" style="color:var(--danger)">加载密钥列表失败</td></tr>';
-            }}
-        }}
-
-        function showCreateApiKeyModal() {{
-            document.getElementById('modal-container').innerHTML = `
-            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-                <div class="modal">
-                    <div class="modal-title">创建 API 密钥</div>
-                    <div class="form-group">
-                        <label class="form-label">密钥名称</label>
-                        <input type="text" id="create-key-name" class="form-input" placeholder="例如：CI/CD 流水线" />
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">权限范围</label>
-                        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem">
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="metrics:write" checked /> 指标写入
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="cas:write" checked /> CAS 写入
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="cas:read" checked /> CAS 读取
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="reports:write" checked /> 报告写入
-                            </label>
-                        </div>
-                    </div>
-                    <div id="new-key-result" style="display:none">
-                        <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
-                        <div class="api-key-display" id="new-key-value">
-                            <button class="copy-btn" onclick="copyKey()">复制</button>
-                        </div>
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn" onclick="closeModal()">关闭</button>
-                        <button class="btn btn-primary" id="create-key-btn" onclick="createApiKey()">创建</button>
-                    </div>
-                </div>
-            </div>`;
-        }}
-
-        function showCreateApiKeyForUser(userId, userName) {{
-            document.getElementById('modal-container').innerHTML = `
-            <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-                <div class="modal">
-                    <div class="modal-title">为用户「${{userName}}」创建 API 密钥</div>
-                    <input type="hidden" id="create-key-user-id" value="${{userId}}" />
-                    <div class="form-group">
-                        <label class="form-label">密钥名称</label>
-                        <input type="text" id="create-key-name" class="form-input" placeholder="例如：CI/CD 流水线" />
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">权限范围</label>
-                        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem">
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="metrics:write" checked /> 指标写入
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="cas:write" checked /> CAS 写入
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="cas:read" checked /> CAS 读取
-                            </label>
-                            <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;color:var(--text-secondary)">
-                                <input type="checkbox" class="key-scope" value="reports:write" checked /> 报告写入
-                            </label>
-                        </div>
-                    </div>
-                    <div id="new-key-result" style="display:none">
-                        <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
-                        <div class="api-key-display" id="new-key-value">
-                            <button class="copy-btn" onclick="copyKey()">复制</button>
-                        </div>
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn" onclick="closeModal()">关闭</button>
-                        <button class="btn btn-primary" id="create-key-btn" onclick="createApiKeyForUser()">创建</button>
-                    </div>
-                </div>
-            </div>`;
-        }}
-
-        async function createApiKey() {{
-            const name = document.getElementById('create-key-name').value.trim();
-            if (!name) {{ showToast('请填写密钥名称', 'error'); return; }}
-
-            const scopes = Array.from(document.querySelectorAll('.key-scope:checked')).map(cb => cb.value);
-            if (scopes.length === 0) {{ showToast('请至少选择一个权限范围', 'error'); return; }}
-
-            try {{
-                const r = await fetch('/api/admin/api-keys', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ name, scopes }})
-                }});
-                const d = await r.json();
-                if (r.ok) {{
-                    document.getElementById('new-key-result').style.display = 'block';
-                    document.getElementById('new-key-value').innerHTML =
-                        `<button class="copy-btn" onclick="copyKey()">复制</button>${{d.key}}`;
-                    document.getElementById('create-key-btn').style.display = 'none';
-                    showToast('API 密钥创建成功', 'success');
-                }} else {{
-                    showToast(`创建失败: ${{d.error || '未知错误'}}`, 'error');
-                }}
-            }} catch(e) {{
-                showToast('创建密钥时发生错误', 'error');
-            }}
-        }}
-
-        async function createApiKeyForUser() {{
-            const name = document.getElementById('create-key-name').value.trim();
-            const userId = document.getElementById('create-key-user-id').value;
-            if (!name) {{ showToast('请填写密钥名称', 'error'); return; }}
-
-            const scopes = Array.from(document.querySelectorAll('.key-scope:checked')).map(cb => cb.value);
-            if (scopes.length === 0) {{ showToast('请至少选择一个权限范围', 'error'); return; }}
-
-            try {{
-                const r = await fetch('/api/admin/api-keys', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ name, scopes, user_id: userId }})
-                }});
-                const d = await r.json();
-                if (r.ok) {{
-                    document.getElementById('new-key-result').style.display = 'block';
-                    document.getElementById('new-key-value').innerHTML =
-                        `<button class="copy-btn" onclick="copyKey()">复制</button>${{d.key}}`;
-                    document.getElementById('create-key-btn').style.display = 'none';
-                    showToast('API 密钥创建成功', 'success');
-                }} else {{
-                    showToast(`创建失败: ${{d.error || '未知错误'}}`, 'error');
-                }}
-            }} catch(e) {{
-                showToast('创建密钥时发生错误', 'error');
-            }}
-        }}
-
-        function copyKey() {{
-            const keyEl = document.getElementById('new-key-value');
-            const text = keyEl.textContent.replace('复制', '').trim();
-            navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success'));
-        }}
-
-        async function revokeApiKey(keyId, keyName) {{
-            if (!confirm(`确定要撤销密钥「${{keyName}}」吗？撤销后此密钥将立即失效。`)) return;
-            try {{
-                const r = await fetch(`/api/admin/api-keys/${{keyId}}`, {{ method: 'DELETE' }});
-                if (r.ok) {{
-                    showToast(`密钥「${{keyName}}」已撤销`, 'success');
-                    loadApiKeys();
-                }} else {{
-                    showToast('撤销失败', 'error');
-                }}
-            }} catch(e) {{
-                showToast('撤销密钥时发生错误', 'error');
-            }}
-        }}
-
-        function closeModal() {{
-            document.getElementById('modal-container').innerHTML = '';
-        }}
-
-        // --- Init ---
-        loadOverview();
-        if (!isAdmin) loadClientStatus();
-        updateRefreshTime();
-        startAutoRefresh();
-    </script>
-</body>
-</html>"##,
-        name = auth.name,
-        email = auth.email,
-        user_initial = user_initial,
-        user_role_label = user_role_label,
-    )).into_response()
+    Ok(template
+        .replace(
+            "__GITAI_IS_ADMIN__",
+            if is_admin { "true" } else { "false" },
+        )
+        .replace(
+            "__GITAI_CURRENT_USER_ID_JSON__",
+            &json_string_literal(&auth.user_id.to_string()),
+        )
+        .replace("__GITAI_USER_NAME__", &html_escape(&auth.name))
+        .replace("__GITAI_USER_NAME_JSON__", &json_string_literal(&auth.name))
+        .replace("__GITAI_USER_EMAIL__", &html_escape(&auth.email))
+        .replace(
+            "__GITAI_USER_EMAIL_JSON__",
+            &json_string_literal(&auth.email),
+        )
+        .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
+        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+}
+
+pub fn dashboard_static_dir() -> Result<std::path::PathBuf, AppError> {
+    if let Ok(path) = std::env::var("GIT_AI_DASHBOARD_TEMPLATE") {
+        return std::path::PathBuf::from(path)
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| AppError::Internal("Invalid dashboard template path".to_string()));
+    }
+
+    let current_dir_path = std::env::current_dir()
+        .map_err(|error| {
+            AppError::Internal(format!("Failed to resolve current directory: {}", error))
+        })?
+        .join("static");
+    if current_dir_path.join("dashboard.html").exists() {
+        return Ok(current_dir_path);
+    }
+
+    Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"))
+}
+
+fn dashboard_template_path() -> Result<std::path::PathBuf, AppError> {
+    if let Ok(path) = std::env::var("GIT_AI_DASHBOARD_TEMPLATE") {
+        return Ok(std::path::PathBuf::from(path));
+    }
+
+    Ok(dashboard_static_dir()?.join("dashboard.html"))
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn json_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn sanitize_static_asset_path(asset_path: &str) -> Option<PathBuf> {
+    let mut sanitized = PathBuf::new();
+    for component in std::path::Path::new(asset_path).components() {
+        match component {
+            Component::Normal(part) => sanitized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if sanitized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+fn dashboard_asset_content_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2352,18 +962,18 @@ pub async fn aggregate_organizations(
     let result: Vec<Value> = rows
         .iter()
         .map(|(name, slug, commits, total, ai)| {
-        let ai = ai.unwrap_or(0);
-        let total = total.unwrap_or(0);
-        let human = (total - ai).max(0);
-        json!({
-            "organization": name,
-            "org_slug": slug,
-            "total_commits": commits.unwrap_or(0),
-            "w_total": total,
-            "w_ai": ai,
-            "w_human": human,
-            "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
-        })
+            let ai = ai.unwrap_or(0);
+            let total = total.unwrap_or(0);
+            let human = (total - ai).max(0);
+            json!({
+                "organization": name,
+                "org_slug": slug,
+                "total_commits": commits.unwrap_or(0),
+                "w_total": total,
+                "w_ai": ai,
+                "w_human": human,
+                "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
+            })
         })
         .collect();
 
@@ -2385,7 +995,14 @@ pub async fn aggregate_departments(
         scope_user_filter
     };
 
-    let rows: Vec<(String, String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
         r#"SELECT
             d.name, d.slug, o.name as org_name,
             COALESCE(stats.commits, 0),
@@ -2445,7 +1062,7 @@ pub async fn aggregate_departments(
         WHERE ($2::text IS NULL OR o.slug = $2)
           AND ($3::uuid IS NULL OR o.id = $3)
           AND ($4::boolean = FALSE OR d.id = $5::uuid)
-        ORDER BY o.name, d.name"#
+        ORDER BY o.name, d.name"#,
     )
     .bind(user_filter)
     .bind(&query.org)
@@ -2459,18 +1076,18 @@ pub async fn aggregate_departments(
     let result: Vec<Value> = rows
         .iter()
         .map(|(name, slug, org_name, commits, total, ai)| {
-        let ai = ai.unwrap_or(0);
-        let total = total.unwrap_or(0);
-        let human = (total - ai).max(0);
-        json!({
-            "department": name,
-            "dept_slug": slug,
-            "organization": org_name,
-            "total_commits": commits.unwrap_or(0),
-            "w_total": total,
-            "w_ai": ai,
-            "w_human": human,
-        })
+            let ai = ai.unwrap_or(0);
+            let total = total.unwrap_or(0);
+            let human = (total - ai).max(0);
+            json!({
+                "department": name,
+                "dept_slug": slug,
+                "organization": org_name,
+                "total_commits": commits.unwrap_or(0),
+                "w_total": total,
+                "w_ai": ai,
+                "w_human": human,
+            })
         })
         .collect();
 
@@ -2485,7 +1102,13 @@ pub async fn aggregate_projects(
     let (user_filter, org_filter) = build_data_filters(&auth.0);
 
     // Aggregate from metrics_events (primary source from client auto-upload)
-    let metrics_rows: Vec<(String, Option<String>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let metrics_rows: Vec<(
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
         r#"WITH committed_events AS (
             SELECT
                 repo_url,
@@ -2620,7 +1243,7 @@ pub async fn aggregate_projects(
         }
         if entry.department.is_none() {
             entry.department = dept.clone();
-    }
+        }
         entry.total_commits += commits.unwrap_or(0);
         entry.total_code += total;
         entry.total_ai += ai;
@@ -2969,8 +1592,8 @@ pub async fn aggregate_tools(
 
 #[derive(Debug, Deserialize)]
 pub struct TrendsQuery {
-    pub metric: Option<String>,        // "ai_ratio", "ai_lines", "human_lines", "commits"
-    pub granularity: Option<String>,   // "day", "week", "month"
+    pub metric: Option<String>, // "ai_ratio", "ai_lines", "human_lines", "commits"
+    pub granularity: Option<String>, // "day", "week", "month"
     pub org: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
@@ -3028,32 +1651,32 @@ pub async fn aggregate_trends(
     let data: Vec<Value> = rows
         .iter()
         .map(|(period, ai, human, commits)| {
-        let ai = ai.unwrap_or(0);
-        let human = human.unwrap_or(0);
-        let total = ai + human;
+            let ai = ai.unwrap_or(0);
+            let human = human.unwrap_or(0);
+            let total = ai + human;
             let ai_ratio = if total > 0 {
                 (ai as f64 / total as f64) * 100.0
             } else {
                 0.0
             };
 
-        let value = match metric {
-            "ai_ratio" => ai_ratio,
-            "ai_lines" => ai as f64,
-            "human_lines" => human as f64,
-            "commits" => commits.unwrap_or(0) as f64,
-            _ => 0.0,
-        };
+            let value = match metric {
+                "ai_ratio" => ai_ratio,
+                "ai_lines" => ai as f64,
+                "human_lines" => human as f64,
+                "commits" => commits.unwrap_or(0) as f64,
+                _ => 0.0,
+            };
 
-        json!({
-            "period": period.to_string(),
-            "granularity": granularity,
-            "value": (value * 100.0).round() / 100.0,
-            "ai_lines": ai,
-            "human_lines": human,
-            "commits": commits.unwrap_or(0),
-            "ai_ratio": (ai_ratio * 100.0).round() / 100.0,
-        })
+            json!({
+                "period": period.to_string(),
+                "granularity": granularity,
+                "value": (value * 100.0).round() / 100.0,
+                "ai_lines": ai,
+                "human_lines": human,
+                "commits": commits.unwrap_or(0),
+                "ai_ratio": (ai_ratio * 100.0).round() / 100.0,
+            })
         })
         .collect();
 
@@ -3319,22 +1942,46 @@ mod tests {
         let (user_id, org_id) = insert_test_identity(&db.pool).await?;
         insert_dashboard_metrics_fixture(&db.pool, user_id, org_id).await?;
 
-        let detail = fetch_metrics_summary_row(&db.pool, false, Some(user_id), Some(org_id), None, None).await?;
-        let rollup = fetch_metrics_summary_row(&db.pool, true, Some(user_id), Some(org_id), None, None).await?;
+        let detail =
+            fetch_metrics_summary_row(&db.pool, false, Some(user_id), Some(org_id), None, None)
+                .await?;
+        let rollup =
+            fetch_metrics_summary_row(&db.pool, true, Some(user_id), Some(org_id), None, None)
+                .await?;
         assert_eq!(detail, (Some(2), Some(70), Some(30), Some(40)));
         assert_eq!(rollup, detail);
 
-        let detail_developers =
-            fetch_total_developers(&db.pool, false, Some(user_id), Some(org_id), None, None, &None, &None).await?;
-        let rollup_developers =
-            fetch_total_developers(&db.pool, true, Some(user_id), Some(org_id), None, None, &None, &None).await?;
+        let detail_developers = fetch_total_developers(
+            &db.pool,
+            false,
+            Some(user_id),
+            Some(org_id),
+            None,
+            None,
+            &None,
+            &None,
+        )
+        .await?;
+        let rollup_developers = fetch_total_developers(
+            &db.pool,
+            true,
+            Some(user_id),
+            Some(org_id),
+            None,
+            None,
+            &None,
+            &None,
+        )
+        .await?;
         assert_eq!(detail_developers, 1);
         assert_eq!(rollup_developers, detail_developers);
 
         let mut detail_projects =
-            fetch_metrics_project_urls(&db.pool, false, Some(user_id), Some(org_id), None, None).await?;
+            fetch_metrics_project_urls(&db.pool, false, Some(user_id), Some(org_id), None, None)
+                .await?;
         let mut rollup_projects =
-            fetch_metrics_project_urls(&db.pool, true, Some(user_id), Some(org_id), None, None).await?;
+            fetch_metrics_project_urls(&db.pool, true, Some(user_id), Some(org_id), None, None)
+                .await?;
         detail_projects.sort();
         rollup_projects.sort();
         assert_eq!(rollup_projects, detail_projects);
@@ -3351,16 +1998,38 @@ mod tests {
         let (user_id, org_id) = insert_test_identity(&db.pool).await?;
         insert_dashboard_metrics_fixture(&db.pool, user_id, org_id).await?;
 
-        let detail_trends =
-            fetch_trend_rows(&db.pool, false, Some(user_id), Some(org_id), &None, None, None, &None, &None, "day")
-                .await?;
-        let rollup_trends =
-            fetch_trend_rows(&db.pool, true, Some(user_id), Some(org_id), &None, None, None, &None, &None, "day")
-                .await?;
+        let detail_trends = fetch_trend_rows(
+            &db.pool,
+            false,
+            Some(user_id),
+            Some(org_id),
+            &None,
+            None,
+            None,
+            &None,
+            &None,
+            "day",
+        )
+        .await?;
+        let rollup_trends = fetch_trend_rows(
+            &db.pool,
+            true,
+            Some(user_id),
+            Some(org_id),
+            &None,
+            None,
+            None,
+            &None,
+            &None,
+            "day",
+        )
+        .await?;
         assert_eq!(rollup_trends, detail_trends);
 
-        let detail_tools = fetch_metrics_tool_rows(&db.pool, false, Some(user_id), Some(org_id)).await?;
-        let rollup_tools = fetch_metrics_tool_rows(&db.pool, true, Some(user_id), Some(org_id)).await?;
+        let detail_tools =
+            fetch_metrics_tool_rows(&db.pool, false, Some(user_id), Some(org_id)).await?;
+        let rollup_tools =
+            fetch_metrics_tool_rows(&db.pool, true, Some(user_id), Some(org_id)).await?;
         assert_eq!(detail_tools, rollup_tools);
         assert_eq!(rollup_tools[0].0, "codex::gpt-5");
         assert_eq!(rollup_tools[0].1, Some(9));
@@ -3466,8 +2135,34 @@ mod tests {
         user_id: Uuid,
         org_id: Uuid,
     ) -> anyhow::Result<()> {
-        insert_dashboard_metric_row(pool, user_id, org_id, 1_700_000_000, "repo-a", "abc1", 30, 20, 5, 2, 3).await?;
-        insert_dashboard_metric_row(pool, user_id, org_id, 1_700_086_400, "repo-b", "abc2", 40, 10, 4, 1, 2).await?;
+        insert_dashboard_metric_row(
+            pool,
+            user_id,
+            org_id,
+            1_700_000_000,
+            "repo-a",
+            "abc1",
+            30,
+            20,
+            5,
+            2,
+            3,
+        )
+        .await?;
+        insert_dashboard_metric_row(
+            pool,
+            user_id,
+            org_id,
+            1_700_086_400,
+            "repo-b",
+            "abc2",
+            40,
+            10,
+            4,
+            1,
+            2,
+        )
+        .await?;
         Ok(())
     }
 

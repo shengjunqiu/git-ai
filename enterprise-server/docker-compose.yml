@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    volumes:
+      - ./static:/data/static:ro
     environment:
       - DATABASE_URL=postgresql://gitai:gitai@postgres:5432/gitai_enterprise
       - REDIS_URL=redis://redis:6379

@@ -13,8 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Copy full source
-COPY . .
+# Copy only files needed for compilation. Keeping static assets out of this
+# layer prevents dashboard HTML edits from invalidating the Rust build cache.
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY migrations ./migrations
 
 # Build release binary
 RUN cargo build --release --locked --bin git-ai-enterprise-server
@@ -37,6 +40,10 @@ COPY --from=builder /build/target/release/git-ai-enterprise-server /usr/local/bi
 
 # Data directory
 RUN mkdir -p /data && chown gitai /data
+
+# Dashboard static assets. docker-compose mounts ./static over this path in local
+# development so UI edits can be refreshed without rebuilding the API image.
+COPY --chown=1001:0 static /data/static
 
 USER gitai
 WORKDIR /data
