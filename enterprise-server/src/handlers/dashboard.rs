@@ -1,9 +1,9 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Json, Redirect};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Component, PathBuf};
 use url::Url;
@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::auth::middleware::{DashboardAuth, OptionalAuth};
 use crate::error::AppError;
 use crate::pagination::{
-    clamp_limit, decode_cursor, encode_cursor, fetch_limit, pagination_meta, truncate_to_limit,
-    CURSOR_VERSION, DASHBOARD_MAX_LIMIT, DEFAULT_LIMIT,
+    CURSOR_VERSION, DASHBOARD_MAX_LIMIT, DEFAULT_LIMIT, clamp_limit, decode_cursor, encode_cursor,
+    fetch_limit, pagination_meta, truncate_to_limit,
 };
 use crate::routes::AppState;
 
@@ -420,8 +420,8 @@ fn bounded_trend_epoch_filters(
     until: Option<&str>,
     granularity: &str,
 ) -> Result<(i64, i64), AppError> {
-    let parsed_until =
-        parse_epoch_seconds_param("until", until)?.unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let parsed_until = parse_epoch_seconds_param("until", until)?
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
     let parsed_since = match parse_epoch_seconds_param("since", since)? {
         Some(value) => value,
         None => default_trend_since(parsed_until, granularity)?,
@@ -500,10 +500,7 @@ fn epoch_seconds_to_rfc3339(timestamp: i64) -> Result<String, AppError> {
         .ok_or_else(|| AppError::BadRequest("timestamp is out of range".into()))
 }
 
-fn subtract_months(
-    date: chrono::NaiveDate,
-    months: u32,
-) -> Result<chrono::NaiveDate, AppError> {
+fn subtract_months(date: chrono::NaiveDate, months: u32) -> Result<chrono::NaiveDate, AppError> {
     let month_index = date.year() * 12 + date.month0() as i32 - months as i32;
     let year = month_index.div_euclid(12);
     let month0 = month_index.rem_euclid(12) as u32;
@@ -1123,8 +1120,36 @@ pub async fn aggregate_organizations(
     let cursor_name = cursor.as_ref().map(|cursor| cursor.name.clone());
     let cursor_slug = cursor.as_ref().map(|cursor| cursor.slug.clone());
 
-    let rows: Vec<(String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let metrics_organization_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
+                NULLIF(org_id, '00000000-0000-0000-0000-000000000000'::uuid) AS org_id,
+                COALESCE(SUM(commits), 0)::bigint AS commits,
+                COALESCE(SUM(total_lines), 0)::bigint AS total_lines,
+                COALESCE(SUM(ai_lines), 0)::bigint AS ai_lines
+            FROM metrics_daily_rollups
+            WHERE tool_model = ''
+              AND org_id <> '00000000-0000-0000-0000-000000000000'::uuid
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY org_id"#
+    } else {
+        r#"SELECT
+                org_id,
+                COUNT(*)::bigint AS commits,
+                COALESCE(SUM(git_diff_added_lines), 0)::bigint AS total_lines,
+                COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines
+            FROM metrics_events
+            WHERE event_type = 1
+              AND ($1::uuid IS NULL OR user_id = $1)
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+            GROUP BY org_id"#
+    };
+
+    let rows: Vec<(String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        &format!(
+            r#"SELECT
             o.name, o.slug,
             COALESCE(stats.commits, 0),
             COALESCE(stats.total_lines, 0),
@@ -1137,16 +1162,7 @@ pub async fn aggregate_organizations(
                 SUM(total_lines)::bigint AS total_lines,
                 SUM(ai_lines)::bigint AS ai_lines
             FROM (
-                SELECT
-                    org_id,
-                    COUNT(*)::bigint AS commits,
-                    COALESCE(SUM(git_diff_added_lines), 0)::bigint AS total_lines,
-                    COALESCE(SUM(ai_additions), 0)::bigint AS ai_lines
-                FROM metrics_events
-                WHERE event_type = 1
-                  AND ($1::uuid IS NULL OR user_id = $1)
-                  AND ($2::uuid IS NULL OR org_id = $2)
-                GROUP BY org_id
+                {metrics_organization_rows}
 
                 UNION ALL
 
@@ -1156,16 +1172,21 @@ pub async fn aggregate_organizations(
                     COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
                 FROM projects p
-                JOIN commit_stats cs ON cs.project_id = p.id
+                JOIN LATERAL (
+                    SELECT cs.sha, cs.git_diff_added_lines, cs.ai_additions
+                    FROM commit_stats cs
+                    WHERE cs.project_id = p.id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM metrics_events m
+                          WHERE m.event_type = 1
+                            AND m.commit_sha = cs.sha
+                            AND ($1::uuid IS NULL OR m.user_id = $1)
+                            AND ($2::uuid IS NULL OR m.org_id = $2)
+                      )
+                ) cs ON TRUE
                 WHERE ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM metrics_events m
-                      WHERE m.event_type = 1
-                        AND m.commit_sha = cs.sha
-                        AND ($1::uuid IS NULL OR m.user_id = $1)
-                        AND ($2::uuid IS NULL OR m.org_id = $2)
-                  )
+                  AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
                 GROUP BY p.org_id
             ) combined
             WHERE org_id IS NOT NULL
@@ -1179,7 +1200,8 @@ pub async fn aggregate_organizations(
               OR (o.name = $4::text AND o.slug > $5::text)
           )
         ORDER BY o.name ASC, o.slug ASC
-        LIMIT $6"#,
+        LIMIT $6"#
+        ),
     )
     .bind(user_filter)
     .bind(org_filter)
@@ -1352,10 +1374,38 @@ pub async fn aggregate_departments(
     let cursor: Option<DepartmentAggregateCursor> =
         decode_dashboard_cursor(query.cursor.as_deref())?;
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
-    let cursor_department_name = cursor
-        .as_ref()
-        .map(|cursor| cursor.department_name.clone());
+    let cursor_department_name = cursor.as_ref().map(|cursor| cursor.department_name.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
+
+    let metrics_department_rows = if state.config.dashboard_use_rollups {
+        r#"SELECT
+                    r.org_id,
+                    om.department_id,
+                    COALESCE(SUM(r.commits), 0)::bigint AS commits,
+                    COALESCE(SUM(r.total_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(r.ai_lines), 0)::bigint AS ai_lines
+                FROM department_page dp
+                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                JOIN metrics_daily_rollups r ON r.user_id = om.user_id
+                  AND r.org_id = om.org_id
+                  AND r.tool_model = ''
+                WHERE ($1::uuid IS NULL OR r.user_id = $1)
+                GROUP BY r.org_id, om.department_id"#
+    } else {
+        r#"SELECT
+                    m.org_id,
+                    om.department_id,
+                    COUNT(m.id)::bigint AS commits,
+                    COALESCE(SUM(m.git_diff_added_lines), 0)::bigint AS total_lines,
+                    COALESCE(SUM(m.ai_additions), 0)::bigint AS ai_lines
+                FROM department_page dp
+                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                JOIN metrics_events m ON m.user_id = om.user_id
+                  AND m.org_id = om.org_id
+                  AND m.event_type = 1
+                WHERE ($1::uuid IS NULL OR m.user_id = $1)
+                GROUP BY m.org_id, om.department_id"#
+    };
 
     let rows: Vec<(
         Uuid,
@@ -1365,15 +1415,29 @@ pub async fn aggregate_departments(
         Option<i64>,
         Option<i64>,
         Option<i64>,
-    )> = sqlx::query_as(
-        r#"SELECT
-            d.id, d.name, d.slug, o.name as org_name,
-            COALESCE(stats.commits, 0),
-            COALESCE(stats.total_lines, 0),
-            COALESCE(stats.ai_lines, 0)
-        FROM departments d
-        JOIN organizations o ON d.org_id = o.id
-        LEFT JOIN (
+    )> = sqlx::query_as(&format!(
+        r#"WITH department_page AS MATERIALIZED (
+            SELECT
+                d.id,
+                d.org_id,
+                d.name,
+                d.slug,
+                o.name AS org_name
+            FROM departments d
+            JOIN organizations o ON d.org_id = o.id
+            WHERE ($2::text IS NULL OR o.slug = $2)
+              AND ($3::uuid IS NULL OR o.id = $3)
+              AND ($4::boolean = FALSE OR d.id = $5::uuid)
+              AND (
+                  $6::text IS NULL
+                  OR o.name > $6::text
+                  OR (o.name = $6::text AND d.name > $7::text)
+                  OR (o.name = $6::text AND d.name = $7::text AND d.id > $8::uuid)
+              )
+            ORDER BY o.name ASC, d.name ASC, d.id ASC
+            LIMIT $9
+        ),
+        department_stats AS MATERIALIZED (
             SELECT
                 org_id,
                 department_id,
@@ -1381,20 +1445,7 @@ pub async fn aggregate_departments(
                 SUM(total_lines)::bigint AS total_lines,
                 SUM(ai_lines)::bigint AS ai_lines
             FROM (
-                SELECT
-                    m.org_id,
-                    om.department_id,
-                    COUNT(m.id)::bigint AS commits,
-                    COALESCE(SUM(m.git_diff_added_lines), 0)::bigint AS total_lines,
-                    COALESCE(SUM(m.ai_additions), 0)::bigint AS ai_lines
-                FROM org_members om
-                JOIN metrics_events m ON m.user_id = om.user_id
-                  AND m.org_id = om.org_id
-                  AND m.event_type = 1
-                WHERE ($1::uuid IS NULL OR m.user_id = $1)
-                  AND ($3::uuid IS NULL OR m.org_id = $3)
-                  AND ($4::boolean = FALSE OR om.department_id = $5::uuid)
-                GROUP BY m.org_id, om.department_id
+                {metrics_department_rows}
 
                 UNION ALL
 
@@ -1404,36 +1455,33 @@ pub async fn aggregate_departments(
                     COUNT(cs.sha)::bigint AS commits,
                     COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
-                FROM projects p
+                FROM department_page dp
+                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                JOIN projects p ON p.user_id = om.user_id AND p.org_id = om.org_id
                 JOIN commit_stats cs ON cs.project_id = p.id
-                JOIN org_members om ON om.user_id = p.user_id AND om.org_id = p.org_id
                 WHERE ($1::uuid IS NULL OR p.user_id = $1)
-                  AND ($3::uuid IS NULL OR p.org_id = $3)
-                  AND ($4::boolean = FALSE OR om.department_id = $5::uuid)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
+                        AND m.org_id = p.org_id
                         AND m.commit_sha = cs.sha
                         AND ($1::uuid IS NULL OR m.user_id = $1)
-                        AND ($3::uuid IS NULL OR m.org_id = $3)
                   )
                 GROUP BY p.org_id, om.department_id
             ) combined
             WHERE org_id IS NOT NULL AND department_id IS NOT NULL
             GROUP BY org_id, department_id
-        ) stats ON stats.org_id = d.org_id AND stats.department_id = d.id
-        WHERE ($2::text IS NULL OR o.slug = $2)
-          AND ($3::uuid IS NULL OR o.id = $3)
-          AND ($4::boolean = FALSE OR d.id = $5::uuid)
-          AND (
-              $6::text IS NULL
-              OR o.name > $6::text
-              OR (o.name = $6::text AND d.name > $7::text)
-              OR (o.name = $6::text AND d.name = $7::text AND d.id > $8::uuid)
-          )
-        ORDER BY o.name ASC, d.name ASC, d.id ASC
-        LIMIT $9"#,
-    )
+        )
+        SELECT
+            d.id, d.name, d.slug, d.org_name,
+            COALESCE(stats.commits, 0),
+            COALESCE(stats.total_lines, 0),
+            COALESCE(stats.ai_lines, 0)
+        FROM department_page d
+        LEFT JOIN department_stats stats
+          ON stats.org_id = d.org_id AND stats.department_id = d.id
+        ORDER BY d.org_name ASC, d.name ASC, d.id ASC"#
+    ))
     .bind(user_filter)
     .bind(&query.org)
     .bind(org_filter)
@@ -1497,25 +1545,12 @@ pub async fn aggregate_projects(
     let (user_filter, org_filter) = build_data_filters(&auth.0);
     let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, DASHBOARD_MAX_LIMIT);
-    let cursor: Option<ProjectAggregateCursor> =
-        decode_dashboard_cursor(query.cursor.as_deref())?;
+    let cursor: Option<ProjectAggregateCursor> = decode_dashboard_cursor(query.cursor.as_deref())?;
     let cursor_project_name = cursor.as_ref().map(|cursor| cursor.project_name.clone());
     let cursor_project_key = cursor.as_ref().map(|cursor| cursor.project_key.clone());
 
-    let rows: Vec<(
-        String,
-        Option<i64>,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-    )> = sqlx::query_as(
-        r#"WITH metrics_events_source AS (
-            SELECT
+    let metrics_project_rows = if state.config.dashboard_use_rollups {
+        r#"SELECT
                 CASE
                     WHEN BTRIM(repo_url) ~ '^[^@/]+@[^:]+:.+' THEN
                         'sha256:' || encode(sha256(convert_to(
@@ -1546,31 +1581,33 @@ pub async fn aggregate_projects(
                     ELSE
                         'sha256:' || encode(sha256(convert_to(BTRIM(repo_url), 'UTF8')), 'hex')
                 END AS project_key,
-                BTRIM(repo_url) AS repo_url,
-                NULLIF(
+                NULL::bigint AS project_id,
+                MIN(BTRIM(repo_url)) AS repo_url,
+                MIN(NULLIF(
                     regexp_replace(
                         regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
                         '\.git$',
                         ''
                     ),
                     ''
-                ) AS project_name,
-                COALESCE(
-                    NULLIF(BTRIM(raw_attrs->>'branch'), ''),
-                    NULLIF(BTRIM(raw_attrs->>'5'), '')
-                ) AS branch,
-                git_diff_added_lines,
-                ai_additions
-            FROM metrics_events
-            WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+                )) AS project_name,
+                NULL::text AS branch,
+                NULL::text AS organization,
+                NULL::text AS department,
+                COALESCE(SUM(commits), 0)::bigint AS total_commits,
+                COALESCE(SUM(total_lines), 0)::bigint AS total_code,
+                COALESCE(SUM(ai_lines), 0)::bigint AS total_ai
+            FROM metrics_daily_rollups
+            WHERE tool_model = ''
+              AND repo_url != ''
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
               AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($4::bigint IS NULL OR timestamp >= $4)
-              AND ($5::bigint IS NULL OR timestamp <= $5)
-        ),
-        metric_project_rows AS (
-            SELECT
+              AND ($4::bigint IS NULL OR day >= (to_timestamp($4) AT TIME ZONE 'UTC')::date)
+              AND ($5::bigint IS NULL OR day <= (to_timestamp($5) AT TIME ZONE 'UTC')::date)
+            GROUP BY project_key"#
+    } else {
+        r#"SELECT
                 project_key,
                 NULL::bigint AS project_id,
                 MIN(repo_url) AS repo_url,
@@ -1582,8 +1619,78 @@ pub async fn aggregate_projects(
                 COUNT(*)::bigint AS total_commits,
                 COALESCE(SUM(git_diff_added_lines), 0)::bigint AS total_code,
                 COALESCE(SUM(ai_additions), 0)::bigint AS total_ai
-            FROM metrics_events_source
-            GROUP BY project_key
+            FROM (
+                SELECT
+                    CASE
+                        WHEN BTRIM(repo_url) ~ '^[^@/]+@[^:]+:.+' THEN
+                            'sha256:' || encode(sha256(convert_to(
+                                regexp_replace(
+                                    regexp_replace(
+                                        'https://' || regexp_replace(BTRIM(repo_url), '^[^@/]+@([^:]+):/?(.+)$', '\1/\2'),
+                                        '/+$',
+                                        ''
+                                    ),
+                                    '\.git$',
+                                    ''
+                                ),
+                                'UTF8'
+                            )), 'hex')
+                        WHEN BTRIM(repo_url) LIKE '%://%' THEN
+                            'sha256:' || encode(sha256(convert_to(
+                                regexp_replace(
+                                    regexp_replace(
+                                        regexp_replace(BTRIM(repo_url), '^[A-Za-z][A-Za-z0-9+.-]*://([^/@]+@)?([^/]+)(/.*)?$', 'https://\2\3'),
+                                        '/+$',
+                                        ''
+                                    ),
+                                    '\.git$',
+                                    ''
+                                ),
+                                'UTF8'
+                            )), 'hex')
+                        ELSE
+                            'sha256:' || encode(sha256(convert_to(BTRIM(repo_url), 'UTF8')), 'hex')
+                    END AS project_key,
+                    BTRIM(repo_url) AS repo_url,
+                    NULLIF(
+                        regexp_replace(
+                            regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
+                            '\.git$',
+                            ''
+                        ),
+                        ''
+                    ) AS project_name,
+                    COALESCE(
+                        NULLIF(BTRIM(raw_attrs->>'branch'), ''),
+                        NULLIF(BTRIM(raw_attrs->>'5'), '')
+                    ) AS branch,
+                    git_diff_added_lines,
+                    ai_additions
+                FROM metrics_events
+                WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+                  AND ($1::uuid IS NULL OR user_id = $1)
+                  AND ($2::uuid IS NULL OR org_id = $2)
+                  AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
+                  AND ($4::bigint IS NULL OR timestamp >= $4)
+                  AND ($5::bigint IS NULL OR timestamp <= $5)
+            ) metrics_events_source
+            GROUP BY project_key"#
+    };
+
+    let rows: Vec<(
+        String,
+        Option<i64>,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(&format!(
+        r#"WITH metric_project_rows AS (
+            {metrics_project_rows}
         ),
         report_project_rows AS (
             SELECT
@@ -1608,19 +1715,23 @@ pub async fn aggregate_projects(
                 COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_code,
                 COALESCE(SUM(cs.ai_additions), 0)::bigint AS total_ai
             FROM projects p
-            JOIN commit_stats cs ON cs.project_id = p.id
+            JOIN LATERAL (
+                SELECT cs.sha, cs.git_diff_added_lines, cs.ai_additions, cs.author_time_at
+                FROM commit_stats cs
+                WHERE cs.project_id = p.id
+                  AND ($6::timestamptz IS NULL OR cs.author_time_at >= $6::timestamptz)
+                  AND ($7::timestamptz IS NULL OR cs.author_time_at <= $7::timestamptz)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM metrics_events m
+                      WHERE m.event_type = 1
+                        AND m.commit_sha = cs.sha
+                        AND ($1::uuid IS NULL OR m.user_id = $1)
+                        AND ($2::uuid IS NULL OR m.org_id = $2)
+                  )
+            ) cs ON TRUE
             WHERE ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
               AND ($3::text IS NULL OR p.org_id = (SELECT id FROM organizations WHERE slug = $3))
-              AND ($6::timestamptz IS NULL OR cs.author_time_at >= $6::timestamptz)
-              AND ($7::timestamptz IS NULL OR cs.author_time_at <= $7::timestamptz)
-              AND NOT EXISTS (
-                  SELECT 1 FROM metrics_events m
-                  WHERE m.event_type = 1
-                    AND m.commit_sha = cs.sha
-                    AND ($1::uuid IS NULL OR m.user_id = $1)
-                    AND ($2::uuid IS NULL OR m.org_id = $2)
-              )
             GROUP BY p.remote_url_hash
         ),
         project_sources AS (
@@ -1672,8 +1783,8 @@ pub async fn aggregate_projects(
             OR (project_name = $8::text AND project_key > $9::text)
         )
         ORDER BY project_name ASC, project_key ASC
-        LIMIT $10"#,
-    )
+        LIMIT $10"#
+    ))
     .bind(user_filter)
     .bind(org_filter)
     .bind(&query.org)
@@ -1757,27 +1868,24 @@ pub async fn aggregate_developers(
     let cursor_name = cursor.as_ref().map(|cursor| cursor.name.clone());
     let cursor_user_id = cursor.as_ref().map(|cursor| cursor.user_id);
 
-    let rows: Vec<(
-        Uuid,
-        String,
-        String,
-        Option<String>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Value,
-    )> = sqlx::query_as(
-        r#"WITH developer_stats AS (
-            SELECT
-                user_id,
-                org_id,
-                SUM(commits)::bigint AS total_commits,
-                SUM(added)::bigint AS total_added_lines,
-                SUM(ai)::bigint AS ai_added_lines,
-                SUM(human)::bigint AS human_added_lines
-            FROM (
-                SELECT
+    let metrics_developer_rows = if state.config.dashboard_use_rollups {
+        r#"SELECT
+                    NULLIF(user_id, '00000000-0000-0000-0000-000000000000'::uuid) AS user_id,
+                    NULLIF(org_id, '00000000-0000-0000-0000-000000000000'::uuid) AS org_id,
+                    COALESCE(SUM(commits), 0)::bigint AS commits,
+                    COALESCE(SUM(total_lines), 0)::bigint AS added,
+                    COALESCE(SUM(ai_lines), 0)::bigint AS ai,
+                    COALESCE(SUM(human_lines), 0)::bigint AS human
+                FROM metrics_daily_rollups
+                WHERE tool_model = ''
+                  AND user_id <> '00000000-0000-0000-0000-000000000000'::uuid
+                  AND ($1::uuid IS NULL OR user_id = $1)
+                  AND ($2::uuid IS NULL OR org_id = $2)
+                  AND ($3::bigint IS NULL OR day >= (to_timestamp($3) AT TIME ZONE 'UTC')::date)
+                  AND ($4::bigint IS NULL OR day <= (to_timestamp($4) AT TIME ZONE 'UTC')::date)
+                GROUP BY user_id, org_id"#
+    } else {
+        r#"SELECT
                     user_id,
                     org_id,
                     COUNT(*) AS commits,
@@ -1791,7 +1899,30 @@ pub async fn aggregate_developers(
                   AND ($2::uuid IS NULL OR org_id = $2)
                   AND ($3::bigint IS NULL OR timestamp >= $3)
                   AND ($4::bigint IS NULL OR timestamp <= $4)
-                GROUP BY user_id, org_id
+                GROUP BY user_id, org_id"#
+    };
+
+    let rows: Vec<(
+        Uuid,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Value,
+    )> = sqlx::query_as(&format!(
+        r#"WITH developer_stats AS (
+            SELECT
+                user_id,
+                org_id,
+                SUM(commits)::bigint AS total_commits,
+                SUM(added)::bigint AS total_added_lines,
+                SUM(ai)::bigint AS ai_added_lines,
+                SUM(human)::bigint AS human_added_lines
+            FROM (
+                {metrics_developer_rows}
 
                 UNION ALL
 
@@ -1803,19 +1934,23 @@ pub async fn aggregate_developers(
                     COALESCE(SUM(cs.ai_additions), 0) AS ai,
                     COALESCE(SUM(GREATEST(COALESCE(cs.git_diff_added_lines, 0) - COALESCE(cs.ai_additions, 0), 0)), 0) AS human
                 FROM projects p
-                JOIN commit_stats cs ON cs.project_id = p.id
+                JOIN LATERAL (
+                    SELECT cs.sha, cs.git_diff_added_lines, cs.ai_additions
+                    FROM commit_stats cs
+                    WHERE cs.project_id = p.id
+                      AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+                      AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM metrics_events m
+                          WHERE m.event_type = 1
+                            AND m.commit_sha = cs.sha
+                            AND ($1::uuid IS NULL OR m.user_id = $1)
+                            AND ($2::uuid IS NULL OR m.org_id = $2)
+                      )
+                ) cs ON TRUE
                 WHERE p.user_id IS NOT NULL
                   AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
-                  AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM metrics_events m
-                      WHERE m.event_type = 1
-                        AND m.commit_sha = cs.sha
-                        AND ($1::uuid IS NULL OR m.user_id = $1)
-                        AND ($2::uuid IS NULL OR m.org_id = $2)
-                  )
                 GROUP BY p.user_id, p.org_id
             ) combined
             GROUP BY user_id, org_id
@@ -1857,63 +1992,103 @@ pub async fn aggregate_developers(
         ),
         git_identity_candidates AS (
                 SELECT
-                    m.user_id,
-                    m.org_id,
+                    rd.id AS user_id,
+                    rd.org_id,
                     TRIM(CASE
-                        WHEN m.author_email ~ '<[^>]+>' THEN split_part(m.author_email, '<', 1)
-                        WHEN m.author_email LIKE '%@%' THEN ''
-                        ELSE m.author_email
+                        WHEN identity.author_email ~ '<[^>]+>' THEN split_part(identity.author_email, '<', 1)
+                        WHEN identity.author_email LIKE '%@%' THEN ''
+                        ELSE identity.author_email
                     END) AS git_name,
                     TRIM(CASE
-                        WHEN m.author_email ~ '<[^>]+>' THEN substring(m.author_email from '<([^>]+)>')
-                        WHEN m.author_email LIKE '%@%' THEN m.author_email
+                        WHEN identity.author_email ~ '<[^>]+>' THEN substring(identity.author_email from '<([^>]+)>')
+                        WHEN identity.author_email LIKE '%@%' THEN identity.author_email
                         ELSE ''
                     END) AS git_email
-                FROM metrics_events m
-                JOIN ranked_developers rd ON rd.id = m.user_id
-                  AND rd.org_id IS NOT DISTINCT FROM m.org_id
-                WHERE m.event_type = 1
-                  AND m.user_id IS NOT NULL
-                  AND m.author_email IS NOT NULL
-                  AND m.author_email != ''
-                  AND ($1::uuid IS NULL OR m.user_id = $1)
-                  AND ($2::uuid IS NULL OR m.org_id = $2)
-                  AND ($3::bigint IS NULL OR m.timestamp >= $3)
-                  AND ($4::bigint IS NULL OR m.timestamp <= $4)
+                FROM ranked_developers rd
+                JOIN LATERAL (
+                    SELECT DISTINCT m.author_email
+                    FROM metrics_events m
+                    WHERE rd.org_id IS NOT NULL
+                      AND m.event_type = 1
+                      AND m.user_id = rd.id
+                      AND m.org_id = rd.org_id
+                      AND m.author_email IS NOT NULL
+                      AND m.author_email != ''
+                      AND ($3::bigint IS NULL OR m.timestamp >= $3)
+                      AND ($4::bigint IS NULL OR m.timestamp <= $4)
+                    ORDER BY m.author_email ASC
+                    LIMIT 25
+                ) identity ON TRUE
 
                 UNION
 
                 SELECT
-                    p.user_id,
-                    p.org_id,
+                    rd.id AS user_id,
+                    rd.org_id,
                     TRIM(CASE
-                        WHEN cs.author ~ '<[^>]+>' THEN split_part(cs.author, '<', 1)
-                        WHEN cs.author LIKE '%@%' THEN ''
-                        ELSE cs.author
+                        WHEN identity.author_email ~ '<[^>]+>' THEN split_part(identity.author_email, '<', 1)
+                        WHEN identity.author_email LIKE '%@%' THEN ''
+                        ELSE identity.author_email
                     END) AS git_name,
                     TRIM(CASE
-                        WHEN cs.author ~ '<[^>]+>' THEN substring(cs.author from '<([^>]+)>')
-                        WHEN cs.author LIKE '%@%' THEN cs.author
+                        WHEN identity.author_email ~ '<[^>]+>' THEN substring(identity.author_email from '<([^>]+)>')
+                        WHEN identity.author_email LIKE '%@%' THEN identity.author_email
                         ELSE ''
                     END) AS git_email
-                FROM projects p
-                JOIN commit_stats cs ON cs.project_id = p.id
-                JOIN ranked_developers rd ON rd.id = p.user_id
-                  AND rd.org_id IS NOT DISTINCT FROM p.org_id
-                WHERE p.user_id IS NOT NULL
-                  AND cs.author IS NOT NULL
-                  AND cs.author != ''
-                  AND ($1::uuid IS NULL OR p.user_id = $1)
-                  AND ($2::uuid IS NULL OR p.org_id = $2)
-                  AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
-                  AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM metrics_events m
-                      WHERE m.event_type = 1
-                        AND m.commit_sha = cs.sha
-                        AND ($1::uuid IS NULL OR m.user_id = $1)
-                        AND ($2::uuid IS NULL OR m.org_id = $2)
-                  )
+                FROM ranked_developers rd
+                JOIN LATERAL (
+                    SELECT DISTINCT m.author_email
+                    FROM metrics_events m
+                    WHERE rd.org_id IS NULL
+                      AND m.event_type = 1
+                      AND m.user_id = rd.id
+                      AND m.org_id IS NULL
+                      AND m.author_email IS NOT NULL
+                      AND m.author_email != ''
+                      AND ($3::bigint IS NULL OR m.timestamp >= $3)
+                      AND ($4::bigint IS NULL OR m.timestamp <= $4)
+                    ORDER BY m.author_email ASC
+                    LIMIT 25
+                ) identity ON TRUE
+
+                UNION
+
+                SELECT
+                    rd.id AS user_id,
+                    rd.org_id,
+                    TRIM(CASE
+                        WHEN identity.author ~ '<[^>]+>' THEN split_part(identity.author, '<', 1)
+                        WHEN identity.author LIKE '%@%' THEN ''
+                        ELSE identity.author
+                    END) AS git_name,
+                    TRIM(CASE
+                        WHEN identity.author ~ '<[^>]+>' THEN substring(identity.author from '<([^>]+)>')
+                        WHEN identity.author LIKE '%@%' THEN identity.author
+                        ELSE ''
+                END) AS git_email
+                FROM ranked_developers rd
+                JOIN LATERAL (
+                    SELECT DISTINCT project_identity.author
+                    FROM projects p
+                    JOIN LATERAL (
+                        SELECT DISTINCT cs.author
+                        FROM commit_stats cs
+                        WHERE cs.project_id = p.id
+                          AND cs.author IS NOT NULL
+                          AND cs.author != ''
+                          AND ($5::timestamptz IS NULL OR cs.author_time_at >= $5::timestamptz)
+                          AND ($6::timestamptz IS NULL OR cs.author_time_at <= $6::timestamptz)
+                        ORDER BY cs.author ASC
+                        LIMIT 25
+                    ) project_identity ON TRUE
+                    WHERE p.user_id = rd.id
+                      AND (
+                          (rd.org_id IS NULL AND p.org_id IS NULL)
+                          OR p.org_id = rd.org_id
+                      )
+                    ORDER BY project_identity.author ASC
+                    LIMIT 25
+                ) identity ON TRUE
         ),
         git_identities AS (
             SELECT
@@ -1938,7 +2113,7 @@ pub async fn aggregate_developers(
         LEFT JOIN git_identities gi ON gi.user_id = rd.id
           AND gi.org_id IS NOT DISTINCT FROM rd.org_id
         ORDER BY rd.ai_added_lines DESC, rd.total_commits DESC, rd.name ASC, rd.id ASC"#
-    )
+    ))
     .bind(user_filter)
     .bind(org_filter)
     .bind(since_ts)
@@ -2489,8 +2664,8 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, MetricsRollupWriteMode};
     use crate::models::user::{AuthIdentity, AuthMethod};
-    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     #[test]
@@ -2528,8 +2703,7 @@ mod tests {
     fn bounded_trend_epoch_filters_defaults_missing_since_to_max_window() {
         let until = "2026-07-09T00:00:00Z";
 
-        let (since_ts, until_ts) =
-            bounded_trend_epoch_filters(None, Some(until), "day").unwrap();
+        let (since_ts, until_ts) = bounded_trend_epoch_filters(None, Some(until), "day").unwrap();
 
         assert_eq!(
             epoch_seconds_to_date(since_ts).unwrap(),
@@ -2547,12 +2721,8 @@ mod tests {
 
     #[test]
     fn bounded_trend_epoch_filters_rejects_too_many_day_buckets() {
-        let error = bounded_trend_epoch_filters(
-            Some("2025-01-01"),
-            Some("2026-01-02"),
-            "day",
-        )
-        .unwrap_err();
+        let error =
+            bounded_trend_epoch_filters(Some("2025-01-01"), Some("2026-01-02"), "day").unwrap_err();
 
         assert!(matches!(error, AppError::BadRequest(_)));
     }
@@ -2732,7 +2902,10 @@ mod tests {
         )
         .await?;
         let second_org_names = string_values(&second_org_page, "organizations", "organization");
-        assert_eq!(second_org_names.first().map(String::as_str), Some(gamma_org_name));
+        assert_eq!(
+            second_org_names.first().map(String::as_str),
+            Some(gamma_org_name)
+        );
         assert!(!second_org_names.contains(&alpha_org_name.to_string()));
         assert!(!second_org_names.contains(&beta_org_name.to_string()));
 
@@ -2756,8 +2929,8 @@ mod tests {
         );
 
         let Json(second_department_page) = aggregate_departments(
-            State(state),
-            auth,
+            State(state.clone()),
+            auth.clone(),
             Query(aggregate_query(
                 None,
                 None,
@@ -2778,14 +2951,57 @@ mod tests {
                 .map(|(organization, department)| (organization.as_str(), department.as_str())),
             Some((beta_org_name, gamma_dept_name))
         );
-        assert!(!second_department_pairs.contains(&(
-            alpha_org_name.to_string(),
-            alpha_dept_name.to_string()
-        )));
-        assert!(!second_department_pairs.contains(&(
-            alpha_org_name.to_string(),
-            beta_dept_name.to_string()
-        )));
+        assert!(
+            !second_department_pairs
+                .contains(&(alpha_org_name.to_string(), alpha_dept_name.to_string()))
+        );
+        assert!(
+            !second_department_pairs
+                .contains(&(alpha_org_name.to_string(), beta_dept_name.to_string()))
+        );
+
+        let mut rollup_state = state;
+        rollup_state.config.dashboard_use_rollups = true;
+        let Json(first_rollup_department_page) = aggregate_departments(
+            State(rollup_state.clone()),
+            auth.clone(),
+            Query(aggregate_query(None, None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            pair_values(
+                &first_rollup_department_page,
+                "departments",
+                "organization",
+                "department"
+            ),
+            vec![
+                (alpha_org_name.to_string(), alpha_dept_name.to_string()),
+                (alpha_org_name.to_string(), beta_dept_name.to_string())
+            ]
+        );
+        let Json(second_rollup_department_page) = aggregate_departments(
+            State(rollup_state),
+            auth,
+            Query(aggregate_query(
+                None,
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_rollup_department_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            pair_values(
+                &second_rollup_department_page,
+                "departments",
+                "organization",
+                "department"
+            )
+            .first()
+            .map(|(organization, department)| (organization.as_str(), department.as_str())),
+            Some((beta_org_name, gamma_dept_name))
+        );
 
         db.cleanup().await?;
         Ok(())
@@ -2914,6 +3130,60 @@ mod tests {
         .await?;
         assert_eq!(
             string_values(&second_project_page, "projects", "project_name"),
+            vec!["gamma"]
+        );
+
+        let mut rollup_state = state.clone();
+        rollup_state.config.dashboard_use_rollups = true;
+        let Json(first_rollup_developer_page) = aggregate_developers(
+            State(rollup_state.clone()),
+            auth.clone(),
+            Query(aggregate_query(Some(org_slug.clone()), None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_rollup_developer_page, "developers", "name"),
+            vec!["Alice", "Bob"]
+        );
+        let Json(second_rollup_developer_page) = aggregate_developers(
+            State(rollup_state.clone()),
+            auth.clone(),
+            Query(aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_rollup_developer_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_rollup_developer_page, "developers", "name"),
+            vec!["Carol"]
+        );
+
+        let Json(first_rollup_project_page) = aggregate_projects(
+            State(rollup_state.clone()),
+            auth.clone(),
+            Query(aggregate_query(Some(org_slug.clone()), None, Some(2), None)),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&first_rollup_project_page, "projects", "project_name"),
+            vec!["alpha", "beta"]
+        );
+        let Json(second_rollup_project_page) = aggregate_projects(
+            State(rollup_state),
+            auth.clone(),
+            Query(aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(2),
+                Some(required_next_cursor(&first_rollup_project_page)),
+            )),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_rollup_project_page, "projects", "project_name"),
             vec!["gamma"]
         );
 

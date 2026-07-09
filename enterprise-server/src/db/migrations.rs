@@ -100,6 +100,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "024_dashboard_aggregate_pagination_indexes",
         include_str!("../../migrations/024_dashboard_aggregate_pagination_indexes.sql"),
     ),
+    (
+        "025_dashboard_rollup_project_indexes",
+        include_str!("../../migrations/025_dashboard_rollup_project_indexes.sql"),
+    ),
+    (
+        "026_dashboard_git_identity_index",
+        include_str!("../../migrations/026_dashboard_git_identity_index.sql"),
+    ),
+    (
+        "027_department_aggregate_fallback_index",
+        include_str!("../../migrations/027_department_aggregate_fallback_index.sql"),
+    ),
 ];
 
 /// Run all database migrations

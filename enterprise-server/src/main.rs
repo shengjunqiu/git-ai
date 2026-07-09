@@ -65,6 +65,14 @@ async fn main() -> anyhow::Result<()> {
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections)
         .acquire_timeout(Duration::from_secs(config.database_acquire_timeout_seconds))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // Dashboard aggregate queries are short-lived OLTP requests; PostgreSQL JIT
+                // can spend seconds compiling high-cost plans that execute in milliseconds.
+                sqlx::query("SET jit = off").execute(conn).await?;
+                Ok(())
+            })
+        })
         .connect(&config.database_url)
         .await?;
 
