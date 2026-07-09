@@ -1,0 +1,26 @@
+docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
+  a73676cfded0c055 300,305,311-312,324-326,332-334,348-350,359-424
+enterprise-server/src/services/metrics.rs
+  a73676cfded0c055 4,24,53-57,60,70-71,74-86,256-257,259-261,263-278,280-295,443,446,448,478,583,586,588,629
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "346f72714d58c4fb48d3f1260f9a9b53b1d2093c",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 84,
+      "total_deletions": 18,
+      "accepted_lines": 18965,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/dc77ffbb7fde13d6f9c0f2e9a51d4c80f6ed9aac0e0c10dbe1825a7edf8f9a2a"
+    }
+  }
+}
