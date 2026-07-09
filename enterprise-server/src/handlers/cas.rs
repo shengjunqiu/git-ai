@@ -3,6 +3,7 @@ use axum::response::Json;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use tokio::task::JoinSet;
 
 use crate::auth::middleware::{AuthExtractor, HeaderExtractor};
@@ -13,6 +14,7 @@ use crate::pos_encoded::validate_hex_hash;
 use crate::routes::AppState;
 
 const MAX_CAS_UPLOAD_OBJECTS: usize = 100;
+const CAS_DB_INSERT_CHUNK_SIZE: usize = 100;
 
 /// POST /worker/cas/upload — Batch upload CAS objects
 pub async fn upload_cas(
@@ -66,7 +68,6 @@ async fn process_cas_uploads(
             &mut join_set,
             state.clone(),
             identity.clone(),
-            headers.clone(),
             index,
             object,
         );
@@ -82,31 +83,26 @@ async fn process_cas_uploads(
                 &mut join_set,
                 state.clone(),
                 identity.clone(),
-                headers.clone(),
                 index,
                 object,
             );
         }
     }
 
-    completed.sort_by_key(|result| result.index);
-
-    let mut results = Vec::new();
+    let mut results = vec![None; completed.len()];
+    let mut db_rows = Vec::new();
     let mut success_count = 0i64;
     let mut failure_count = 0i64;
 
     for task_result in completed {
+        let index = task_result.index;
         match task_result.result {
-            Ok(()) => {
-                results.push(serde_json::json!({
-                    "hash": task_result.hash,
-                    "status": "ok",
-                }));
-                success_count += 1;
+            Ok(object) => {
+                db_rows.push(CasDbRow::from_prepared(index, object));
             }
             Err(e) => {
                 tracing::warn!("CAS upload failed for hash {}: {}", task_result.hash, e);
-                results.push(serde_json::json!({
+                results[index] = Some(serde_json::json!({
                     "hash": task_result.hash,
                     "status": "error",
                     "error": e.to_string(),
@@ -115,6 +111,46 @@ async fn process_cas_uploads(
             }
         }
     }
+
+    if !db_rows.is_empty() {
+        match insert_cas_db_rows(&state.db, &identity, &headers, &db_rows).await {
+            Ok(()) => {
+                for row in &db_rows {
+                    results[row.index] = Some(serde_json::json!({
+                        "hash": &row.hash,
+                        "status": "ok",
+                    }));
+                    success_count += 1;
+                }
+            }
+            Err(e) => {
+                let sample_hashes: Vec<&str> = db_rows
+                    .iter()
+                    .take(10)
+                    .map(|row| row.hash.as_str())
+                    .collect();
+                tracing::warn!(
+                    error = %e,
+                    uploaded_object_count = db_rows.len(),
+                    sample_hashes = ?sample_hashes,
+                    user_id = %identity.user_id,
+                    org_id = ?identity.org_id,
+                    "CAS upload database batch failed after object storage writes",
+                );
+
+                for row in &db_rows {
+                    results[row.index] = Some(serde_json::json!({
+                        "hash": &row.hash,
+                        "status": "error",
+                        "error": e.to_string(),
+                    }));
+                    failure_count += 1;
+                }
+            }
+        }
+    }
+
+    let results: Vec<Value> = results.into_iter().flatten().collect();
 
     Ok(serde_json::json!({
         "results": results,
@@ -127,13 +163,12 @@ fn spawn_cas_upload_task(
     join_set: &mut JoinSet<CasUploadTaskResult>,
     state: AppState,
     identity: AuthIdentity,
-    headers: RequestHeaders,
     index: usize,
     object: PreparedCasObject,
 ) {
     join_set.spawn(async move {
         let hash = object.hash.clone();
-        let result = process_prepared_cas_object(&state, &object, &identity, &headers).await;
+        let result = store_prepared_cas_object(&state, object, &identity).await;
 
         CasUploadTaskResult {
             index,
@@ -194,7 +229,7 @@ impl PreparedCasObject {
 struct CasUploadTaskResult {
     index: usize,
     hash: String,
-    result: Result<(), AppError>,
+    result: Result<PreparedCasObject, AppError>,
 }
 
 #[cfg(test)]
@@ -385,6 +420,32 @@ mod tests {
         assert_eq!(response.0["failure_count"], 1);
         assert_eq!(table_count(&db.state.db, "cas_objects").await?, 0);
         assert_eq!(table_count(&db.state.db, "cas_ownership").await?, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_cas_database_batch_failure_marks_stored_objects_as_errors() -> anyhow::Result<()>
+    {
+        let object_store_dir = tempfile::tempdir()?;
+        let Some(db) = TestDatabase::new(local_cas_store(object_store_dir.path())?).await? else {
+            return Ok(());
+        };
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+        let object = cas_object(cas_content("db-batch-failure"));
+        let hash = object.hash.clone();
+
+        let response = upload_object(&db.state, user_id, org_id, object).await?;
+
+        assert_eq!(response.0["success_count"], 0);
+        assert_eq!(response.0["failure_count"], 1);
+        assert_eq!(response.0["results"][0]["hash"], hash);
+        assert_eq!(response.0["results"][0]["status"], "error");
+        assert_eq!(table_count(&db.state.db, "cas_objects").await?, 0);
+        assert_eq!(table_count(&db.state.db, "cas_ownership").await?, 0);
+        assert!(db.state.cas_store.get(&hash).await?.is_some());
 
         db.cleanup().await?;
         Ok(())
@@ -778,12 +839,32 @@ mod tests {
     }
 }
 
-async fn process_prepared_cas_object(
+#[derive(Debug)]
+struct CasDbRow {
+    index: usize,
+    hash: String,
+    content_json: serde_json::Value,
+    metadata_json: Option<serde_json::Value>,
+    size_bytes: i32,
+}
+
+impl CasDbRow {
+    fn from_prepared(index: usize, object: PreparedCasObject) -> Self {
+        Self {
+            index,
+            hash: object.hash,
+            content_json: object.content_json,
+            metadata_json: object.metadata_json,
+            size_bytes: object.content_str.len() as i32,
+        }
+    }
+}
+
+async fn store_prepared_cas_object(
     state: &AppState,
-    object: &PreparedCasObject,
+    object: PreparedCasObject,
     identity: &AuthIdentity,
-    headers: &RequestHeaders,
-) -> Result<(), AppError> {
+) -> Result<PreparedCasObject, AppError> {
     // Server-side secrets detection (defense in depth)
     let scan_result = crate::services::secrets::scan_json_for_secrets(&object.content_json);
     if scan_result.secrets_found > 0 {
@@ -815,39 +896,82 @@ async fn process_prepared_cas_object(
         .put(&object.hash, object.content_str.as_bytes())
         .await?;
 
-    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+    Ok(object)
+}
 
-    // Upsert: insert if not exists (idempotent)
-    sqlx::query(
-        r#"INSERT INTO cas_objects (hash, content, metadata, author_identity, user_id, org_id, size_bytes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (hash) DO NOTHING"#
-    )
-    .bind(&object.hash)
-    .bind(&object.content_json)
-    .bind(&object.metadata_json)
-    .bind(&headers.author_identity)
-    .bind(identity.user_id)
-    .bind(identity.org_id)
-    .bind(object.content_str.len() as i32)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+async fn insert_cas_db_rows(
+    pool: &PgPool,
+    identity: &AuthIdentity,
+    headers: &RequestHeaders,
+    rows: &[CasDbRow],
+) -> Result<(), AppError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
 
-    // Record ownership
-    sqlx::query(
-        r#"INSERT INTO cas_ownership (hash, user_id, org_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (hash, user_id) DO NOTHING"#,
-    )
-    .bind(&object.hash)
-    .bind(identity.user_id)
-    .bind(identity.org_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    let mut tx = pool.begin().await.map_err(AppError::Database)?;
+
+    for chunk in rows.chunks(CAS_DB_INSERT_CHUNK_SIZE) {
+        insert_cas_db_rows_chunk(&mut tx, identity, headers, chunk).await?;
+    }
 
     tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+async fn insert_cas_db_rows_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthIdentity,
+    headers: &RequestHeaders,
+    rows: &[CasDbRow],
+) -> Result<(), AppError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut object_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        r#"INSERT INTO cas_objects (
+            hash, content, metadata, author_identity, user_id, org_id, size_bytes
+        ) "#,
+    );
+
+    object_builder.push_values(rows, |mut row_builder, row| {
+        row_builder
+            .push_bind(&row.hash)
+            .push_bind(&row.content_json)
+            .push_bind(&row.metadata_json)
+            .push_bind(&headers.author_identity)
+            .push_bind(identity.user_id)
+            .push_bind(identity.org_id)
+            .push_bind(row.size_bytes);
+    });
+
+    object_builder.push(" ON CONFLICT (hash) DO NOTHING");
+
+    object_builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    let mut ownership_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new(r#"INSERT INTO cas_ownership (hash, user_id, org_id) "#);
+
+    ownership_builder.push_values(rows, |mut row_builder, row| {
+        row_builder
+            .push_bind(&row.hash)
+            .push_bind(identity.user_id)
+            .push_bind(identity.org_id);
+    });
+
+    ownership_builder.push(" ON CONFLICT (hash, user_id) DO NOTHING");
+
+    ownership_builder
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::Database)?;
 
     Ok(())
 }

@@ -883,24 +883,31 @@ git commit -m "Instrument enterprise password verification latency"
 
 实现步骤：
 
-- [ ] 将每对象处理拆成两段：
+- [x] 将每对象处理拆成两段：
   - 并发执行 S3/MinIO put。
   - 收集成功对象后，按 batch 批量写 DB。
-- [ ] 新增 `insert_cas_db_rows_chunk`：
+- [x] 新增 `insert_cas_db_rows_chunk`：
   - bulk insert `cas_objects`
   - bulk insert `cas_ownership`
   - 单 transaction 覆盖整个成功对象集合或分 chunk
-- [ ] 保持 partial failure 语义：
+- [x] 保持 partial failure 语义：
   - S3 失败的对象返回 error。
   - S3 成功但 DB batch 失败的对象返回 error。
-- [ ] DB 写入失败时记录足够日志，方便定位。
+- [x] DB 写入失败时记录足够日志，方便定位。
 
 验收标准：
 
-- [ ] CAS hash mismatch 仍在写 S3 前失败。
-- [ ] 同 hash 同内容并发上传仍幂等。
-- [ ] S3 失败不留下 DB ready 记录。
-- [ ] CAS 2000 objects 压测 p95 低于当前 `1472.66ms` 或 DB transaction 数明显下降。
+- [x] CAS hash mismatch 仍在写 S3 前失败。
+- [x] 同 hash 同内容并发上传仍幂等。
+- [x] S3 失败不留下 DB ready 记录。
+- [x] CAS 2000 objects 压测 p95 低于当前 `1472.66ms` 或 DB transaction 数明显下降。
+
+阶段 5 执行记录：
+
+- `process_cas_uploads` 保留 bounded concurrency 的对象存储上传，上传成功后统一进入 `insert_cas_db_rows`。
+- `insert_cas_db_rows` 在单个 Postgres transaction 内按 chunk bulk insert `cas_objects` 和 `cas_ownership`，将每请求 DB transaction 数从“成功对象数”降到 1 个。
+- 新增 DB batch 失败回归测试：对象已写入 CAS store 但 DB FK/transaction 失败时，该对象返回 `error`，且不留下 `cas_objects` / `cas_ownership` 记录。
+- 验证：`cargo test cas`、`cargo test` 通过。
 
 测试命令：
 
