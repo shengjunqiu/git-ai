@@ -726,17 +726,17 @@ git commit -m "Paginate admin list APIs"
 
 实现步骤：
 
-- [ ] 扩展 `PrAggregateQuery`，增加 `limit` 和 `cursor`。
-- [ ] 明确排序：`ORDER BY merged_at DESC NULLS LAST, id DESC`。
-- [ ] cursor 使用 `(merged_at, id)`。
-- [ ] 查询 PR 列表时使用 `limit + 1`。
-- [ ] 响应保留 `pull_requests`，新增 `pagination`。
+- [x] 扩展 `PrAggregateQuery`，增加 `limit` 和 `cursor`。
+- [x] 明确排序：`ORDER BY merged_at DESC NULLS LAST, id DESC`。
+- [x] cursor 使用 `(merged_at, id)`。
+- [x] 查询 PR 列表时使用 `limit + 1`。
+- [x] 响应保留 `pull_requests`，新增 `pagination`。
 
 验收标准：
 
-- [ ] `repo/org/since/until` 过滤和 cursor 同时生效。
-- [ ] `limit=20` 返回最多 20 条 PR。
-- [ ] 第二页不重复第一页数据。
+- [x] `repo/org/since/until` 过滤和 cursor 同时生效。
+- [x] `limit=20` 返回最多 20 条 PR。
+- [x] 第二页不重复第一页数据。
 
 ### 4.2 拆分 summary 查询
 
@@ -744,16 +744,16 @@ git commit -m "Paginate admin list APIs"
 
 实现步骤：
 
-- [ ] 新增独立 SQL 查询，按同样过滤条件计算全量 summary。
-- [ ] summary 查询不受 `limit/cursor` 影响。
-- [ ] 响应中保留原 `summary` 字段。
+- [x] 新增独立 SQL 查询，按同样过滤条件计算全量 summary。
+- [x] summary 查询不受 `limit/cursor` 影响。
+- [x] 响应中保留原 `summary` 字段。
 - [ ] 可选新增 `page_summary`，如果前端需要当前页统计。
 
 验收标准：
 
-- [ ] 第一页和第二页返回的 `summary.total_prs` 一致。
-- [ ] `summary.total_prs` 等于过滤条件下的全量 PR 数。
-- [ ] `pull_requests.len()` 只代表当前页条数。
+- [x] 第一页和第二页返回的 `summary.total_prs` 一致。
+- [x] `summary.total_prs` 等于过滤条件下的全量 PR 数。
+- [x] `pull_requests.len()` 只代表当前页条数。
 
 ### 4.3 PR 索引和测试
 
@@ -772,12 +772,12 @@ ON pull_requests (repo_url, merged_at DESC, id DESC);
 
 测试步骤：
 
-- [ ] 插入至少 5 条 PR。
-- [ ] 用 `limit=2` 翻三页。
-- [ ] 测试 `repo` 过滤。
-- [ ] 测试 `org` 过滤。
-- [ ] 测试 `since/until` 过滤。
-- [ ] 确认 summary 不随 page 改变。
+- [x] 插入至少 5 条 PR。
+- [x] 用 `limit=2` 翻三页。
+- [x] 测试 `repo` 过滤。
+- [x] 测试 `org` 过滤。
+- [x] 测试 `since/until` 过滤。
+- [x] 确认 summary 不随 page 改变。
 
 测试命令：
 
@@ -794,6 +794,33 @@ cargo test
 git add enterprise-server/src enterprise-server/migrations
 git commit -m "Paginate pull request aggregation"
 ```
+
+### 阶段 4 执行记录
+
+执行日期：2026-07-09
+
+实现内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `enterprise-server/src/handlers/lifecycle.rs` | `aggregate_pull_requests` 增加 cursor 分页、稳定排序、`pagination` 响应元数据，并把 summary 拆成独立全量聚合 SQL |
+| `enterprise-server/migrations/022_pull_request_pagination_indexes.sql` | 新增 PR 分页复合索引，覆盖无过滤、org 过滤和 repo 过滤场景 |
+| `enterprise-server/src/db/migrations.rs` | 注册 `022_pull_request_pagination_indexes` |
+
+验证结果：
+
+| 命令或检查 | 结果 |
+| --- | --- |
+| `cd enterprise-server && cargo test pull_requests` | 2 passed, 0 failed |
+| `cd enterprise-server && cargo test lifecycle` | 2 passed, 0 failed |
+| `cd enterprise-server && cargo test db::migrations` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test` | 139 passed, 0 failed |
+
+备注：
+
+- `pull_requests` 旧字段保留；新增 `pagination`。
+- `summary` 继续表示过滤条件下的全量统计，不随当前页变化。
+- 当前测试输出仍有既有 warning，未在本阶段处理。
 
 ## 阶段 5: 改造 dashboard 聚合明细
 

@@ -4,17 +4,52 @@
 
 use axum::extract::{Query, State};
 use axum::response::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthExtractor;
 use crate::error::AppError;
+use crate::pagination::{
+    clamp_limit, decode_cursor, encode_cursor, fetch_limit, pagination_meta, truncate_to_limit,
+    CURSOR_VERSION, DEFAULT_LIMIT, MAX_LIMIT,
+};
 use crate::routes::AppState;
 
 // ================================================================
 // PR-level aggregation
 // ================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PullRequestCursor {
+    v: u8,
+    merged_at: Option<chrono::DateTime<chrono::Utc>>,
+    id: Uuid,
+}
+
+fn decode_pull_request_cursor(cursor: Option<&str>) -> Result<Option<PullRequestCursor>, AppError> {
+    let cursor: Option<PullRequestCursor> = cursor.map(decode_cursor).transpose()?;
+    if let Some(cursor) = &cursor {
+        if cursor.v != CURSOR_VERSION {
+            return Err(AppError::BadRequest(format!(
+                "Unsupported pagination cursor version: {}",
+                cursor.v
+            )));
+        }
+    }
+    Ok(cursor)
+}
+
+fn encode_pull_request_cursor(
+    merged_at: Option<chrono::DateTime<chrono::Utc>>,
+    id: Uuid,
+) -> Result<String, AppError> {
+    encode_cursor(&PullRequestCursor {
+        v: CURSOR_VERSION,
+        merged_at,
+        id,
+    })
+}
 
 #[derive(Debug, Deserialize)]
 pub struct PrAggregateQuery {
@@ -22,6 +57,8 @@ pub struct PrAggregateQuery {
     pub repo: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 /// GET /api/v1/aggregate/pull-requests — PR-level AI attribution aggregation
@@ -30,9 +67,13 @@ pub async fn aggregate_pull_requests(
     auth: AuthExtractor,
     Query(query): Query<PrAggregateQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let (user_filter, org_filter) = crate::handlers::dashboard::build_data_filters(&auth.0);
+    let (_user_filter, org_filter) = crate::handlers::dashboard::build_data_filters(&auth.0);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_pull_request_cursor(query.cursor.as_deref())?;
+    let cursor_merged_at = cursor.as_ref().and_then(|cursor| cursor.merged_at);
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
 
-    let rows: Vec<(Uuid, Option<Uuid>, String, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, i32, i32, i32, f32, Option<Vec<String>>, i32, i32)> = sqlx::query_as(
+    let mut rows: Vec<(Uuid, Option<Uuid>, String, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, i32, i32, i32, f32, Option<Vec<String>>, i32, i32)> = sqlx::query_as(
         r#"SELECT id, org_id, repo_url, pr_id, pr_url, title, author_email, merged_at,
                   total_lines, ai_lines, human_lines, pct_ai, tools_used, files_changed, ai_files
         FROM pull_requests
@@ -41,16 +82,47 @@ pub async fn aggregate_pull_requests(
           AND ($3::timestamptz IS NULL OR merged_at >= $3::timestamptz)
           AND ($4::timestamptz IS NULL OR merged_at <= $4::timestamptz)
           AND ($5::uuid IS NULL OR org_id = $5)
-        ORDER BY merged_at DESC"#
+          AND (
+              $7::uuid IS NULL
+              OR (
+                  $6::timestamptz IS NOT NULL
+                  AND (
+                      merged_at < $6::timestamptz
+                      OR (merged_at = $6::timestamptz AND id < $7::uuid)
+                      OR merged_at IS NULL
+                  )
+              )
+              OR (
+                  $6::timestamptz IS NULL
+                  AND merged_at IS NULL
+                  AND id < $7::uuid
+              )
+          )
+        ORDER BY merged_at DESC NULLS LAST, id DESC
+        LIMIT $8"#
     )
     .bind(&query.repo)
     .bind(&query.org)
     .bind(&query.since)
     .bind(&query.until)
     .bind(org_filter)
+    .bind(cursor_merged_at)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, _, _, _, merged_at, _, _, _, _, _, _, _)| {
+                encode_pull_request_cursor(*merged_at, *id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     let prs: Vec<Value> = rows.iter().map(|(id, org_id, repo_url, pr_id, pr_url, title, author, merged, total, ai, human, pct, tools, files, ai_files)| {
         json!({
@@ -72,28 +144,35 @@ pub async fn aggregate_pull_requests(
         })
     }).collect();
 
-    // Summary
-    let total_prs = prs.len() as i64;
-    let avg_pct_ai = if !prs.is_empty() {
-        prs.iter().map(|p| p.get("pct_ai").and_then(|v| v.as_f64()).unwrap_or(0.0))
-            .sum::<f64>() / prs.len() as f64
-    } else {
-        0.0
-    };
+    let summary: (i64, Option<f64>, i64, i64, i64) = sqlx::query_as(
+        r#"SELECT
+              COUNT(*)::bigint AS total_prs,
+              AVG(pct_ai)::double precision AS avg_pct_ai,
+              COUNT(*) FILTER (WHERE total_lines <= 100)::bigint AS small,
+              COUNT(*) FILTER (WHERE total_lines > 100 AND total_lines <= 500)::bigint AS medium,
+              COUNT(*) FILTER (WHERE total_lines > 500)::bigint AS large
+        FROM pull_requests
+        WHERE ($1::text IS NULL OR repo_url = $1)
+          AND ($2::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $2))
+          AND ($3::timestamptz IS NULL OR merged_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR merged_at <= $4::timestamptz)
+          AND ($5::uuid IS NULL OR org_id = $5)"#,
+    )
+    .bind(&query.repo)
+    .bind(&query.org)
+    .bind(&query.since)
+    .bind(&query.until)
+    .bind(org_filter)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
 
-    // Size distribution
-    let mut small = 0i64;
-    let mut medium = 0i64;
-    let mut large = 0i64;
-    for pr in &prs {
-        let lines = pr.get("total_lines").and_then(|v| v.as_i64()).unwrap_or(0);
-        if lines <= 100 { small += 1; }
-        else if lines <= 500 { medium += 1; }
-        else { large += 1; }
-    }
+    let (total_prs, avg_pct_ai, small, medium, large) = summary;
+    let avg_pct_ai = avg_pct_ai.unwrap_or(0.0);
 
     Ok(Json(json!({
         "pull_requests": prs,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
         "summary": {
             "total_prs": total_prs,
             "avg_pct_ai": (avg_pct_ai * 100.0).round() / 100.0,
@@ -561,4 +640,463 @@ pub async fn get_ai_code_lifecycle(
         "lifecycle": lifecycle,
         "ai_code_involved_in_alert": ai_code_involved_in_alert,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AppConfig, MetricsRollupWriteMode};
+    use crate::models::user::{AuthIdentity, AuthMethod};
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
+
+    struct TestDatabase {
+        state: AppState,
+        admin_pool: PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping lifecycle database test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping lifecycle database test: could not create isolated database {db_name}: {error}"
+                );
+                admin_pool.close().await;
+                return Ok(None);
+            }
+
+            let pool = PgPoolOptions::new()
+                .max_connections(4)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            let config = test_config(&test_url);
+            let redis = redis::Client::open(config.redis_url.clone())?;
+            let auth_password_limiter = crate::routes::auth_password_limiter(&config);
+            let cas_store = crate::services::cas::CasStore::new(&config)?;
+            let state = AppState {
+                db: pool,
+                redis,
+                config,
+                cas_store,
+                rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+                auth_password_limiter,
+            };
+
+            Ok(Some(Self {
+                state,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.state.db.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pull_requests_cursor_paginates_and_keeps_full_summary() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id, org_slug) = insert_test_identity(&db.state.db).await?;
+        let merged_at = fixed_timestamp("2026-07-09T10:00:00Z");
+        let fixtures = [
+            (uuid_tail(1), 50, 5, 45, 10.0),
+            (uuid_tail(2), 150, 30, 120, 20.0),
+            (uuid_tail(3), 600, 180, 420, 30.0),
+            (uuid_tail(4), 10, 4, 6, 40.0),
+            (uuid_tail(5), 700, 350, 350, 50.0),
+        ];
+        for (id, total, ai, human, pct) in fixtures {
+            insert_pull_request(
+                &db.state.db,
+                id,
+                org_id,
+                "https://example.com/repo-a",
+                &format!("pr-{id}"),
+                Some(merged_at),
+                total,
+                ai,
+                human,
+                pct,
+            )
+            .await?;
+        }
+        insert_other_org_pull_request(&db.state.db, "https://example.com/repo-a").await?;
+
+        let Json(first_page) = aggregate_pull_requests(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PrAggregateQuery {
+                org: Some(org_slug.clone()),
+                repo: Some("https://example.com/repo-a".into()),
+                since: Some("2026-07-01T00:00:00Z".into()),
+                until: Some("2026-07-31T23:59:59Z".into()),
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&first_page, "pull_requests"),
+            vec![uuid_tail(5), uuid_tail(4)]
+        );
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+        assert_full_summary(&first_page);
+
+        let cursor = required_next_cursor(&first_page);
+        let Json(second_page) = aggregate_pull_requests(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PrAggregateQuery {
+                org: Some(org_slug.clone()),
+                repo: Some("https://example.com/repo-a".into()),
+                since: Some("2026-07-01T00:00:00Z".into()),
+                until: Some("2026-07-31T23:59:59Z".into()),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&second_page, "pull_requests"),
+            vec![uuid_tail(3), uuid_tail(2)]
+        );
+        assert_full_summary(&second_page);
+
+        let cursor = required_next_cursor(&second_page);
+        let Json(third_page) = aggregate_pull_requests(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PrAggregateQuery {
+                org: Some(org_slug),
+                repo: Some("https://example.com/repo-a".into()),
+                since: Some("2026-07-01T00:00:00Z".into()),
+                until: Some("2026-07-31T23:59:59Z".into()),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&third_page, "pull_requests"), vec![uuid_tail(1)]);
+        assert_eq!(third_page["pagination"]["has_more"].as_bool(), Some(false));
+        assert_full_summary(&third_page);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pull_requests_cursor_pages_null_merged_at_after_dated_rows() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id, org_slug) = insert_test_identity(&db.state.db).await?;
+        insert_pull_request(
+            &db.state.db,
+            uuid_tail(1),
+            org_id,
+            "https://example.com/repo-null",
+            "dated",
+            Some(fixed_timestamp("2026-07-09T10:00:00Z")),
+            10,
+            5,
+            5,
+            50.0,
+        )
+        .await?;
+        insert_pull_request(
+            &db.state.db,
+            uuid_tail(2),
+            org_id,
+            "https://example.com/repo-null",
+            "null-merged",
+            None,
+            20,
+            5,
+            15,
+            25.0,
+        )
+        .await?;
+
+        let Json(first_page) = aggregate_pull_requests(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PrAggregateQuery {
+                org: Some(org_slug.clone()),
+                repo: Some("https://example.com/repo-null".into()),
+                since: None,
+                until: None,
+                limit: Some(1),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&first_page, "pull_requests"), vec![uuid_tail(1)]);
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+
+        let Json(second_page) = aggregate_pull_requests(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PrAggregateQuery {
+                org: Some(org_slug),
+                repo: Some("https://example.com/repo-null".into()),
+                since: None,
+                until: None,
+                limit: Some(1),
+                cursor: Some(required_next_cursor(&first_page)),
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&second_page, "pull_requests"), vec![uuid_tail(2)]);
+        assert_eq!(second_page["pagination"]["has_more"].as_bool(), Some(false));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid, String)> {
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+        let org_slug = format!("lifecycle-test-{}", org_id.simple());
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Lifecycle Test Org")
+            .bind(&org_slug)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("Lifecycle Test User")
+            .bind(org_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(org_id)
+            .bind("admin")
+            .execute(pool)
+            .await?;
+
+        Ok((user_id, org_id, org_slug))
+    }
+
+    async fn insert_pull_request(
+        pool: &PgPool,
+        id: Uuid,
+        org_id: Uuid,
+        repo_url: &str,
+        pr_id: &str,
+        merged_at: Option<chrono::DateTime<chrono::Utc>>,
+        total_lines: i32,
+        ai_lines: i32,
+        human_lines: i32,
+        pct_ai: f32,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO pull_requests (
+                id, org_id, repo_url, pr_id, pr_url, title, author_email, merged_at,
+                total_lines, ai_lines, human_lines, pct_ai, tools_used, files_changed, ai_files
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .bind(repo_url)
+        .bind(pr_id)
+        .bind(format!("{repo_url}/pull/{pr_id}"))
+        .bind(format!("PR {pr_id}"))
+        .bind("dev@example.com")
+        .bind(merged_at)
+        .bind(total_lines)
+        .bind(ai_lines)
+        .bind(human_lines)
+        .bind(pct_ai)
+        .bind(vec!["codex::gpt-5".to_string()])
+        .bind(2)
+        .bind(1)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_other_org_pull_request(pool: &PgPool, repo_url: &str) -> anyhow::Result<()> {
+        let org_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Other Lifecycle Test Org")
+            .bind(format!("other-lifecycle-test-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        insert_pull_request(
+            pool,
+            uuid_tail(99),
+            org_id,
+            repo_url,
+            "other-org",
+            Some(fixed_timestamp("2026-07-09T10:00:00Z")),
+            999,
+            999,
+            0,
+            100.0,
+        )
+        .await
+    }
+
+    fn auth_extractor(user_id: Uuid, org_id: Uuid, org_slug: &str) -> AuthExtractor {
+        AuthExtractor(AuthIdentity {
+            user_id,
+            email: format!("{user_id}@example.com"),
+            name: "Lifecycle Test User".into(),
+            org_id: Some(org_id),
+            org_slug: Some(org_slug.to_string()),
+            department_id: None,
+            role: Some("admin".into()),
+            scopes: vec![],
+            auth_method: AuthMethod::BearerToken,
+        })
+    }
+
+    fn object_ids(page: &Value, key: &str) -> Vec<Uuid> {
+        page[key]
+            .as_array()
+            .expect("response field should be an array")
+            .iter()
+            .map(|entry| {
+                Uuid::parse_str(entry["id"].as_str().expect("entry id should be a string"))
+                    .expect("entry id should be a UUID")
+            })
+            .collect()
+    }
+
+    fn required_next_cursor(page: &Value) -> String {
+        page["pagination"]["next_cursor"]
+            .as_str()
+            .expect("page should include next_cursor")
+            .to_string()
+    }
+
+    fn assert_full_summary(page: &Value) {
+        assert_eq!(page["summary"]["total_prs"].as_i64(), Some(5));
+        assert_eq!(page["summary"]["avg_pct_ai"].as_f64(), Some(30.0));
+        assert_eq!(page["summary"]["pr_size_distribution"]["small"].as_i64(), Some(2));
+        assert_eq!(page["summary"]["pr_size_distribution"]["medium"].as_i64(), Some(1));
+        assert_eq!(page["summary"]["pr_size_distribution"]["large"].as_i64(), Some(2));
+    }
+
+    fn fixed_timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn uuid_tail(value: u32) -> Uuid {
+        Uuid::parse_str(&format!("00000000-0000-0000-0000-{value:012}")).unwrap()
+    }
+
+    fn test_config(database_url: &str) -> AppConfig {
+        AppConfig {
+            database_url: database_url.to_string(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: "lifecycle-test-secret".to_string(),
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_bucket: "git-ai-cas".to_string(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_region: "us-east-1".to_string(),
+            cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
+            metrics_rollup_write_mode: MetricsRollupWriteMode::Sync,
+            metrics_rollup_worker_enabled: false,
+            metrics_rollup_worker_interval_seconds: 5,
+            metrics_rollup_worker_batch_size: 100,
+            dashboard_use_rollups: false,
+            rate_limit_metrics_max_requests: 60,
+            rate_limit_metrics_window_seconds: 60,
+            rate_limit_cas_upload_max_requests: 30,
+            rate_limit_cas_upload_window_seconds: 60,
+            rate_limit_cas_read_max_requests: 100,
+            rate_limit_cas_read_window_seconds: 60,
+            rate_limit_oauth_max_requests: 600,
+            rate_limit_oauth_window_seconds: 60,
+            rate_limit_auth_max_requests: 300,
+            rate_limit_auth_window_seconds: 60,
+            rate_limit_admin_max_requests: 300,
+            rate_limit_admin_window_seconds: 60,
+            rate_limit_default_max_requests: 300,
+            rate_limit_default_window_seconds: 60,
+            base_url: "http://localhost:8080".to_string(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_lifecycle_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
 }
