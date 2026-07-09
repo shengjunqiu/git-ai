@@ -1,0 +1,24 @@
+enterprise-server/static/dashboard.js
+  d2a37ee3fcb7cddb 98-101,539,562,653,680,719,936,1038
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "f539fdb59e55221b7d794f1860cd73bcb668fc34",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 7,
+      "accepted_lines": 2859,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/84a96ab8efc29eb0a4fd6bb0f19c9115ca4a83cc782ac7681b56cf011926bcac"
+    }
+  }
+}
