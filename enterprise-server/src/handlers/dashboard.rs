@@ -19,6 +19,13 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
     };
     let is_admin = auth.is_admin();
     let user_id_str = auth.user_id.to_string();
+    let user_initial = auth
+        .name
+        .chars()
+        .find(|ch| !ch.is_whitespace())
+        .unwrap_or('G')
+        .to_string();
+    let user_role_label = if is_admin { "管理员" } else { "开发者" };
     Html(format!(
         r##"<!DOCTYPE html>
 <html lang="zh-CN">
@@ -64,10 +71,14 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .nav-icon {{ width: 20px; text-align: center; font-size: 1rem; }}
         .nav-section {{ color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase;
                         letter-spacing: 0.1em; margin: 1.5rem 0 0.5rem 0.75rem; }}
-        .sidebar-footer {{ margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border); }}
-        .sidebar-user {{ padding: 0.5rem 0.75rem; color: var(--text-secondary); font-size: 0.8rem; }}
-        .sidebar-user-name {{ color: var(--text-primary); font-weight: 500; }}
-        .sidebar-user-email {{ color: var(--text-muted); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .sidebar-footer {{ margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.6rem; }}
+        .sidebar-user {{ display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 0.65rem; align-items: center; padding: 0.75rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 10px; background: rgba(15,23,42,0.42); }}
+        .sidebar-user-avatar {{ width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.95rem; font-weight: 700; background: linear-gradient(135deg, var(--accent-light), var(--accent)); box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset; }}
+        .sidebar-user-meta {{ min-width: 0; }}
+        .sidebar-user-top {{ display: flex; align-items: center; gap: 0.45rem; min-width: 0; }}
+        .sidebar-user-name {{ min-width: 0; color: var(--text-primary); font-size: 0.86rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .sidebar-user-role {{ flex-shrink: 0; padding: 0.08rem 0.35rem; border-radius: 999px; color: var(--accent); background: rgba(129,140,248,0.12); border: 1px solid rgba(129,140,248,0.18); font-size: 0.62rem; font-weight: 650; line-height: 1.4; }}
+        .sidebar-user-email {{ margin-top: 0.18rem; color: var(--text-muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
         .sidebar-gitai {{ display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 0.55rem; align-items: center; margin: 0.75rem 0 0; min-width: 0; padding: 0.55rem 0.65rem; border: 1px solid rgba(148,163,184,0.14); border-radius: 8px; background: rgba(15,23,42,0.38); }}
         .sidebar-gitai.online {{ border-color: rgba(52,211,153,0.18); background: rgba(52,211,153,0.07); }}
         .sidebar-gitai.offline {{ border-color: rgba(248,113,113,0.18); background: rgba(248,113,113,0.07); }}
@@ -79,10 +90,10 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .sidebar-gitai-content {{ min-width: 0; line-height: 1.25; }}
         .sidebar-gitai-status {{ color: var(--text-primary); font-size: 0.72rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .sidebar-gitai-detail {{ color: var(--text-muted); font-size: 0.66rem; margin-top: 0.16rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .logout-btn {{ display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-muted);
-                       font-size: 0.8rem; cursor: pointer; border: none; background: none; width: 100%;
-                       border-radius: 6px; transition: all 0.15s; margin-top: 0.5rem; }}
-        .logout-btn:hover {{ background: var(--bg-card-hover); color: var(--danger); }}
+        .logout-btn {{ display: flex; align-items: center; justify-content: center; gap: 0.45rem; padding: 0.58rem 0.75rem; color: var(--text-secondary);
+                       font-size: 0.78rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; background: transparent; width: 100%;
+                       border-radius: 8px; transition: all 0.15s; }}
+        .logout-btn:hover {{ background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.16); color: var(--danger); }}
 
         /* Main content */
         .main {{ flex: 1; min-width: 0; height: 100vh; height: 100dvh; min-height: 0; padding: 2rem; overflow-y: auto; }}
@@ -120,6 +131,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         .stat-value.human {{ color: var(--success); }}
         .stat-value.total {{ color: var(--text-primary); }}
         .stat-value.pct {{ color: var(--warning); }}
+        .stat-detail {{ color: var(--text-muted); font-size: 0.75rem; margin-top: 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 
         /* Data tables */
         .table-card {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
@@ -259,8 +271,14 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
             <div class="sidebar-footer">
                 <div class="sidebar-user">
-                    <div class="sidebar-user-name">{name}</div>
-                    <div class="sidebar-user-email" title="{email}">{email}</div>
+                    <div class="sidebar-user-avatar">{user_initial}</div>
+                    <div class="sidebar-user-meta">
+                        <div class="sidebar-user-top">
+                            <div class="sidebar-user-name" title="{name}">{name}</div>
+                            <div class="sidebar-user-role">{user_role_label}</div>
+                        </div>
+                        <div class="sidebar-user-email" title="{email}">{email}</div>
+                    </div>
                     <div class="sidebar-gitai" id="sidebar-gitai">
                         <span class="sidebar-gitai-dot" id="sidebar-gitai-dot"></span>
                         <div class="sidebar-gitai-content">
@@ -270,7 +288,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     </div>
                 </div>
                 <button class="logout-btn" onclick="window.location.href='/logout'">
-                    <span>🚪</span> 退出登录
+                    <span>↪</span> 退出登录
                 </button>
             </div>
         </aside>
@@ -298,11 +316,12 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                     </div>
                 </div>
                 <div class="stats-grid" id="overview-stats">
+                    <div class="stat-card" id="gitai-status-card" style="display:none"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
                     <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
-                    <div class="stat-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
+                    <div class="stat-card" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
                     <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
                 </div>
 
@@ -510,7 +529,10 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
             document.getElementById('admin-nav-section').style.display = 'none';
             document.getElementById('admin-nav-users').style.display = 'none';
             document.getElementById('admin-nav-apikeys').style.display = 'none';
+            document.getElementById('gitai-status-card').style.display = '';
+            document.getElementById('developer-count-card').style.display = 'none';
         }}
+        document.getElementById('sidebar-gitai').style.display = 'none';
 
         function startAutoRefresh() {{
             stopAutoRefresh();
@@ -527,7 +549,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         function refreshCurrentSection() {{
             loadSection(currentSection);
-            loadClientStatus();
+            if (!isAdmin) loadClientStatus();
             updateRefreshTime();
         }}
 
@@ -607,7 +629,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
                 document.getElementById('s-human-lines').textContent = fmt(d.total_human_lines);
                 document.getElementById('s-ai-pct').textContent = (d.pct_ai_lines || 0).toFixed(1) + '%';
-                document.getElementById('s-devs').textContent = fmt(d.total_developers);
+                if (isAdmin) document.getElementById('s-devs').textContent = fmt(d.total_developers);
                 document.getElementById('s-projects').textContent = fmt(d.total_projects);
             }})().catch(e => console.error(e));
 
@@ -639,27 +661,47 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         }}
 
         async function loadClientStatus() {{
+            if (isAdmin) return;
             const cardEl = document.getElementById('sidebar-gitai');
             const statusEl = document.getElementById('sidebar-gitai-status');
             const detailEl = document.getElementById('sidebar-gitai-detail');
             const dotEl = document.getElementById('sidebar-gitai-dot');
-            if (!cardEl || !statusEl || !detailEl || !dotEl) return;
+            const overviewStatusEl = document.getElementById('s-gitai-status');
+            const overviewDetailEl = document.getElementById('s-gitai-detail');
+            if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
             try {{
                 const r = await fetch('/api/v1/client/status');
                 const d = await r.json();
                 if (!d.detected) {{
-                    statusEl.textContent = 'git-ai 未检测到';
-                    cardEl.className = 'sidebar-gitai';
-                    dotEl.className = 'sidebar-gitai-dot';
-                    detailEl.textContent = 'CLI 登录后会显示状态';
-                    detailEl.title = '';
+                    if (overviewStatusEl) {{
+                        overviewStatusEl.textContent = '未检测到';
+                        overviewStatusEl.className = 'stat-value human';
+                    }}
+                    if (overviewDetailEl) {{
+                        overviewDetailEl.textContent = 'CLI 登录后会显示同步信息';
+                        overviewDetailEl.title = overviewDetailEl.textContent;
+                    }}
+                    if (statusEl && cardEl && dotEl && detailEl) {{
+                        statusEl.textContent = 'git-ai 未检测到';
+                        cardEl.className = 'sidebar-gitai';
+                        dotEl.className = 'sidebar-gitai-dot';
+                        detailEl.textContent = 'CLI 登录后会显示状态';
+                        detailEl.title = '';
+                    }}
                     return;
                 }}
 
                 const loggedIn = d.status === 'logged_in';
-                statusEl.textContent = `git-ai ${{d.status_label || (loggedIn ? '已登录' : '已登出')}}`;
-                cardEl.className = loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline';
-                dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
+                const statusLabel = d.status_label || (loggedIn ? '已登录' : '已登出');
+                if (overviewStatusEl) {{
+                    overviewStatusEl.textContent = statusLabel;
+                    overviewStatusEl.className = loggedIn ? 'stat-value ai' : 'stat-value human';
+                }}
+                if (statusEl && cardEl && dotEl) {{
+                    statusEl.textContent = `git-ai ${{statusLabel}}`;
+                    cardEl.className = loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline';
+                    dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
+                }}
 
                 const parts = [];
                 if (d.last_seen_at) {{
@@ -669,7 +711,12 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 }}
                 if ((d.device_count || 0) > 1) parts.push(`${{d.device_count}} 台设备`);
                 if (d.cli_version) parts.push(`v${{d.cli_version}}`);
-                detailEl.textContent = parts.join(' · ') || '暂无同步记录';
+                const syncDetail = parts.join(' · ') || '暂无同步记录';
+                if (overviewDetailEl) {{
+                    overviewDetailEl.textContent = syncDetail;
+                    overviewDetailEl.title = syncDetail;
+                }}
+                if (detailEl) detailEl.textContent = syncDetail;
                 const titleParts = [...parts];
                 if (d.hostname) titleParts.push(d.hostname);
                 if (d.os || d.arch) titleParts.push([d.os, d.arch].filter(Boolean).join('/'));
@@ -680,20 +727,30 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                         return `${{deviceName}}: ${{deviceStatus}}`;
                     }}).join(' / '));
                 }}
-                detailEl.title = titleParts.join(' · ');
+                if (detailEl) detailEl.title = titleParts.join(' · ');
             }} catch(e) {{
                 console.error(e);
-                statusEl.textContent = 'git-ai 检测失败';
-                cardEl.className = 'sidebar-gitai error';
-                dotEl.className = 'sidebar-gitai-dot error';
-                detailEl.textContent = '无法读取状态';
-                detailEl.title = '';
+                if (overviewStatusEl) {{
+                    overviewStatusEl.textContent = '检测失败';
+                    overviewStatusEl.className = 'stat-value pct';
+                }}
+                if (overviewDetailEl) {{
+                    overviewDetailEl.textContent = '无法读取同步信息';
+                    overviewDetailEl.title = overviewDetailEl.textContent;
+                }}
+                if (statusEl && cardEl && dotEl && detailEl) {{
+                    statusEl.textContent = 'git-ai 检测失败';
+                    cardEl.className = 'sidebar-gitai error';
+                    dotEl.className = 'sidebar-gitai-dot error';
+                    detailEl.textContent = '无法读取状态';
+                    detailEl.title = '';
+                }}
             }}
         }}
 
         async function loadOverviewTrend() {{
             try {{
-                const r = await fetch(withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=week'));
+                const r = await fetch(withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'));
                 const d = await r.json();
                 const data = d.data || [];
                 const canvas = document.getElementById('overview-trend-chart');
@@ -1484,7 +1541,7 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 
         // --- Init ---
         loadOverview();
-        loadClientStatus();
+        if (!isAdmin) loadClientStatus();
         updateRefreshTime();
         startAutoRefresh();
     </script>
@@ -1492,6 +1549,8 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
 </html>"##,
         name = auth.name,
         email = auth.email,
+        user_initial = user_initial,
+        user_role_label = user_role_label,
     )).into_response()
 }
 
