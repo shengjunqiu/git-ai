@@ -591,22 +591,22 @@ git commit -m "Add cursor pagination for audit logs"
 
 实现步骤：
 
-- [ ] 为 `list_users` 增加 query extractor。
-- [ ] 支持 `limit` 和 `cursor`。
-- [ ] 查询排序改为 `ORDER BY u.created_at DESC, u.id DESC`。
-- [ ] cursor 使用 `(u.created_at, u.id)`。
-- [ ] 查询 `limit + 1` 个用户。
-- [ ] 保留当前 `users` 字段，新增 `pagination`。
-- [ ] 评估是否继续在列表中返回完整 `api_keys`：
+- [x] 为 `list_users` 增加 query extractor。
+- [x] 支持 `limit` 和 `cursor`。
+- [x] 查询排序改为 `ORDER BY u.created_at DESC, u.id DESC`。
+- [x] cursor 使用 `(u.created_at, u.id)`。
+- [x] 查询 `limit + 1` 个用户。
+- [x] 保留当前 `users` 字段，新增 `pagination`。
+- [x] 评估是否继续在列表中返回完整 `api_keys`：
   - 第一版可保持兼容。
   - 后续优化建议列表只返回 `api_key_count`，详情页调用 `/api/admin/users/{id}/api-keys`。
 
 验收标准：
 
-- [ ] 旧请求 `/api/admin/users/list` 仍返回 `users`。
-- [ ] 新请求 `/api/admin/users/list?limit=20` 返回最多 20 个用户。
-- [ ] cursor 翻页不会重复用户。
-- [ ] 用户 API keys 聚合不破坏分页条数。
+- [x] 旧请求 `/api/admin/users/list` 仍返回 `users`。
+- [x] 新请求 `/api/admin/users/list?limit=20` 返回最多 20 个用户。
+- [x] cursor 翻页不会重复用户。
+- [x] 用户 API keys 聚合不破坏分页条数。
 
 ### 3.2 改造 API keys 列表
 
@@ -616,11 +616,11 @@ git commit -m "Add cursor pagination for audit logs"
 
 实现步骤：
 
-- [ ] 为 `list_api_keys` 增加 `limit` 和 `cursor`。
-- [ ] 排序改为 `ORDER BY created_at DESC, id DESC`。
-- [ ] cursor 使用 `(created_at, id)`。
-- [ ] 响应保留当前 keys 字段名，新增 `pagination`。
-- [ ] 为 `list_user_api_keys` 做同样改造，额外保留 `user_id = $1` 过滤。
+- [x] 为 `list_api_keys` 增加 `limit` 和 `cursor`。
+- [x] 排序改为 `ORDER BY created_at DESC, id DESC`。
+- [x] cursor 使用 `(created_at, id)`。
+- [x] 响应保留当前 keys 字段名，新增 `pagination`。
+- [x] 为 `list_user_api_keys` 做同样改造，额外保留 `user_id = $1` 过滤。
 
 建议索引：
 
@@ -636,9 +636,9 @@ WHERE revoked_at IS NULL;
 
 验收标准：
 
-- [ ] 全局 API keys 列表可翻页。
-- [ ] 单用户 API keys 列表可翻页。
-- [ ] revoked keys 不出现在分页结果中。
+- [x] 全局 API keys 列表可翻页。
+- [x] 单用户 API keys 列表可翻页。
+- [x] revoked keys 不出现在分页结果中。
 
 ### 3.3 改造 organizations 和 departments
 
@@ -648,29 +648,29 @@ WHERE revoked_at IS NULL;
 
 实现步骤：
 
-- [ ] `list_organizations` 增加 `limit` 和 `cursor`。
-- [ ] 排序保持 `ORDER BY o.name ASC, o.id ASC`。
-- [ ] cursor 使用 `(name, id)`。
-- [ ] `include_personal` 过滤必须在 cursor 条件前后保持一致。
-- [ ] `list_departments` 增加 `limit` 和 `cursor`。
-- [ ] 排序保持 `ORDER BY o.name ASC, d.name ASC, d.id ASC`。
-- [ ] cursor 使用 `(org_name, department_name, department_id)`。
+- [x] `list_organizations` 增加 `limit` 和 `cursor`。
+- [x] 排序保持 `ORDER BY o.name ASC, o.id ASC`。
+- [x] cursor 使用 `(name, id)`。
+- [x] `include_personal` 过滤必须在 cursor 条件前后保持一致。
+- [x] `list_departments` 增加 `limit` 和 `cursor`。
+- [x] 排序保持 `ORDER BY o.name ASC, d.name ASC, d.id ASC`。
+- [x] cursor 使用 `(org_name, department_name, department_id)`。
 
 验收标准：
 
-- [ ] 组织列表名称排序稳定。
-- [ ] 部门列表跨组织排序稳定。
-- [ ] `org_id` 过滤和 cursor 同时生效。
-- [ ] `include_personal=true` 和默认行为都可分页。
+- [x] 组织列表名称排序稳定。
+- [x] 部门列表跨组织排序稳定。
+- [x] `org_id` 过滤和 cursor 同时生效。
+- [x] `include_personal=true` 和默认行为都可分页。
 
 ### 3.4 管理后台列表测试
 
 测试步骤：
 
-- [ ] 为 users 创建至少 5 条数据，用 `limit=2` 测三页。
-- [ ] 为 API keys 创建 active/revoked 混合数据，确认只分页 active。
-- [ ] 为 organizations 创建同名或相近名称数据，确认 id tie breaker 生效。
-- [ ] 为 departments 创建跨组织数据，确认排序和过滤稳定。
+- [x] 为 users 创建至少 5 条数据，用 `limit=2` 测三页。
+- [x] 为 API keys 创建 active/revoked 混合数据，确认只分页 active。
+- [x] 为 organizations 创建同名或相近名称数据，确认 id tie breaker 生效。
+- [x] 为 departments 创建跨组织数据，确认排序和过滤稳定。
 
 测试命令：
 
@@ -686,6 +686,33 @@ cargo test
 git add enterprise-server/src enterprise-server/migrations
 git commit -m "Paginate admin list APIs"
 ```
+
+### 阶段 3 执行记录
+
+执行日期：2026-07-09
+
+实现内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `enterprise-server/src/handlers/admin.rs` | `users`、全局 `api_keys`、单用户 `api_keys`、`organizations`、`departments` 列表增加 cursor 分页和 `pagination` 响应元数据 |
+| `enterprise-server/migrations/021_admin_list_pagination_indexes.sql` | 新增 users、api_keys、organizations、departments、org_members 相关复合索引 |
+| `enterprise-server/src/db/migrations.rs` | 注册 `021_admin_list_pagination_indexes` |
+
+验证结果：
+
+| 命令或检查 | 结果 |
+| --- | --- |
+| `cd enterprise-server && cargo test admin` | 10 passed, 0 failed |
+| `cd enterprise-server && cargo test pagination` | 14 passed, 0 failed |
+| `cd enterprise-server && cargo test db::migrations` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test` | 137 passed, 0 failed |
+| `cargo run -- --migrate` | 当前开发库已应用 `021_admin_list_pagination_indexes` |
+
+备注：
+
+- users 列表当前继续返回完整 `api_keys` 聚合，以保持兼容；后续可单独优化为 `api_key_count` + 详情接口。
+- 当前测试输出仍有既有 warning，未在本阶段处理。
 
 ## 阶段 4: 改造 PR 聚合接口
 

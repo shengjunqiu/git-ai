@@ -1,6 +1,6 @@
 use axum::extract::{Path, Query, State};
 use axum::response::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -9,10 +9,87 @@ use crate::auth::middleware::{AdminGuard, AuthExtractor};
 use crate::error::AppError;
 use crate::models::auth::CreateApiKeyRequest;
 use crate::pagination::{
-    clamp_limit, decode_time_id_cursor, encode_cursor, fetch_limit, pagination_meta,
-    truncate_to_limit, TimeIdCursor, DEFAULT_LIMIT, MAX_LIMIT,
+    clamp_limit, decode_cursor, decode_time_id_cursor, decode_time_uuid_cursor, encode_cursor,
+    fetch_limit, pagination_meta, truncate_to_limit, PaginationQuery, TimeIdCursor,
+    TimeUuidCursor, CURSOR_VERSION, DEFAULT_LIMIT, MAX_LIMIT,
 };
 use crate::routes::AppState;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct NameUuidCursor {
+    v: u8,
+    name: String,
+    id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DepartmentListCursor {
+    v: u8,
+    org_name: String,
+    department_name: String,
+    department_id: Uuid,
+}
+
+fn decode_optional_time_uuid_cursor(cursor: Option<&str>) -> Result<Option<TimeUuidCursor>, AppError> {
+    cursor.map(decode_time_uuid_cursor).transpose()
+}
+
+fn encode_time_uuid_cursor(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    id: Uuid,
+) -> Result<String, AppError> {
+    encode_cursor(&TimeUuidCursor::new(timestamp, id))
+}
+
+fn decode_name_uuid_cursor(cursor: Option<&str>) -> Result<Option<NameUuidCursor>, AppError> {
+    let cursor: Option<NameUuidCursor> = cursor.map(decode_cursor).transpose()?;
+    if let Some(cursor) = &cursor {
+        validate_admin_cursor_version(cursor.v)?;
+    }
+    Ok(cursor)
+}
+
+fn encode_name_uuid_cursor(name: &str, id: Uuid) -> Result<String, AppError> {
+    encode_cursor(&NameUuidCursor {
+        v: CURSOR_VERSION,
+        name: name.to_string(),
+        id,
+    })
+}
+
+fn decode_department_list_cursor(
+    cursor: Option<&str>,
+) -> Result<Option<DepartmentListCursor>, AppError> {
+    let cursor: Option<DepartmentListCursor> = cursor.map(decode_cursor).transpose()?;
+    if let Some(cursor) = &cursor {
+        validate_admin_cursor_version(cursor.v)?;
+    }
+    Ok(cursor)
+}
+
+fn encode_department_list_cursor(
+    org_name: &str,
+    department_name: &str,
+    department_id: Uuid,
+) -> Result<String, AppError> {
+    encode_cursor(&DepartmentListCursor {
+        v: CURSOR_VERSION,
+        org_name: org_name.to_string(),
+        department_name: department_name.to_string(),
+        department_id,
+    })
+}
+
+fn validate_admin_cursor_version(version: u8) -> Result<(), AppError> {
+    if version == CURSOR_VERSION {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(format!(
+            "Unsupported pagination cursor version: {}",
+            version
+        )))
+    }
+}
 
 // ================================================================
 // User management
@@ -249,8 +326,14 @@ pub async fn delete_user(
 pub async fn list_users(
     State(state): State<AppState>,
     _auth: AdminGuard,
+    Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_optional_time_uuid_cursor(query.cursor.as_deref())?;
+    let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
+
+    let mut rows: Vec<(
         Uuid,
         String,
         String,
@@ -274,18 +357,32 @@ pub async fn list_users(
                         'expires_at', ak.expires_at,
                         'last_used_at', ak.last_used_at
                     )
-                    ORDER BY ak.created_at DESC
+                    ORDER BY ak.created_at DESC, ak.id DESC
                 ) FILTER (WHERE ak.id IS NOT NULL),
                 '[]'::jsonb
             ) AS api_keys
         FROM users u
         LEFT JOIN api_keys ak ON ak.user_id = u.id AND ak.revoked_at IS NULL
+        WHERE ($1::timestamptz IS NULL OR (u.created_at, u.id) < ($1::timestamptz, $2::uuid))
         GROUP BY u.id, u.email, u.name, u.personal_org_id, u.created_at
-        ORDER BY u.created_at DESC"#,
+        ORDER BY u.created_at DESC, u.id DESC
+        LIMIT $3"#,
     )
+    .bind(cursor_timestamp)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, created_at, _)| encode_time_uuid_cursor(created_at.clone(), *id))
+            .transpose()?
+    } else {
+        None
+    };
 
     let users: Vec<Value> = rows
         .iter()
@@ -301,7 +398,10 @@ pub async fn list_users(
         })
         .collect();
 
-    Ok(Json(json!({ "users": users })))
+    Ok(Json(json!({
+        "users": users,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 // ================================================================
@@ -423,6 +523,8 @@ pub async fn delete_organization(
 #[derive(Debug, Deserialize)]
 pub struct ListOrganizationsQuery {
     pub include_personal: Option<bool>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 pub async fn list_organizations(
@@ -431,7 +533,12 @@ pub async fn list_organizations(
     Query(query): Query<ListOrganizationsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let include_personal = query.include_personal.unwrap_or(false);
-    let rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_name_uuid_cursor(query.cursor.as_deref())?;
+    let cursor_name = cursor.as_ref().map(|cursor| cursor.name.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
+
+    let mut rows: Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT o.id, o.name, o.slug, o.created_at \
          FROM organizations o \
          WHERE ( \
@@ -450,12 +557,26 @@ pub async fn list_organizations(
                  ) \
              ) \
          ) \
-         ORDER BY o.name",
+         AND ($2::text IS NULL OR (o.name, o.id) > ($2::text, $3::uuid)) \
+         ORDER BY o.name ASC, o.id ASC \
+         LIMIT $4",
     )
     .bind(include_personal)
+    .bind(cursor_name)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, name, _, _)| encode_name_uuid_cursor(name, *id))
+            .transpose()?
+    } else {
+        None
+    };
 
     let orgs: Vec<Value> = rows
         .iter()
@@ -469,7 +590,10 @@ pub async fn list_organizations(
         })
         .collect();
 
-    Ok(Json(json!({ "organizations": orgs })))
+    Ok(Json(json!({
+        "organizations": orgs,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 // ================================================================
@@ -479,6 +603,8 @@ pub async fn list_organizations(
 #[derive(Debug, Deserialize)]
 pub struct ListDepartmentsQuery {
     pub org_id: Option<Uuid>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,7 +619,15 @@ pub async fn list_departments(
     _auth: AdminGuard,
     Query(query): Query<ListDepartmentsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_department_list_cursor(query.cursor.as_deref())?;
+    let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
+    let cursor_department_name = cursor
+        .as_ref()
+        .map(|cursor| cursor.department_name.clone());
+    let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
+
+    let mut rows: Vec<(
         Uuid,
         Uuid,
         String,
@@ -516,13 +650,30 @@ pub async fn list_departments(
         JOIN organizations o ON o.id = d.org_id
         LEFT JOIN org_members om ON om.org_id = d.org_id AND om.department_id = d.id
         WHERE ($1::uuid IS NULL OR d.org_id = $1)
+          AND ($2::text IS NULL OR (o.name, d.name, d.id) > ($2::text, $3::text, $4::uuid))
         GROUP BY d.id, d.org_id, d.name, d.slug, d.created_at, o.name, o.slug
-        ORDER BY o.name, d.name"#,
+        ORDER BY o.name ASC, d.name ASC, d.id ASC
+        LIMIT $5"#,
     )
     .bind(query.org_id)
+    .bind(cursor_org_name)
+    .bind(cursor_department_name)
+    .bind(cursor_department_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, name, _, _, org_name, _, _)| {
+                encode_department_list_cursor(org_name, name, *id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     let departments: Vec<Value> = rows
         .iter()
@@ -542,7 +693,10 @@ pub async fn list_departments(
         )
         .collect();
 
-    Ok(Json(json!({ "departments": departments })))
+    Ok(Json(json!({
+        "departments": departments,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 /// POST /api/admin/departments — Create a department
@@ -764,10 +918,16 @@ pub async fn create_api_key(
 /// GET /api/admin/api-keys — List API keys
 pub async fn list_api_keys(
     State(state): State<AppState>,
-    auth: AdminGuard,
+    _auth: AdminGuard,
+    Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Value>, AppError> {
     // Admin can see all keys, no user_id filter
-    let rows: Vec<(
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_optional_time_uuid_cursor(query.cursor.as_deref())?;
+    let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
+
+    let mut rows: Vec<(
         Uuid,
         String,
         Option<String>,
@@ -777,12 +937,27 @@ pub async fn list_api_keys(
         Option<chrono::DateTime<chrono::Utc>>,
     )> = sqlx::query_as(
         r#"SELECT id, key_prefix, name, scopes, created_at, expires_at, last_used_at
-        FROM api_keys WHERE revoked_at IS NULL
-        ORDER BY created_at DESC"#,
+        FROM api_keys
+        WHERE revoked_at IS NULL
+          AND ($1::timestamptz IS NULL OR (created_at, id) < ($1::timestamptz, $2::uuid))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3"#,
     )
+    .bind(cursor_timestamp)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, created, _, _)| encode_time_uuid_cursor(created.clone(), *id))
+            .transpose()?
+    } else {
+        None
+    };
 
     let result: Vec<Value> = rows
         .iter()
@@ -799,7 +974,10 @@ pub async fn list_api_keys(
         })
         .collect();
 
-    Ok(Json(json!({ "api_keys": result })))
+    Ok(Json(json!({
+        "api_keys": result,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 #[cfg(test)]
@@ -986,6 +1164,202 @@ mod log_pagination_tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn users_list_cursor_paginates_three_pages() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        set_user_created_at(&db.state.db, admin_user_id, fixed_timestamp(2000)).await?;
+
+        let created_at = fixed_timestamp(2030);
+        for idx in 1..=5 {
+            insert_user(&db.state.db, uuid_tail(idx), org_id, created_at).await?;
+        }
+
+        let Json(first_page) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&first_page, "users"), vec![uuid_tail(5), uuid_tail(4)]);
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+
+        let cursor = required_next_cursor(&first_page);
+        let Json(second_page) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&second_page, "users"), vec![uuid_tail(3), uuid_tail(2)]);
+
+        let cursor = required_next_cursor(&second_page);
+        let Json(third_page) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        let third_ids = object_ids(&third_page, "users");
+        assert_eq!(third_ids[0], uuid_tail(1));
+        assert_eq!(third_page["pagination"]["has_more"].as_bool(), Some(false));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn api_keys_cursor_paginates_active_keys_only() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let created_at = fixed_timestamp(2030);
+        for idx in 1..=3 {
+            insert_api_key(&db.state.db, uuid_tail(idx), admin_user_id, org_id, created_at, false)
+                .await?;
+        }
+        insert_api_key(&db.state.db, uuid_tail(9), admin_user_id, org_id, created_at, true).await?;
+
+        let Json(first_page) = list_api_keys(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&first_page, "api_keys"),
+            vec![uuid_tail(3), uuid_tail(2)]
+        );
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+
+        let cursor = required_next_cursor(&first_page);
+        let Json(second_page) = list_api_keys(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: Some(cursor.clone()),
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&second_page, "api_keys"), vec![uuid_tail(1)]);
+
+        let Json(user_first_page) = list_user_api_keys(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Path(admin_user_id),
+            Query(PaginationQuery {
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&user_first_page, "api_keys"),
+            vec![uuid_tail(3), uuid_tail(2)]
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn organizations_and_departments_cursor_paginate_by_name() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let org_a = uuid_tail(101);
+        let org_b = uuid_tail(102);
+        let org_c = uuid_tail(103);
+        let org_d = uuid_tail(104);
+        for org in [org_a, org_b, org_c] {
+            insert_organization(&db.state.db, org, "Aaa Cursor Org").await?;
+        }
+        insert_organization(&db.state.db, org_d, "Bbb Cursor Org").await?;
+
+        let Json(first_page) = list_organizations(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListOrganizationsQuery {
+                include_personal: Some(false),
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&first_page, "organizations"), vec![org_a, org_b]);
+
+        let cursor = required_next_cursor(&first_page);
+        let Json(second_page) = list_organizations(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListOrganizationsQuery {
+                include_personal: Some(false),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        let second_orgs = object_ids(&second_page, "organizations");
+        assert_eq!(second_orgs[0], org_c);
+
+        let dept_a = uuid_tail(201);
+        let dept_b = uuid_tail(202);
+        let dept_c = uuid_tail(203);
+        let dept_other_org = uuid_tail(204);
+        for dept in [dept_a, dept_b, dept_c] {
+            insert_department(&db.state.db, dept, org_a, "Platform").await?;
+        }
+        insert_department(&db.state.db, dept_other_org, org_b, "Platform").await?;
+
+        let Json(first_dept_page) = list_departments(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListDepartmentsQuery {
+                org_id: Some(org_a),
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&first_dept_page, "departments"),
+            vec![dept_a, dept_b]
+        );
+
+        let cursor = required_next_cursor(&first_dept_page);
+        let Json(second_dept_page) = list_departments(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListDepartmentsQuery {
+                org_id: Some(org_a),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&second_dept_page, "departments"), vec![dept_c]);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid)> {
         let user_id = Uuid::new_v4();
         let org_id = Uuid::new_v4();
@@ -1011,6 +1385,96 @@ mod log_pagination_tests {
             .await?;
 
         Ok((user_id, org_id))
+    }
+
+    async fn set_user_created_at(
+        pool: &PgPool,
+        user_id: Uuid,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE users SET created_at = $1 WHERE id = $2")
+            .bind(created_at)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn insert_user(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO users (id, email, name, default_org_id, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(user_id)
+        .bind(format!("{user_id}@example.com"))
+        .bind(format!("Test User {user_id}"))
+        .bind(org_id)
+        .bind(created_at)
+        .execute(pool)
+        .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(org_id)
+            .bind("member")
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn insert_api_key(
+        pool: &PgPool,
+        key_id: Uuid,
+        user_id: Uuid,
+        org_id: Uuid,
+        created_at: chrono::DateTime<chrono::Utc>,
+        revoked: bool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO api_keys (id, user_id, org_id, key_prefix, key_hash, name, scopes, created_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9 THEN $8 ELSE NULL END)",
+        )
+        .bind(key_id)
+        .bind(user_id)
+        .bind(org_id)
+        .bind(format!("k{}", &key_id.simple().to_string()[..7]))
+        .bind(format!("hash-{key_id}"))
+        .bind(format!("Key {key_id}"))
+        .bind(vec!["metrics:write".to_string()])
+        .bind(created_at)
+        .bind(revoked)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_organization(pool: &PgPool, org_id: Uuid, name: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind(name)
+            .bind(format!("org-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn insert_department(
+        pool: &PgPool,
+        department_id: Uuid,
+        org_id: Uuid,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
+            .bind(department_id)
+            .bind(org_id)
+            .bind(name)
+            .bind(format!("dept-{}", department_id.simple()))
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 
     async fn insert_audit_log(
@@ -1056,6 +1520,35 @@ mod log_pagination_tests {
             .iter()
             .map(|entry| entry["id"].as_i64().expect("entry id should be an integer"))
             .collect()
+    }
+
+    fn object_ids(page: &Value, key: &str) -> Vec<Uuid> {
+        page[key]
+            .as_array()
+            .expect("response field should be an array")
+            .iter()
+            .map(|entry| {
+                Uuid::parse_str(entry["id"].as_str().expect("entry id should be a string"))
+                    .expect("entry id should be a UUID")
+            })
+            .collect()
+    }
+
+    fn required_next_cursor(page: &Value) -> String {
+        page["pagination"]["next_cursor"]
+            .as_str()
+            .expect("page should include next_cursor")
+            .to_string()
+    }
+
+    fn fixed_timestamp(year: i32) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(&format!("{year}-07-09T10:00:00Z"))
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn uuid_tail(value: u32) -> Uuid {
+        Uuid::parse_str(&format!("00000000-0000-0000-0000-{value:012}")).unwrap()
     }
 
     fn admin_guard(user_id: Uuid, org_id: Uuid) -> AdminGuard {
@@ -1976,8 +2469,14 @@ pub async fn list_user_api_keys(
     State(state): State<AppState>,
     _auth: AdminGuard,
     Path(user_id): Path<Uuid>,
+    Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let rows: Vec<(
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_optional_time_uuid_cursor(query.cursor.as_deref())?;
+    let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
+
+    let mut rows: Vec<(
         Uuid,
         String,
         Option<String>,
@@ -1987,13 +2486,29 @@ pub async fn list_user_api_keys(
         Option<chrono::DateTime<chrono::Utc>>,
     )> = sqlx::query_as(
         r#"SELECT id, key_prefix, name, scopes, created_at, expires_at, last_used_at
-        FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL
-        ORDER BY created_at DESC"#,
+        FROM api_keys
+        WHERE user_id = $1
+          AND revoked_at IS NULL
+          AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4"#,
     )
     .bind(user_id)
+    .bind(cursor_timestamp)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, created, _, _)| encode_time_uuid_cursor(created.clone(), *id))
+            .transpose()?
+    } else {
+        None
+    };
 
     let result: Vec<Value> = rows
         .iter()
@@ -2010,5 +2525,8 @@ pub async fn list_user_api_keys(
         })
         .collect();
 
-    Ok(Json(json!({ "api_keys": result })))
+    Ok(Json(json!({
+        "api_keys": result,
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
