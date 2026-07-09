@@ -217,6 +217,34 @@ AUTH_PASSWORD_CONCURRENCY=8
 
 默认值 `8` 适合先作为通用起点。登录高峰时如果 API CPU 仍有余量但登录 p95 偏高，可小幅提高；如果 CPU 已接近打满或其它接口被拖慢，应降低该值。该配置不会降低 Argon2 参数，只控制同一 API 实例内同时执行的密码计算数量。
 
+建议灰度方式：
+
+- 默认从 `AUTH_PASSWORD_CONCURRENCY=8` 开始。
+- 4-8 核实例可灰度到 `12`，但必须同时观察登录 p95/p99、API CPU、内存和 `/health` 延迟。
+- 不建议直接设置 `16+`；本地历史压测显示过高并发度可能恶化尾延迟。
+- 回滚方式是调回 `8` 并重启 API。
+
+登录压测模板：
+
+```bash
+AUTH_PASSWORD_CONCURRENCY=12 docker compose up -d --force-recreate api
+
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --base-url http://127.0.0.1:8080 \
+  --mode login \
+  --login-user-count 100 \
+  --login-email-domain example.com \
+  --login-email-prefix bench-login-pool \
+  --login-run-id 20260709-001 \
+  --login-password correct-horse-battery \
+  --requests 1000 \
+  --concurrency 100 \
+  --client-ip-mode pool \
+  --client-ip-pool-size 200
+```
+
+压测时把 API 日志级别临时打开到 `git_ai_enterprise_server::services::passwords=debug`，查看 `password operation timing` 中的 `acquire_wait_ms`、`argon_ms` 和 `total_ms`。如果 `acquire_wait_ms` p95 长期高于 `argon_ms` p95，说明主要瓶颈是 Argon2 semaphore 排队。
+
 ## Postgres 慢查询观测
 
 部署包的 `docker-compose.yml` 已为 PostgreSQL 启用：

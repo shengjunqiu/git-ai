@@ -149,6 +149,7 @@ pub async fn login(
 
     if !crate::services::passwords::verify_password_blocking(
         state.auth_password_limiter.clone(),
+        state.config.auth_password_concurrency,
         req.password.clone(),
         password_hash,
     )
@@ -257,6 +258,7 @@ async fn register_user(
     let user_id = Uuid::new_v4();
     let password_hash = crate::services::passwords::hash_password_blocking(
         state.auth_password_limiter.clone(),
+        state.config.auth_password_concurrency,
         req.password.clone(),
     )
     .await?;

@@ -767,17 +767,17 @@ git commit -m "Tune metrics tool model event writes"
 
 实现步骤：
 
-- [ ] 在 `hash_password_blocking` 和 `verify_password_blocking` 内记录：
+- [x] 在 `hash_password_blocking` 和 `verify_password_blocking` 内记录：
   - semaphore acquire 等待耗时。
   - `spawn_blocking` 内 Argon2 执行耗时。
   - 总耗时。
-- [ ] 日志字段包括 operation=`hash|verify` 和 configured concurrency。
-- [ ] 不记录密码、hash、邮箱等敏感数据。
+- [x] 日志字段包括 operation=`hash|verify` 和 configured concurrency。
+- [x] 不记录密码、hash、邮箱等敏感数据。
 
 验收标准：
 
-- [ ] 登录压测时能看到队列等待是否超过 Argon2 执行时间。
-- [ ] 不泄露认证敏感信息。
+- [x] 登录压测时能看到队列等待是否超过 Argon2 执行时间。
+- [x] 不泄露认证敏感信息。
 
 ### 4.2 增加账号维度保护
 
@@ -785,7 +785,7 @@ git commit -m "Tune metrics tool model event writes"
 
 实现步骤：
 
-- [ ] 评估是否使用 Redis 增加 email hash 维度的短窗口限流。
+- [x] 评估是否使用 Redis 增加 email hash 维度的短窗口限流。
 - [ ] 只对失败登录或所有登录加小窗口限制，需要先明确产品策略。
 - [ ] 错误响应保持不泄露账号是否存在。
 - [ ] 增加测试：
@@ -801,15 +801,61 @@ git commit -m "Tune metrics tool model event writes"
 
 步骤：
 
-- [ ] 在 deploy README 或部署文档中记录：
+- [x] 在 deploy README 或部署文档中记录：
   - 默认 `AUTH_PASSWORD_CONCURRENCY=8`。
   - 4-8 核实例可灰度 `12`。
   - 不建议直接 `16+`，除非有压测证明 p95/p99 不恶化。
-- [ ] 增加压测模板命令。
+- [x] 增加压测模板命令。
 
 验收标准：
 
-- [ ] 文档说明清楚如何灰度和回滚。
+- [x] 文档说明清楚如何灰度和回滚。
+
+### 阶段 4 执行记录
+
+代码改动：
+
+- `hash_password_blocking` 和 `verify_password_blocking` 统一通过 `run_password_operation_blocking` 记录阶段耗时。
+- 新增日志字段：`operation`、`configured_concurrency`、`acquire_wait_ms`、`argon_ms`、`total_ms`、`result`。
+- 登录和注册 handler 传入 `state.config.auth_password_concurrency`，确保日志记录的是配置并发度。
+- 日志不包含密码、password hash、邮箱、用户 id 或账号是否存在。
+- `enterprise-server/deploy/README.md` 增加 `AUTH_PASSWORD_CONCURRENCY` 灰度建议、回滚方式和登录压测模板。
+
+验证命令：
+
+```bash
+cd enterprise-server
+cargo test password
+cargo test auth_api
+cargo build --bin git-ai-enterprise-server
+
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --base-url http://127.0.0.1:43141 \
+  --mode login \
+  --login-user-count 100 \
+  --login-email-domain linewell.com \
+  --login-email-prefix bench-login-pool \
+  --login-run-id 20260709-001 \
+  --login-password correct-horse-battery \
+  --requests 100 \
+  --concurrency 20 \
+  --client-ip-mode pool \
+  --client-ip-pool-size 100
+```
+
+测试结果：
+
+- `cargo test password`：6 passed，0 failed。
+- `cargo test auth_api`：16 passed，0 failed。
+- `cargo build --bin git-ai-enterprise-server`：通过。
+- 登录压测：100 requests，100 success，0 errors，RPS `8.13`，p50 `2127.01ms`，p95 `2887.00ms`，p99 `3096.93ms`，HTTP 200=100，401/409/429/500=0。
+- password timing 日志：100 条 `operation="verify"` 样本；`acquire_wait_ms` p95 `1897.79ms`，`argon_ms` p95 `1046.62ms`，`total_ms` p95 `2850.54ms`。
+
+阶段结论：
+
+- 新增观测已经能判断 Argon2 semaphore 队列等待是否超过实际密码计算时间。
+- 本轮 `AUTH_PASSWORD_CONCURRENCY=8`、20 并发登录下，排队等待 p95 已高于 Argon2 执行 p95，说明登录尾延迟主要来自密码计算队列。
+- 暂不直接实现账号维度限流：现有 auth tier 已按 client/IP 做全局保护；账号维度保护需要先明确“限制所有登录尝试”还是“只限制失败尝试”。如果在查询/验证前限制所有登录尝试，能保护 Argon2 队列但可能误伤同账号多设备；如果只限制失败登录，则无法阻止失败请求进入 Argon2 verify。后续应单独设计带配置开关的 email-hash tier。
 
 提交建议：
 
