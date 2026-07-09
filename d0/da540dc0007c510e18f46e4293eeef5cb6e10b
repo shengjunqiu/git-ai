@@ -1,0 +1,12 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "d0da540dc0007c510e18f46e4293eeef5cb6e10b",
+  "prompts": {},
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
