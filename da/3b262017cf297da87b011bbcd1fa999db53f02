@@ -1,0 +1,24 @@
+scripts/benchmarks/enterprise/seed_metrics.py
+  3bbd7b0f6c9035cd 2-3,32-36,38,43,48,53,59,65,71,77,83,89,95,100,105,111,116-120,122-126,134-138,140,142,150-151,155-156,158-159,183,189,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "da3b262017cf297da87b011bbcd1fa999db53f02",
+  "prompts": {
+    "3bbd7b0f6c9035cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3d705920-838f-45cc-a2e5-a370f08a56cd",
+        "model": "deepseek-v4-pro"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 47,
+      "total_deletions": 17,
+      "accepted_lines": 47,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/c66d28dfa33a394531aabbe022c5e1a06080b15de4ca328f89f94085d646273a"
+    }
+  }
+}
