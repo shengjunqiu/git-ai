@@ -1,0 +1,28 @@
+enterprise-server/src/handlers/lifecycle.rs
+  d2a37ee3fcb7cddb 18-21,269-331,338-347,349-365,386-402,411-424,427-432,442-448,557-561,624-629,645-665,690-731,742-750,993-1102,1193-1296,1330-1336
+enterprise-server/src/handlers/dashboard.rs
+  d2a37ee3fcb7cddb 4,20-23,418-525,2231-2235,2242-2245,2285-2288,2527-2559,2695-2706,2716,2734-2737,2753-2754,2769-2773,2776-2779,2781-2788,3282-3290
+docs/enterprise/enterprise-server-pagination-task-plan.md
+  d2a37ee3fcb7cddb 1011-1015,1019-1020,1030-1032,1036-1037,1047-1048,1053-1054,1062-1082
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "b09170358525de1c5c912abf3c972472b5c114f0",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 595,
+      "total_deletions": 71,
+      "accepted_lines": 3534,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/3f4ce90a007b98b76aed5c50805da76747fcbbc6fe577f0128089669c8fc4c8b"
+    }
+  }
+}
