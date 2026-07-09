@@ -650,6 +650,8 @@ git commit -m "Add async metrics rollup rebuild mode"
 
 目标：如果阶段 1 显示 `metrics_tool_model_events` 写入仍是主要耗时，则继续减少 tool-model 明细写入放大。
 
+阶段 2 之后的判断：`tool_model_insert_ms` p95 已降到约 `101.85ms`，不是当前最大瓶颈；本阶段只做参数上限保护和不退化验证，不做激进索引调整。
+
 涉及文件：
 
 - `enterprise-server/src/services/metrics.rs`
@@ -661,32 +663,33 @@ git commit -m "Add async metrics rollup rebuild mode"
 
 实现步骤：
 
-- [ ] 在阶段 1 的阶段耗时日志中增加 `tool_model_rows`。
-- [ ] benchmark 输出或日志记录：
+- [x] 在阶段 1 的阶段耗时日志中增加 `tool_model_rows`。
+- [x] benchmark 输出或日志记录：
   - events 数。
   - tool-model rows 数。
   - tool-model rows/event。
 
 验收标准：
 
-- [ ] 能判断真实客户端 payload 下 row multiplier。
+- [x] 能判断真实客户端 payload 下 row multiplier。
 
 ### 3.2 优化 bulk insert chunk
 
 步骤：
 
-- [ ] 检查 `insert_metrics_tool_model_events_chunk` 的 SQL 参数数量，确保不会接近 Postgres 参数上限。
-- [ ] 如果单 chunk 参数过多，单独为 tool-model rows 分 chunk。
-- [ ] 对比 chunk size：
+- [x] 检查 `insert_metrics_tool_model_events_chunk` 的 SQL 参数数量，确保不会接近 Postgres 参数上限。
+- [x] 如果单 chunk 参数过多，单独为 tool-model rows 分 chunk。
+- [x] 保持 event chunk size 为 `500`，仅对放大后的 tool-model rows 按参数上限分块。
+- [ ] 如果后续写入仍是瓶颈，再对比 event chunk size：
   - 100 events
   - 250 events
   - 500 events
-- [ ] 选择 p95 最稳定的 chunk。
+- [ ] 选择 p95 最稳定的 event chunk。
 
 验收标准：
 
-- [ ] metrics upload 不出现 DB 参数上限错误。
-- [ ] p95/p99 不比当前 500-event chunk 更差。
+- [x] metrics upload 不出现 DB 参数上限错误。
+- [x] p95/p99 不比当前 500-event chunk 更差。
 
 ### 3.3 评估明细表索引写入成本
 
@@ -700,6 +703,46 @@ git commit -m "Add async metrics rollup rebuild mode"
 
 - [ ] 不删除 dashboard 必需索引。
 - [ ] 如果删除或调整索引，dashboard benchmark 必须无退化。
+
+### 阶段 3 执行记录
+
+代码改动：
+
+- 保持 metrics event chunk size 为 `500`，该路径每 event 约 `25` 个 bind，单条 INSERT 约 `12,500` 个 bind，低于 Postgres `65,535` 参数上限。
+- 新增 tool-model 明细行独立 chunk：每行 `10` 个 bind，单 chunk `5,000` 行，最大约 `50,000` 个 bind。
+- 将 `insert_metrics_tool_model_events_chunk` 拆成准备 rows 和实际 rows chunk INSERT 两层。
+- 新增测试 `process_metrics_batch_chunks_large_tool_model_rows`，用 `5,001` 条 tool-model 明细验证会跨 chunk 写入且总数正确。
+
+验证命令：
+
+```bash
+cd enterprise-server
+cargo test metrics
+cargo build --bin git-ai-enterprise-server
+
+ENTERPRISE_API_KEYS=... \
+python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
+  --base-url http://127.0.0.1:43140 \
+  --requests 500 \
+  --batch-size 100 \
+  --concurrency 50 \
+  --start-seed 202607117000
+```
+
+测试结果：
+
+- `cargo test metrics`：22 passed，0 failed。
+- `cargo build --bin git-ai-enterprise-server`：通过。
+- metrics upload：500 requests，500 success，0 errors，RPS `70.05`，avg `685.04ms`，p50 `671.44ms`，p95 `935.67ms`，p99 `1021.72ms`。
+- 阶段 2 `dirty_async` 对照：p95 `1728.25ms`，p99 `1818.47ms`。
+- 阶段 3 分段耗时：tool-model insert p95 `59.80ms`，dirty queue 标记 p95 `14.29ms`，chunk total p95 `396.17ms`。
+- 压测后 `metrics_rollup_dirty_scopes` 从短暂 `52` 行追平到 `0`；服务日志没有连接池超时或 worker 失败。
+
+阶段结论：
+
+- tool-model 明细写入已具备参数上限保护，真实 payload 出现较高 row multiplier 时不会依赖单条超大 INSERT。
+- 目前 upload 写入瓶颈已经不在 tool-model 明细表；继续优化并发体感时，应优先处理 dashboard summary/trends 的慢查询。
+- 阶段 3.3 索引成本评估暂不执行：当前没有证据显示 tool-model 索引写入是主瓶颈，贸然删索引会增加 dashboard 查询风险。
 
 提交建议：
 

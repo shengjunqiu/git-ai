@@ -15,6 +15,13 @@ use crate::models::metrics::{
 use crate::pos_encoded::decode_event;
 
 const METRICS_INSERT_CHUNK_SIZE: usize = 500;
+const POSTGRES_MAX_BIND_PARAMETERS: usize = 65_535;
+const METRICS_TOOL_MODEL_EVENT_BIND_COUNT: usize = 10;
+const METRICS_TOOL_MODEL_INSERT_CHUNK_SIZE: usize = 5_000;
+const _: () = assert!(
+    METRICS_TOOL_MODEL_INSERT_CHUNK_SIZE * METRICS_TOOL_MODEL_EVENT_BIND_COUNT
+        < POSTGRES_MAX_BIND_PARAMETERS
+);
 
 /// Process a batch of metrics events
 pub async fn process_metrics_batch(
@@ -472,6 +479,21 @@ async fn insert_metrics_tool_model_events_chunk(
     }
     let tool_row_count = tool_rows.len();
 
+    for chunk in tool_rows.chunks(METRICS_TOOL_MODEL_INSERT_CHUNK_SIZE) {
+        insert_metrics_tool_model_event_rows_chunk(tx, chunk).await?;
+    }
+
+    Ok(tool_row_count)
+}
+
+async fn insert_metrics_tool_model_event_rows_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    tool_rows: &[PreparedToolModelEventRow],
+) -> Result<(), AppError> {
+    if tool_rows.is_empty() {
+        return Ok(());
+    }
+
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO metrics_tool_model_events (
             metric_event_id, org_id, user_id, timestamp, tool_model,
@@ -480,7 +502,7 @@ async fn insert_metrics_tool_model_events_chunk(
         ) "#,
     );
 
-    builder.push_values(&tool_rows, |mut row_builder, row| {
+    builder.push_values(tool_rows, |mut row_builder, row| {
         row_builder
             .push_bind(row.metric_event_id)
             .push_bind(row.org_id)
@@ -500,7 +522,7 @@ async fn insert_metrics_tool_model_events_chunk(
         .await
         .map_err(AppError::Database)?;
 
-    Ok(tool_row_count)
+    Ok(())
 }
 
 fn prepare_daily_rollups(rows: &[PreparedMetricRow]) -> Vec<PreparedDailyRollup> {
@@ -1278,6 +1300,35 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_metrics_batch_chunks_large_tool_model_rows() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+        let tool_model_count = METRICS_TOOL_MODEL_INSERT_CHUNK_SIZE + 1;
+
+        let response = process_metrics_batch(
+            &db.pool,
+            vec![committed_metric_event_with_tool_count(0, tool_model_count)],
+            Some(user_id),
+            Some(org_id),
+            Some("metrics-test-device".into()),
+            MetricsRollupWriteMode::Off,
+        )
+        .await;
+
+        assert!(response.errors.is_empty());
+        assert_eq!(metrics_count(&db.pool).await?, 1);
+        assert_eq!(
+            tool_model_events_count(&db.pool).await?,
+            tool_model_count as i64
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn process_metrics_batch_keeps_partial_success_when_decode_fails() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
@@ -1438,6 +1489,43 @@ mod tests {
         values.insert("6".into(), serde_json::json!([10, 3]));
         values.insert("7".into(), serde_json::json!([20, 5]));
         values.insert("8".into(), serde_json::json!([0, 0]));
+
+        let mut attrs = HashMap::new();
+        attrs.insert("0".into(), serde_json::json!("1.3.2"));
+        attrs.insert(
+            "1".into(),
+            serde_json::json!(format!("https://example.com/repo-{seed}.git")),
+        );
+        attrs.insert("2".into(), serde_json::json!("dev@example.com"));
+        attrs.insert("3".into(), serde_json::json!(format!("abc{seed}")));
+
+        MetricEvent {
+            t: 1_700_000_000,
+            e: 1,
+            v: values,
+            a: attrs,
+        }
+    }
+
+    fn committed_metric_event_with_tool_count(seed: usize, tool_model_count: usize) -> MetricEvent {
+        let mut values = HashMap::new();
+        let mut pairs = Vec::with_capacity(tool_model_count + 1);
+        pairs.push("all".to_string());
+        pairs.extend((0..tool_model_count).map(|idx| format!("codex::gpt-5-{idx}")));
+        let mut per_tool_values = vec![0; tool_model_count + 1];
+        for value in per_tool_values.iter_mut().skip(1) {
+            *value = 1;
+        }
+
+        values.insert("0".into(), serde_json::json!(10));
+        values.insert("1".into(), serde_json::json!(2));
+        values.insert("2".into(), serde_json::json!(30));
+        values.insert("3".into(), serde_json::json!(pairs));
+        values.insert("4".into(), serde_json::json!(per_tool_values));
+        values.insert("5".into(), serde_json::json!(vec![0; tool_model_count + 1]));
+        values.insert("6".into(), serde_json::json!(vec![0; tool_model_count + 1]));
+        values.insert("7".into(), serde_json::json!(vec![0; tool_model_count + 1]));
+        values.insert("8".into(), serde_json::json!(vec![0; tool_model_count + 1]));
 
         let mut attrs = HashMap::new();
         attrs.insert("0".into(), serde_json::json!("1.3.2"));
