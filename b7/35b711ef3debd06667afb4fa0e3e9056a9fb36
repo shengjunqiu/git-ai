@@ -1,0 +1,38 @@
+src/mdm/agents/mod.rs
+  d2a37ee3fcb7cddb 13,30,49
+src/commands/checkpoint_agent/agent_presets.rs
+  d2a37ee3fcb7cddb 169,183
+tests/integration/main.rs
+  d2a37ee3fcb7cddb 82
+src/commands/git_ai_handlers.rs
+  d2a37ee3fcb7cddb 11,267,506-521,2231,2258-2264,2330
+src/commands/checkpoint_agent/bash_tool.rs
+  d2a37ee3fcb7cddb 445-451,511,1919-1934
+src/mdm/agents/qoder.rs
+  d2a37ee3fcb7cddb 1-416
+tests/integration/qoder.rs
+  d2a37ee3fcb7cddb 1-132
+src/commands/checkpoint_agent/agent_presets/qoder.rs
+  d2a37ee3fcb7cddb 1-408
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "b735b711ef3debd06667afb4fa0e3e9056a9fb36",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1020,
+      "total_deletions": 11,
+      "accepted_lines": 1013,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/b5c1d5bcc0cc833042a2fe4ca0a31e60766f186d96a89a323060a341a3eadf82"
+    }
+  }
+}
