@@ -1,0 +1,34 @@
+enterprise-server/src/db/migrations.rs
+  d2a37ee3fcb7cddb 103-114
+enterprise-server/migrations/025_dashboard_rollup_project_indexes.sql
+  d2a37ee3fcb7cddb 1-6
+enterprise-server/src/main.rs
+  d2a37ee3fcb7cddb 68-75
+enterprise-server/migrations/027_department_aggregate_fallback_index.sql
+  d2a37ee3fcb7cddb 1-5
+enterprise-server/src/handlers/dashboard.rs
+  d2a37ee3fcb7cddb 2,6,15-16,423-424,503,1123-1136,1138-1152,1165,1175-1186,1189,1203-1204,1377,1380-1409,1418-1440,1448,1458-1460,1466,1474-1484,1548,1552-1553,1584-1586,1593-1602,1606-1610,1622-1693,1718-1731,1786-1787,1871-1904,1915,1925,1937-1950,1995-1996,1998-2000,2003-2004,2007-2021,2026-2027,2029-2031,2034-2035,2038-2091,2116,2668,2706,2724-2725,2905-2908,2932-2933,2954-3004,3136-3189
+enterprise-server/migrations/026_dashboard_git_identity_index.sql
+  d2a37ee3fcb7cddb 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "4186667ea94211b6705701295933dd44b1c62084",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1808,
+      "total_deletions": 1500,
+      "accepted_lines": 4646,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/eed0c04d82342891d44a5e133164b08e7276997b626ffe1d21c212f3bfbd32b6"
+    }
+  }
+}
