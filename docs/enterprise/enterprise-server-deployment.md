@@ -163,7 +163,7 @@ cd enterprise-server
 docker build -t git-ai-enterprise-server-api:latest .
 mkdir -p deploy/images
 docker save git-ai-enterprise-server-api:latest -o deploy/images/git-ai-enterprise-server-api.tar
-tar -czf git-ai-enterprise-server-deploy.tar.gz -C deploy .
+tar -czhf git-ai-enterprise-server-deploy.tar.gz -C deploy .
 ```
 
 上传到服务器：
