@@ -1,0 +1,40 @@
+enterprise-server/src/handlers/dashboard.rs
+  60d75f4f35309f03 19-29,74-81,93-96,134,272,274-281,291-292,319-320,324,527,532-533,535,552,632,664,669-671,676-690,695-704,714-719,730,733-747,753,1544,1550-1555
+docs/enterprise/enterprise-server-pagination-task-plan.md
+  d2a37ee3fcb7cddb 1-1063
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "2a24d8f60af70a47ae61487395fbbf2d88b0fda5",
+  "prompts": {
+    "60d75f4f35309f03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4598-746b-70e3-ad44-e0c355afe762",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 102,
+      "total_deletions": 43,
+      "accepted_lines": 3848,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/20788ad9cd97d38c61b2bf7ee537dcf6d0ddb080d0ac7d07c1bbc90f8f6dbfa9"
+    },
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1083,
+      "total_deletions": 20,
+      "accepted_lines": 1063,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/260236fd8c4e9874666c698bf8830315ab8bdf870515940898a5324702204d98"
+    }
+  }
+}
