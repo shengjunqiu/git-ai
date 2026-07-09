@@ -297,19 +297,19 @@ git commit -m "Record next enterprise concurrency baseline"
 
 实现步骤：
 
-- [ ] 在 `insert_metrics_chunk` 内使用 `std::time::Instant` 记录：
+- [x] 在 `insert_metrics_chunk` 内使用 `std::time::Instant` 记录：
   - `insert_metrics_events_chunk`
   - `insert_metrics_tool_model_events_chunk`
   - `upsert_metrics_daily_rollups`
   - transaction commit
-- [ ] 日志建议带上：
+- [x] 日志建议带上：
   - `rows.len()`
   - tool-model row 数量
   - daily rollup row 数量
   - `write_rollups`
   - 每段耗时 ms
-- [ ] 日志级别先用 `tracing::info!` 或受配置控制的 `tracing::debug!`。
-- [ ] 不改变响应格式和写入语义。
+- [x] 日志级别先用 `tracing::info!` 或受配置控制的 `tracing::debug!`。
+- [x] 不改变响应格式和写入语义。
 
 测试命令：
 
@@ -321,17 +321,17 @@ cargo test
 
 验收标准：
 
-- [ ] metrics 测试全部通过。
-- [ ] 压测时日志能看出每个 chunk 的阶段耗时。
-- [ ] 没有引入额外 DB 查询。
+- [x] metrics 测试全部通过。
+- [x] 压测时日志能看出每个 chunk 的阶段耗时。
+- [x] 没有引入额外 DB 查询。
 
 ### 1.2 对比 rollup 开关
 
 步骤：
 
-- [ ] 使用 `METRICS_WRITE_ROLLUPS=true` 跑 metrics 上传基线。
-- [ ] 重建 API，使用 `METRICS_WRITE_ROLLUPS=false` 跑同样参数。
-- [ ] 两次都记录 p95/p99 和阶段耗时日志。
+- [x] 使用 `METRICS_WRITE_ROLLUPS=true` 跑 metrics 上传基线。
+- [x] 重建 API，使用 `METRICS_WRITE_ROLLUPS=false` 跑同样参数。
+- [x] 两次都记录 p95/p99 和阶段耗时日志。
 
 命令示例：
 
@@ -345,9 +345,9 @@ docker compose up -d --force-recreate --no-deps api
 
 验收标准：
 
-- [ ] 明确 daily rollup upsert 对 p95 的影响比例。
-- [ ] 如果关闭 rollup 后 p95 明显下降，进入阶段 2。
-- [ ] 如果关闭 rollup 后仍慢，优先进入阶段 3。
+- [x] 明确 daily rollup upsert 对 p95 的影响比例。
+- [x] 如果关闭 rollup 后 p95 明显下降，进入阶段 2。
+- [x] 如果关闭 rollup 后仍慢，优先进入阶段 3。
 
 提交建议：
 
@@ -355,6 +355,72 @@ docker compose up -d --force-recreate --no-deps api
 git add enterprise-server/src/services/metrics.rs docs/enterprise/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Instrument enterprise metrics write phases"
 ```
+
+### 阶段 1 执行记录
+
+执行日期：2026-07-09。
+
+代码改动：
+
+- 在 `process_metrics_batch` 中增加 decode/prepare、storage 总耗时、成功/失败 chunk 数的 `tracing::debug!` 日志。
+- 在 `insert_metrics_chunk` 中增加 transaction begin、raw events insert、tool-model insert、daily rollup upsert、commit、total 的分段耗时日志。
+- `insert_metrics_tool_model_events_chunk` 返回实际 tool-model row 数。
+- `upsert_metrics_daily_rollups` 返回实际 daily rollup row 数。
+- `METRICS_WRITE_ROLLUPS=false` 时 `daily_rollup_rows=0`、`daily_rollup_upsert_ms=0.0`，避免把分支判断时间误记为 rollup 写入时间。
+
+启用日志方式：
+
+```bash
+RUST_LOG="git_ai_enterprise_server=info,git_ai_enterprise_server::services::metrics=debug"
+```
+
+验证命令：
+
+| 命令 | 结果 |
+| --- | --- |
+| `rustfmt --edition 2024 --check src/services/metrics.rs` | 通过 |
+| `cargo test metrics` | 通过，17 passed |
+| `cargo test` | 通过，113 passed |
+| `cargo build --bin git-ai-enterprise-server` | 通过；仅存在既有 warning |
+
+压测环境：
+
+| 项 | 值 |
+| --- | --- |
+| API | 本地 debug 二进制，`127.0.0.1:43140` |
+| 数据库 | 本地 Docker Postgres，`127.0.0.1:5433` |
+| 参数 | 500 requests / 50 concurrency / batch=100 / 50000 events |
+| 日志 | `/tmp/git-ai-metrics-rollups-true.log`、`/tmp/git-ai-metrics-rollups-false.log` |
+
+请求级压测结果：
+
+| 配置 | 成功/错误 | RPS | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `METRICS_WRITE_ROLLUPS=true` | 500/0 | 27.50 req/s | 1440.09ms | 3589.87ms | 5074.11ms | 8429.10ms |
+| `METRICS_WRITE_ROLLUPS=false` | 500/0 | 57.68 req/s | 689.42ms | 1543.15ms | 1616.33ms | 1718.95ms |
+
+chunk 写入分段耗时：
+
+| 配置 | 阶段 | avg | p50 | p95 | p99 | max |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| rollups=true | transaction begin | 309.74ms | 278.30ms | 750.86ms | 884.82ms | 1010.57ms |
+| rollups=true | raw events insert | 38.87ms | 31.07ms | 82.47ms | 163.42ms | 221.28ms |
+| rollups=true | tool-model insert | 12.55ms | 10.35ms | 23.92ms | 41.09ms | 134.11ms |
+| rollups=true | daily rollup upsert | 611.18ms | 249.16ms | 2225.92ms | 3659.93ms | 7478.40ms |
+| rollups=true | commit | 5.22ms | 3.90ms | 10.82ms | 24.28ms | 51.63ms |
+| rollups=true | total | 977.55ms | 728.50ms | 2679.96ms | 4626.58ms | 7655.78ms |
+| rollups=false | transaction begin | 118.52ms | 79.38ms | 399.70ms | 459.88ms | 498.84ms |
+| rollups=false | raw events insert | 121.18ms | 104.84ms | 264.10ms | 385.29ms | 539.71ms |
+| rollups=false | tool-model insert | 37.01ms | 26.04ms | 89.92ms | 211.60ms | 254.46ms |
+| rollups=false | daily rollup upsert | 0.00ms | 0.00ms | 0.00ms | 0.00ms | 0.00ms |
+| rollups=false | commit | 32.30ms | 17.74ms | 98.54ms | 245.33ms | 348.43ms |
+| rollups=false | total | 309.01ms | 238.59ms | 655.87ms | 874.14ms | 920.57ms |
+
+阶段 1 结论：
+
+- 同步 `metrics_daily_rollups` upsert 是当前 metrics upload 的主要尾延迟来源：开启 rollup 时 daily rollup upsert p95 `2225.92ms`，chunk total p95 `2679.96ms`。
+- 关闭同步 rollup 后，请求 p95 从 `3589.87ms` 降至 `1543.15ms`，chunk total p95 从 `2679.96ms` 降至 `655.87ms`。
+- raw events 和 tool-model 明细写入不是当前最大瓶颈，应优先进入阶段 2，把 rollup 写入从请求同步路径移出。
 
 ## 阶段 2: metrics rollup 异步化
 

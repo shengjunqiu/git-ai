@@ -1,7 +1,7 @@
 //! Metrics service - handles decoding, storing, and querying metrics events
 
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -21,6 +21,7 @@ pub async fn process_metrics_batch(
     distinct_id: Option<String>,
     write_rollups: bool,
 ) -> MetricsUploadResponse {
+    let decode_started = Instant::now();
     let mut errors = Vec::new();
     let mut rows = Vec::new();
 
@@ -49,8 +50,14 @@ pub async fn process_metrics_batch(
         }
     }
 
+    let decode_prepare_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+    let storage_started = Instant::now();
+    let mut inserted_chunks = 0usize;
+    let mut failed_chunks = 0usize;
+
     for chunk in rows.chunks(METRICS_INSERT_CHUNK_SIZE) {
         if let Err(e) = insert_metrics_chunk(pool, chunk, write_rollups).await {
+            failed_chunks += 1;
             tracing::warn!(
                 "Failed to bulk insert metrics chunk with {} events: {}",
                 chunk.len(),
@@ -60,8 +67,23 @@ pub async fn process_metrics_batch(
                 index: row.index,
                 error: format!("Storage error: {}", e),
             }));
+        } else {
+            inserted_chunks += 1;
         }
     }
+    let storage_ms = storage_started.elapsed().as_secs_f64() * 1000.0;
+
+    tracing::debug!(
+        total_events = events.len(),
+        prepared_rows = rows.len(),
+        errors = errors.len(),
+        inserted_chunks,
+        failed_chunks,
+        write_rollups,
+        decode_prepare_ms,
+        storage_ms,
+        "metrics batch processing timing"
+    );
 
     errors.sort_by_key(|error| error.index);
     MetricsUploadResponse { errors }
@@ -231,13 +253,46 @@ async fn insert_metrics_chunk(
         return Ok(());
     }
 
+    let total_started = Instant::now();
+    let begin_started = Instant::now();
     let mut tx = pool.begin().await.map_err(AppError::Database)?;
+    let tx_begin_ms = begin_started.elapsed().as_secs_f64() * 1000.0;
+
+    let events_started = Instant::now();
     let metric_event_ids = insert_metrics_events_chunk(&mut tx, rows).await?;
-    insert_metrics_tool_model_events_chunk(&mut tx, rows, &metric_event_ids).await?;
-    if write_rollups {
-        upsert_metrics_daily_rollups(&mut tx, rows).await?;
-    }
+    let events_insert_ms = events_started.elapsed().as_secs_f64() * 1000.0;
+
+    let tool_events_started = Instant::now();
+    let tool_model_rows =
+        insert_metrics_tool_model_events_chunk(&mut tx, rows, &metric_event_ids).await?;
+    let tool_model_insert_ms = tool_events_started.elapsed().as_secs_f64() * 1000.0;
+
+    let (daily_rollup_rows, daily_rollup_upsert_ms) = if write_rollups {
+        let rollups_started = Instant::now();
+        let row_count = upsert_metrics_daily_rollups(&mut tx, rows).await?;
+        (row_count, rollups_started.elapsed().as_secs_f64() * 1000.0)
+    } else {
+        (0, 0.0)
+    };
+
+    let commit_started = Instant::now();
     tx.commit().await.map_err(AppError::Database)?;
+    let tx_commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+    let total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
+
+    tracing::debug!(
+        rows = rows.len(),
+        tool_model_rows,
+        daily_rollup_rows,
+        write_rollups,
+        tx_begin_ms,
+        events_insert_ms,
+        tool_model_insert_ms,
+        daily_rollup_upsert_ms,
+        tx_commit_ms,
+        total_ms,
+        "metrics chunk write timing"
+    );
 
     Ok(())
 }
@@ -385,11 +440,12 @@ async fn insert_metrics_tool_model_events_chunk(
     tx: &mut Transaction<'_, Postgres>,
     rows: &[PreparedMetricRow],
     metric_event_ids: &[i64],
-) -> Result<(), AppError> {
+) -> Result<usize, AppError> {
     let tool_rows = prepare_tool_model_event_rows(rows, metric_event_ids)?;
     if tool_rows.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let tool_row_count = tool_rows.len();
 
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO metrics_tool_model_events (
@@ -419,7 +475,7 @@ async fn insert_metrics_tool_model_events_chunk(
         .await
         .map_err(AppError::Database)?;
 
-    Ok(())
+    Ok(tool_row_count)
 }
 
 fn prepare_daily_rollups(rows: &[PreparedMetricRow]) -> Vec<PreparedDailyRollup> {
@@ -524,11 +580,12 @@ fn metric_day(timestamp: i64) -> chrono::NaiveDate {
 async fn upsert_metrics_daily_rollups(
     tx: &mut Transaction<'_, Postgres>,
     rows: &[PreparedMetricRow],
-) -> Result<(), AppError> {
+) -> Result<usize, AppError> {
     let rollups = prepare_daily_rollups(rows);
     if rollups.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let rollup_count = rollups.len();
 
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"INSERT INTO metrics_daily_rollups (
@@ -569,7 +626,7 @@ async fn upsert_metrics_daily_rollups(
         .await
         .map_err(AppError::Database)?;
 
-    Ok(())
+    Ok(rollup_count)
 }
 
 fn aggregate_rollup(values: Option<&[i32]>, tool_model_pairs: Option<&[String]>) -> i32 {
