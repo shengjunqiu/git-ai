@@ -1068,13 +1068,15 @@ CREATE INDEX idx_bundles_share_url ON bundles(share_url);
 | `/api/v1/projects` | GET | 项目列表 |
 | `/api/v1/summaries` | GET | 摘要列表 |
 | `/api/v1/aggregate/summary` | GET | 全局汇总统计 |
-| `/api/v1/aggregate/organizations` | GET | 按组织聚合 |
-| `/api/v1/aggregate/departments?org={name}` | GET | 按部门聚合 |
-| `/api/v1/aggregate/projects` | GET | 按项目聚合 |
-| `/api/v1/aggregate/developers` | GET | 按开发者聚合 |
+| `/api/v1/aggregate/organizations?limit={n}&cursor={cursor}` | GET | 按组织聚合 |
+| `/api/v1/aggregate/departments?org={name}&limit={n}&cursor={cursor}` | GET | 按部门聚合 |
+| `/api/v1/aggregate/projects?limit={n}&cursor={cursor}` | GET | 按项目聚合 |
+| `/api/v1/aggregate/developers?limit={n}&cursor={cursor}` | GET | 按开发者聚合 |
 | `/api/v1/projects/{id}/summary` | GET | 单项目摘要 |
 | `/api/v1/projects/{id}/commits` | GET | 单项目提交列表 |
 | `/api/v1/summaries/{id}` | GET | 单条摘要详情 |
+
+已分页的 Enterprise 列表接口统一使用 `limit` 和不透明 `cursor` 参数。客户端应从响应的 `pagination.next_cursor` 请求下一页，不应解析或长期保存 cursor；旧客户端可以继续读取原有顶层列表字段并忽略新增的 `pagination`。
 
 ### 5.2 核心统计指标
 
@@ -1227,7 +1229,7 @@ CREATE INDEX idx_bundles_share_url ON bundles(share_url);
 **建议新增端点**：
 
 ```
-GET /api/v1/aggregate/pull-requests?org={org_slug}&repo={repo_url}&since={date}&until={date}
+GET /api/v1/aggregate/pull-requests?org={org_slug}&repo={repo_url}&since={date}&until={date}&limit={n}&cursor={cursor}
 ```
 
 **响应结构**：
@@ -1254,6 +1256,11 @@ GET /api/v1/aggregate/pull-requests?org={org_slug}&repo={repo_url}&since={date}&
     "total_prs": 50,
     "avg_pct_ai": 65.0,
     "pr_size_distribution": { "small": 20, "medium": 20, "large": 10 }
+  },
+  "pagination": {
+    "limit": 25,
+    "has_more": true,
+    "next_cursor": "opaque-cursor"
   }
 }
 ```
@@ -1270,7 +1277,7 @@ GET /api/v1/aggregate/pull-requests?org={org_slug}&repo={repo_url}&since={date}&
 **建议新增端点**：
 
 ```
-GET /api/v1/ai-code-persistence?org={org_slug}&repo={repo_url}&since={date}
+GET /api/v1/ai-code-persistence?org={org_slug}&repo={repo_url}&since={date}&until={date}
 ```
 
 **响应结构**：
@@ -1404,7 +1411,13 @@ GET /api/v1/ai-code-lifecycle?org={org_slug}&commit_sha={sha}
     { "stage": "deployed", "timestamp": "2026-05-15T12:00:00Z", "env": "production" },
     { "stage": "alert", "timestamp": "2026-05-15T14:30:00Z", "severity": "critical" }
   ],
-  "ai_code_involved_in_alert": true
+  "ai_code_involved_in_alert": true,
+  "truncated": false,
+  "truncation": {
+    "limit_per_event_type": 100,
+    "ci_events": false,
+    "alert_events": false
+  }
 }
 ```
 

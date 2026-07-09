@@ -5,6 +5,13 @@ function escapeHtml(value) {
     div.textContent = value ?? '';
     return div.innerHTML;
 }
+function jsString(value) {
+    return JSON.stringify(String(value ?? ''))
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
 function fmtTimeAgo(value) {
     if (!value) return '从未';
     const date = new Date(value);
@@ -23,6 +30,136 @@ function fmtTimeAgo(value) {
 let refreshInterval = null;
 const AUTO_REFRESH_MS = 60000; // 60 seconds
 let currentSection = 'overview';
+const TABLE_PAGE_SIZE = 25;
+const tablePageState = {};
+const tablePagerContainers = {
+    organizations: 'org-pagination',
+    departments: 'departments-pagination',
+    developers: 'dev-pagination',
+    projects: 'proj-pagination',
+    tools: 'tools-pagination',
+    users: 'users-pagination',
+    apikeys: 'apikeys-pagination',
+};
+
+function getTablePageState(key) {
+    if (!tablePageState[key]) {
+        tablePageState[key] = {
+            page: 1,
+            cursors: [null],
+            nextCursor: null,
+            hasMore: false,
+            loading: false,
+        };
+    }
+    return tablePageState[key];
+}
+
+function resetTablePage(key) {
+    tablePageState[key] = {
+        page: 1,
+        cursors: [null],
+        nextCursor: null,
+        hasMore: false,
+        loading: false,
+    };
+}
+
+function addPaginationParams(url, key) {
+    const state = getTablePageState(key);
+    const cursor = state.cursors[state.page - 1];
+    const params = new URLSearchParams({ limit: String(TABLE_PAGE_SIZE) });
+    if (cursor) params.set('cursor', cursor);
+    return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
+}
+
+async function fetchPaginatedJson(key, url, errorMessage) {
+    const state = getTablePageState(key);
+    state.loading = true;
+    try {
+        const r = await fetch(addPaginationParams(url, key));
+        const d = await r.json();
+        if (!r.ok) {
+            throw new Error(d.error || errorMessage);
+        }
+        const pagination = d.pagination || {};
+        state.nextCursor = pagination.next_cursor || null;
+        state.hasMore = Boolean(pagination.has_more);
+        return d;
+    } catch (error) {
+        state.nextCursor = null;
+        state.hasMore = false;
+        throw error;
+    } finally {
+        state.loading = false;
+    }
+}
+
+function setTableLoading(tbodyId, colspan) {
+    document.getElementById(tbodyId).innerHTML =
+        `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`;
+}
+
+function renderPaginationControls(key) {
+    const containerId = tablePagerContainers[key];
+    const container = containerId ? document.getElementById(containerId) : null;
+    if (!container) return;
+    const state = getTablePageState(key);
+    if (state.page === 1 && !state.hasMore) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = `
+        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'prev')" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
+        <span class="pagination-status">第 ${state.page} 页</span>
+        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'next')" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
+    `;
+}
+
+async function goToTablePage(key, direction) {
+    const state = getTablePageState(key);
+    if (state.loading) return;
+    if (direction === 'next') {
+        if (!state.hasMore || !state.nextCursor) return;
+        state.cursors[state.page] = state.nextCursor;
+        state.page += 1;
+    } else if (direction === 'prev') {
+        if (state.page <= 1) return;
+        state.page -= 1;
+        state.cursors = state.cursors.slice(0, state.page);
+    }
+    await reloadPaginatedTable(key);
+}
+
+function reloadPaginatedTable(key) {
+    switch (key) {
+        case 'organizations': return loadOrgs();
+        case 'departments': return loadDepartments();
+        case 'developers': return loadDevs();
+        case 'projects': return loadProjects();
+        case 'tools': return loadTools();
+        case 'users': return loadUsers();
+        case 'apikeys': return loadApiKeys();
+    }
+}
+
+async function fetchAllPaginated(url, field) {
+    const values = [];
+    let cursor = null;
+    for (let page = 0; page < 50; page += 1) {
+        const params = new URLSearchParams({ limit: '100' });
+        if (cursor) params.set('cursor', cursor);
+        const r = await fetch(`${url}${url.includes('?') ? '&' : '?'}${params.toString()}`);
+        const d = await r.json();
+        if (!r.ok) {
+            throw new Error(d.error || '加载分页数据失败');
+        }
+        values.push(...(d[field] || []));
+        if (!d.pagination?.has_more || !d.pagination?.next_cursor) break;
+        cursor = d.pagination.next_cursor;
+    }
+    return values;
+}
 
 // Role-based UI: hide admin sections for non-admin users
 if (!isAdmin) {
@@ -135,7 +272,7 @@ async function loadOverview() {
     })().catch(e => console.error(e));
 
     const developersPromise = (async () => {
-        const r = await fetch(withTimeRange('/api/v1/aggregate/developers'));
+        const r = await fetch(withTimeRange('/api/v1/aggregate/developers?limit=5'));
         const d = await r.json();
         const top = [...(d.developers || [])]
             .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
@@ -396,31 +533,38 @@ async function loadTrends() {
 
 // --- Organizations ---
 async function loadOrgs() {
+    setTableLoading('org-table', 5);
     try {
-        const r = await fetch('/api/v1/aggregate/organizations');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败');
         document.getElementById('org-table').innerHTML = (d.organizations || []).map(o => {
             return `<tr>
-                <td><strong>${o.organization}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${o.org_slug || ''}</span></td>
+                <td><strong>${escapeHtml(o.organization)}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(o.org_slug || '')}</span></td>
                 <td>${fmt(o.total_commits)}</td>
                 <td>${fmt(o.w_ai)}</td>
                 <td>${fmt(o.w_human)}</td>
                 <td>${pctBar(o.pct_ai || 0)} <span style="font-size:0.8rem">${(o.pct_ai || 0).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">暂无组织数据</td></tr>';
-    } catch(e) { console.error(e); }
+        renderPaginationControls('organizations');
+    } catch(e) {
+        console.error(e);
+        document.getElementById('org-table').innerHTML =
+            '<tr><td colspan="5" style="color:var(--danger)">加载组织数据失败</td></tr>';
+        renderPaginationControls('organizations');
+    }
 }
 
 // --- Developers ---
 async function loadDevs() {
+    setTableLoading('dev-table', 8);
     try {
-        const r = await fetch('/api/v1/aggregate/developers');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('developers', '/api/v1/aggregate/developers', '加载开发者数据失败');
         const developers = d.developers || [];
         developerGitInfo = new Map();
         if (developers.length === 0) {
             document.getElementById('dev-table').innerHTML =
                 '<tr><td colspan="8" style="color:var(--text-muted)">暂无开发者数据</td></tr>';
+            renderPaginationControls('developers');
             return;
         }
 
@@ -431,6 +575,7 @@ async function loadDevs() {
             const emailDisplay = escapeHtml(dev.email || '—');
             const nameDisplay = escapeHtml(dev.name || '');
             const departmentDisplay = escapeHtml(dev.department || '未设置');
+            const actionDevId = jsString(devId);
             const label = dev.name && dev.name !== dev.email
                 ? `<strong>${nameDisplay}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${emailDisplay}</span>`
                 : `<strong>${emailDisplay}</strong>`;
@@ -448,10 +593,16 @@ async function loadDevs() {
                 <td>${fmt(ai)}</td>
                 <td>${fmt(dev.human_added_lines)}</td>
                 <td>${pctBar(dev.pct_ai || 0)} <span style="font-size:0.8rem">${(dev.pct_ai || 0).toFixed(1)}%</span></td>
-                <td><button class="btn btn-sm" onclick="showDeveloperGitInfo('${devId}')">Git 信息</button></td>
+                <td><button class="btn btn-sm" onclick="showDeveloperGitInfo(${actionDevId})">Git 信息</button></td>
             </tr>`;
         }).join('');
-    } catch(e) { console.error(e); }
+        renderPaginationControls('developers');
+    } catch(e) {
+        console.error(e);
+        document.getElementById('dev-table').innerHTML =
+            '<tr><td colspan="8" style="color:var(--danger)">加载开发者数据失败</td></tr>';
+        renderPaginationControls('developers');
+    }
 }
 
 function showDeveloperGitInfo(devId) {
@@ -496,9 +647,9 @@ function showDeveloperGitInfo(devId) {
 
 // --- Projects ---
 async function loadProjects() {
+    setTableLoading('proj-table', 6);
     try {
-        const r = await fetch('/api/v1/aggregate/projects');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败');
         document.getElementById('proj-table').innerHTML = (d.projects || []).map(p => {
             const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
             const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
@@ -512,18 +663,25 @@ async function loadProjects() {
                 <td>${pctBar(p.pct_ai || 0)} <span style="font-size:0.8rem">${(p.pct_ai || 0).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无项目数据</td></tr>';
-    } catch(e) { console.error(e); }
+        renderPaginationControls('projects');
+    } catch(e) {
+        console.error(e);
+        document.getElementById('proj-table').innerHTML =
+            '<tr><td colspan="6" style="color:var(--danger)">加载项目数据失败</td></tr>';
+        renderPaginationControls('projects');
+    }
 }
 
 // --- Tools ---
 async function loadTools() {
+    setTableLoading('tools-table', 5);
     try {
-        const r = await fetch('/api/v1/aggregate/tools');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败');
         const tools = (d.tools || []);
         if (tools.length === 0) {
             document.getElementById('tools-table').innerHTML =
                 '<tr><td colspan="5" style="color:var(--text-muted)">暂无工具使用数据，数据将在报告上传或指标事件后显示</td></tr>';
+            renderPaginationControls('tools');
             return;
         }
         document.getElementById('tools-table').innerHTML = tools.map(t => {
@@ -537,50 +695,62 @@ async function loadTools() {
                     ? '<span class="badge human" style="margin-left:0.5rem">报告+指标</span>'
                     : '<span class="badge ai" style="margin-left:0.5rem">指标</span>';
             return `<tr>
-                <td><strong>${t.tool_model}</strong>${source}</td>
+                <td><strong>${escapeHtml(t.tool_model)}</strong>${source}</td>
                 <td>${fmt(ai)}</td>
                 <td>${fmt(mixed)}</td>
                 <td>${fmt(accepted)}</td>
                 <td>${fmt(total)}</td>
             </tr>`;
         }).join('');
-    } catch(e) { console.error(e); }
+        renderPaginationControls('tools');
+    } catch(e) {
+        console.error(e);
+        document.getElementById('tools-table').innerHTML =
+            '<tr><td colspan="5" style="color:var(--danger)">加载工具数据失败</td></tr>';
+        renderPaginationControls('tools');
+    }
 }
 
 // --- Users Management ---
 async function loadUsers() {
+    setTableLoading('users-table', 5);
     try {
-        const r = await fetch('/api/admin/users/list');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败');
         const users = d.users || [];
         if (users.length === 0) {
             document.getElementById('users-table').innerHTML =
                 '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
+            renderPaginationControls('users');
             return;
         }
         document.getElementById('users-table').innerHTML = users.map(u => {
             const apiKeys = u.api_keys || [];
             const keyCount = apiKeys.length;
             const keyBadges = apiKeys.slice(0, 3).map(k =>
-                `<span class="badge ai" style="margin-right:0.25rem">${k.key_prefix}...</span>`
+                `<span class="badge ai" style="margin-right:0.25rem">${escapeHtml(k.key_prefix)}...</span>`
             ).join('');
             const moreKeys = keyCount > 3 ? `<span style="color:var(--text-muted);font-size:0.75rem">+${keyCount-3}</span>` : '';
             const created = u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '—';
+            const displayName = escapeHtml(u.name || '—');
+            const displayEmail = escapeHtml(u.email || '');
+            const actionName = jsString(u.name || u.email || '');
             return `<tr>
-                <td><strong>${u.name || '—'}</strong></td>
-                <td>${u.email}</td>
+                <td><strong>${displayName}</strong></td>
+                <td>${displayEmail}</td>
                 <td>${keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}</td>
                 <td>${created}</td>
                 <td>
-                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser('${u.id}','${u.name || u.email}')">🔑 创建密钥</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser('${u.id}','${u.name || u.email}')">删除</button>
+                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser('${u.id}', ${actionName})">🔑 创建密钥</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser('${u.id}', ${actionName})">删除</button>
                 </td>
             </tr>`;
         }).join('');
+        renderPaginationControls('users');
     } catch(e) {
         console.error(e);
         document.getElementById('users-table').innerHTML =
             '<tr><td colspan="5" style="color:var(--danger)">加载用户列表失败</td></tr>';
+        renderPaginationControls('users');
     }
 }
 
@@ -666,13 +836,10 @@ async function loadCreateUserDepartments(orgId) {
 
     deptSelect.innerHTML = '<option value="">加载部门中...</option>';
     try {
-        const r = await fetch(`/api/admin/departments?org_id=${encodeURIComponent(orgId)}`);
-        const d = await r.json();
-        if (!r.ok) {
-            throw new Error(d.error || '加载部门列表失败');
-        }
-
-        const departments = d.departments || [];
+        const departments = await fetchAllPaginated(
+            `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
+            'departments'
+        );
         if (departments.length === 0) {
             deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
             return;
@@ -723,6 +890,7 @@ async function createUser() {
             if (d.install_nonce) msg += `\\n安装令牌: ${d.install_nonce}`;
             showToast(msg, 'success');
             closeModal();
+            resetTablePage('users');
             loadUsers();
         } else {
             showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
@@ -738,6 +906,7 @@ async function deleteUser(userId, userName) {
         const r = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
         if (r.ok) {
             showToast(`用户「${userName}」已删除`, 'success');
+            resetTablePage('users');
             loadUsers();
         } else {
             const d = await r.json();
@@ -753,46 +922,45 @@ let adminOrganizationsCache = null;
 
 async function loadAdminOrganizations() {
     if (adminOrganizationsCache) return adminOrganizationsCache;
-    const r = await fetch('/api/admin/organizations/list?include_personal=false');
-    const d = await r.json();
-    if (!r.ok) {
-        throw new Error(d.error || '加载组织列表失败');
-    }
-    adminOrganizationsCache = d.organizations || [];
+    adminOrganizationsCache = await fetchAllPaginated(
+        '/api/admin/organizations/list?include_personal=false',
+        'organizations'
+    );
     return adminOrganizationsCache;
 }
 
 async function loadDepartments() {
+    setTableLoading('departments-table', 5);
     try {
-        const r = await fetch('/api/v1/departments');
-        const d = await r.json();
-        if (!r.ok) {
-            throw new Error(d.error || '加载部门列表失败');
-        }
+        const d = await fetchPaginatedJson('departments', '/api/v1/aggregate/departments', '加载部门列表失败');
         const departments = d.departments || [];
         if (departments.length === 0) {
             document.getElementById('departments-table').innerHTML =
                 '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
+            renderPaginationControls('departments');
             return;
         }
 
         document.getElementById('departments-table').innerHTML = departments.map(dept => {
-            const departmentName = escapeHtml(dept.name || '—');
-            const orgName = escapeHtml(dept.org_name || '—');
-            const pct = typeof dept.pct_ai_lines === 'number' ? dept.pct_ai_lines : 0;
-            const created = dept.created_at ? new Date(dept.created_at).toLocaleString('zh-CN') : '—';
+            const departmentName = escapeHtml(dept.department || '—');
+            const orgName = escapeHtml(dept.organization || '—');
+            const total = dept.w_total || 0;
+            const ai = dept.w_ai || 0;
+            const pct = total > 0 ? (ai / total) * 100 : 0;
             return `<tr>
                 <td><strong>${orgName}</strong></td>
                 <td><strong>${departmentName}</strong></td>
-                <td>${fmt(dept.member_count || 0)}</td>
+                <td>${fmt(dept.total_commits || 0)}</td>
                 <td>${pctBar(pct)} <span style="font-size:0.8rem">${pct.toFixed(1)}%</span></td>
-                <td>${created}</td>
+                <td>${fmt(total)}</td>
             </tr>`;
         }).join('');
+        renderPaginationControls('departments');
     } catch(e) {
         console.error(e);
         document.getElementById('departments-table').innerHTML =
             '<tr><td colspan="5" style="color:var(--danger)">加载部门列表失败</td></tr>';
+        renderPaginationControls('departments');
     }
 }
 
@@ -852,6 +1020,7 @@ async function createDepartment() {
         if (r.ok) {
             showToast(`部门「${name}」已新增`, 'success');
             closeModal();
+            resetTablePage('departments');
             loadDepartments();
         } else {
             showToast(`新增失败: ${d.error || '未知错误'}`, 'error');
@@ -863,34 +1032,39 @@ async function createDepartment() {
 
 // --- API Key Management ---
 async function loadApiKeys() {
+    setTableLoading('apikeys-table', 7);
     try {
-        const r = await fetch('/api/admin/api-keys');
-        const d = await r.json();
+        const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败');
         const keys = d.api_keys || [];
         if (keys.length === 0) {
             document.getElementById('apikeys-table').innerHTML =
                 '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔑</div><p>暂无 API 密钥，点击上方按钮创建</p></div></td></tr>';
+            renderPaginationControls('apikeys');
             return;
         }
         document.getElementById('apikeys-table').innerHTML = keys.map(k => {
             const created = k.created_at ? new Date(k.created_at).toLocaleDateString('zh-CN') : '—';
             const expires = k.expires_at ? new Date(k.expires_at).toLocaleDateString('zh-CN') : '永不过期';
             const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未使用';
-            const scopes = (k.scopes || []).map(s => `<span class="badge role" style="margin:0.1rem">${s}</span>`).join(' ');
+            const scopes = (k.scopes || []).map(s => `<span class="badge role" style="margin:0.1rem">${escapeHtml(s)}</span>`).join(' ');
+            const keyName = escapeHtml(k.name || '未命名');
+            const actionName = jsString(k.name || k.key_prefix || '');
             return `<tr>
-                <td><strong>${k.name || '未命名'}</strong></td>
-                <td><code style="color:var(--accent);font-size:0.8rem">${k.key_prefix}...</code></td>
+                <td><strong>${keyName}</strong></td>
+                <td><code style="color:var(--accent);font-size:0.8rem">${escapeHtml(k.key_prefix)}...</code></td>
                 <td>${scopes}</td>
                 <td>${created}</td>
                 <td>${expires}</td>
                 <td style="font-size:0.8rem">${lastUsed}</td>
-                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey('${k.id}','${k.name || k.key_prefix}')">撤销</button></td>
+                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey('${k.id}', ${actionName})">撤销</button></td>
             </tr>`;
         }).join('');
+        renderPaginationControls('apikeys');
     } catch(e) {
         console.error(e);
         document.getElementById('apikeys-table').innerHTML =
             '<tr><td colspan="7" style="color:var(--danger)">加载密钥列表失败</td></tr>';
+        renderPaginationControls('apikeys');
     }
 }
 
@@ -935,10 +1109,11 @@ function showCreateApiKeyModal() {
 }
 
 function showCreateApiKeyForUser(userId, userName) {
+    const safeUserName = escapeHtml(userName);
     document.getElementById('modal-container').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal">
-            <div class="modal-title">为用户「${userName}」创建 API 密钥</div>
+            <div class="modal-title">为用户「${safeUserName}」创建 API 密钥</div>
             <input type="hidden" id="create-key-user-id" value="${userId}" />
             <div class="form-group">
                 <label class="form-label">密钥名称</label>
@@ -995,6 +1170,8 @@ async function createApiKey() {
                 `<button class="copy-btn" onclick="copyKey()">复制</button>${d.key}`;
             document.getElementById('create-key-btn').style.display = 'none';
             showToast('API 密钥创建成功', 'success');
+            resetTablePage('apikeys');
+            if (currentSection === 'apikeys') loadApiKeys();
         } else {
             showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
         }
@@ -1024,6 +1201,10 @@ async function createApiKeyForUser() {
                 `<button class="copy-btn" onclick="copyKey()">复制</button>${d.key}`;
             document.getElementById('create-key-btn').style.display = 'none';
             showToast('API 密钥创建成功', 'success');
+            resetTablePage('users');
+            resetTablePage('apikeys');
+            if (currentSection === 'users') loadUsers();
+            if (currentSection === 'apikeys') loadApiKeys();
         } else {
             showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
         }
@@ -1044,6 +1225,7 @@ async function revokeApiKey(keyId, keyName) {
         const r = await fetch(`/api/admin/api-keys/${keyId}`, { method: 'DELETE' });
         if (r.ok) {
             showToast(`密钥「${keyName}」已撤销`, 'success');
+            resetTablePage('apikeys');
             loadApiKeys();
         } else {
             showToast('撤销失败', 'error');

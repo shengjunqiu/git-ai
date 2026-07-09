@@ -1094,33 +1094,52 @@ cargo test
 
 实现步骤：
 
-- [ ] 为每个已分页接口补充 `limit` 和 `cursor` 参数。
-- [ ] 补充响应中的 `pagination` 字段。
-- [ ] 给出第一页和下一页请求示例。
-- [ ] 说明 cursor 是 opaque，不保证永久有效。
+- [x] 为每个已分页接口补充 `limit` 和 `cursor` 参数。
+- [x] 补充响应中的 `pagination` 字段。
+- [x] 给出第一页和下一页请求示例。
+- [x] 说明 cursor 是 opaque，不保证永久有效。
 
 验收标准：
 
-- [ ] 文档中的请求和实际接口一致。
-- [ ] 老调用方可以忽略 `pagination` 字段。
+- [x] 文档中的请求和实际接口一致。
+- [x] 老调用方可以忽略 `pagination` 字段。
 
 ### 7.2 前端适配
 
 步骤：
 
-- [ ] 找到管理后台用户/API keys/组织/部门页面。
-- [ ] 找到 dashboard developers/projects/tools 表格页面。
-- [ ] 把一次性全量加载改成第一页加载。
-- [ ] 增加下一页、上一页或无限滚动交互。
-- [ ] 切换过滤条件时清空 cursor 并重新请求第一页。
-- [ ] loading 状态不阻塞整个页面，只阻塞当前表格。
-- [ ] 空状态和错误状态保持原体验。
+- [x] 找到管理后台用户/API keys/组织/部门页面。
+- [x] 找到 dashboard developers/projects/tools 表格页面。
+- [x] 把一次性全量加载改成第一页加载。
+- [x] 增加下一页、上一页或无限滚动交互。
+- [x] 切换过滤条件时清空 cursor 并重新请求第一页。
+- [x] loading 状态不阻塞整个页面，只阻塞当前表格。
+- [x] 空状态和错误状态保持原体验。
 
 验收标准：
 
-- [ ] 首屏不再依赖全量数据。
-- [ ] 翻页不会重复或跳过数据。
-- [ ] 改变过滤条件后不会沿用旧 cursor。
+- [x] 首屏不再依赖全量数据。
+- [x] 翻页不会重复或跳过数据。
+- [x] 改变过滤条件后不会沿用旧 cursor。
+
+### 阶段 7 执行记录
+
+完成内容：
+
+- `docs/ai-usage-reporting-tool/server_api.md` 新增 Enterprise API cursor 分页协议，列出已分页接口、请求参数、`pagination` 响应字段和第一页/下一页示例。
+- `docs/enterprise/enterprise-server-planning.md` 同步更新 dashboard 聚合、PR 聚合、persistence 和 lifecycle 示例。
+- `enterprise-server/static/dashboard.js` 新增通用 cursor pager，dashboard 组织/部门/开发者/项目/工具表和 admin 用户/API key 表改为 `limit/cursor` 首页加载与上一页/下一页翻页。
+- 创建用户/部门弹窗里的组织和部门选择改为按 cursor 拉取所有页，避免只显示第一页选项。
+- 新增表格级 loading、分页按钮 disabled 状态，并保留空状态和错误状态。
+
+验证结果：
+
+```bash
+node --check enterprise-server/static/dashboard.js
+cd enterprise-server && cargo test
+```
+
+结果：JS 语法检查通过；`enterprise-server` 完整测试套件通过，145 passed，0 failed。测试输出仍包含既有 unused/dead-code warning。
 
 ## 阶段 8: 回归、压测和发布
 
