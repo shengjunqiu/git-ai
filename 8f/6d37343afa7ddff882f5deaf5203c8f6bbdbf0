@@ -1,0 +1,30 @@
+src/commands/checkpoint_agent/bash_tool.rs
+  d2a37ee3fcb7cddb 461-471
+src/commands/checkpoint_agent/agent_presets/codex.rs
+  d2a37ee3fcb7cddb 85-88,167,169,188,190,197-231
+tests/integration/bash_tool_conformance.rs
+  d2a37ee3fcb7cddb 632-641
+tests/integration/codex.rs
+  d2a37ee3fcb7cddb 315-375,899
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "8f6d37343afa7ddff882f5deaf5203c8f6bbdbf0",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 136,
+      "total_deletions": 20,
+      "accepted_lines": 127,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/c5fcc0eb38a3ab1deb762be131470951d024b7df091c5b4be79e343b5c6850e4"
+    }
+  }
+}
