@@ -1,5 +1,7 @@
 {
     "cursorGitAi.enableCheckpointLogging": false,
     "cursor.composer.shouldChimeAfterChatFinishes": false,
-    "editor.accessibilitySupport": "off"
+    "editor.accessibilitySupport": "off",
+    "gitai.enableCheckpointLogging": true,
+    "gitai.experiments.aiTabTracking": true
 }
