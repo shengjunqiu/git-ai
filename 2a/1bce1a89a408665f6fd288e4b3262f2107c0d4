@@ -1,0 +1,53 @@
+enterprise-server/static/dashboard.js
+  d2a37ee3fcb7cddb 767,775,780-783,787,789,795
+  60d75f4f35309f03 311-313,315-329,333,336,338,345-347
+enterprise-server/src/db/migrations.rs
+  d2a37ee3fcb7cddb 95-98
+enterprise-server/migrations/023_department_rollup_indexes.sql
+  d2a37ee3fcb7cddb 1-6
+enterprise-server/static/dashboard.css
+  60d75f4f35309f03 57,59-60
+enterprise-server/static/dashboard.html
+  d2a37ee3fcb7cddb 245,251-252,285
+  60d75f4f35309f03 140-141,147-151
+enterprise-server/src/routes.rs
+  d2a37ee3fcb7cddb 152-154
+enterprise-server/src/handlers/dashboard.rs
+  60d75f4f35309f03 4,13-16,176-271
+  d2a37ee3fcb7cddb 1002,1005-1009,1060-1067,1071-1074,1079-1094,1113-1219,1236-1243,1246,1255,1313-1320,1327-1330,1335-1351,1354,1370-1373,1380,1383-1388,1390-1392,1394-1396,1402,1404-1442,1453-1540,1543-1544,1546-1560,1564-1571,1576-1590,1592-1598,1600-1618,1620-1621,1623-1626,1637-1643,1708,1710-1743,1745-1746,1748-1750,1753-1754,1757-1767,1786-1787,1802-1809,1813-1820,1822-1825,1833-1837,1842-1859,1882-1885
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "2a1bce1a89a408665f6fd288e4b3262f2107c0d4",
+  "prompts": {
+    "60d75f4f35309f03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4598-746b-70e3-ad44-e0c355afe762",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 135,
+      "total_deletions": 11,
+      "accepted_lines": 250,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/9ef23fdcb167ac0f01a82bb66cbf0a5fa689e9ed9946a3d5d3e6518784ffe50c"
+    },
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 534,
+      "total_deletions": 187,
+      "accepted_lines": 3382,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/bcb7032cfd1102e086779b3ba6a39ec4791e571339a2afe55d4bd377cd7a77d4"
+    }
+  }
+}
