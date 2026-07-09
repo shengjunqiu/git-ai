@@ -1,0 +1,60 @@
+tests/integration/codex.rs
+  60d75f4f35309f03 467-468
+  d2a37ee3fcb7cddb 147-197,428-466,989-990,995
+enterprise-server/src/handlers/dashboard.rs
+  60d75f4f35309f03 955-959,1664-1737,2844-2860,2863-2872,2885-2889,2891-2907,3069-3085,3090-3098,3100-3124,3250-3264
+src/commands/checkpoint_agent/agent_presets/codex.rs
+  d2a37ee3fcb7cddb 89-92,171-173,179-187,202,246-252
+enterprise-server/src/main.rs
+  60d75f4f35309f03 9-17
+  a73676cfded0c055 1,3,5,8,18-20,24-25,29-31,36,39-40,43-45,54,56,59-62,70-71,79-80,83-84,87-88,90,93-94,104-105,108-109,125-126,132,135,138,141-142,150-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "89130bdac17805f04d502b51fc122828b041ec5c",
+  "prompts": {
+    "60d75f4f35309f03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4598-746b-70e3-ad44-e0c355afe762",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1893,
+      "total_deletions": 1844,
+      "accepted_lines": 6148,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/be0399c787e4be49101accad5c502e580d7c1b7d8ccffc028221425928202d84"
+    },
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 7496,
+      "total_deletions": 22,
+      "accepted_lines": 49,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/4febb4f4f57cd5ba01ff0b6b8d131217e72e76faf8f23a933d5e63898457f008"
+    },
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 179,
+      "total_deletions": 5,
+      "accepted_lines": 122,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/a18058b9ebb4859b3f4ba58a421e32571e9b2c4be5fddef5c02831f14a9277d2"
+    }
+  }
+}
