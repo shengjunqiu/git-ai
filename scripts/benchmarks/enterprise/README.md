@@ -133,6 +133,21 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
   --client-ip-pool-size 100
 ```
 
+如果刚用注册压测生成了一批账号，也可以按相同邮箱规则直接生成登录用户池，不需要落 CSV：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode login \
+  --login-user-count 100 \
+  --login-email-domain example.com \
+  --login-email-prefix bench-login-pool \
+  --login-run-id 20260709-001 \
+  --requests 1000 \
+  --concurrency 50 \
+  --client-ip-mode pool \
+  --client-ip-pool-size 100
+```
+
 生产环境不要直接信任公网客户端传入的 `X-Forwarded-For`；这类多人模拟只适用于本地或可信反向代理后的压测。
 
 ## Dashboard 压测

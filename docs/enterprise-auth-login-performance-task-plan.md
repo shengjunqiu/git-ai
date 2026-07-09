@@ -1062,6 +1062,62 @@ docker compose up -d --build api
 - 生产环境必须确保 `X-Forwarded-For` 只来自可信反向代理；应用不能信任公网客户端直接传入的该 header。
 - Docker daemon/compose 当前不稳定，尚未完成 API 重建确认。后续应先恢复 Docker，再重建 API 验证运行环境确实加载最新 auth/OAuth 限流默认值。
 
+### 7.4 剩余问题处理后复测
+
+执行日期：2026-07-09。
+
+本阶段继续处理 7.3 后剩余的问题：
+
+- [x] Docker daemon 已恢复响应。
+- [x] 使用 `docker compose up -d --force-recreate api` 重新创建 API 容器，确认环境变量存在。
+- [x] 发现仅 force recreate 仍使用旧镜像，OAuth 单 client 仍返回 `Maximum 10 requests per 60 seconds`。
+- [x] 完整执行 `docker compose up -d --build api`，重新构建 enterprise-server API 镜像并启动。
+- [x] 新镜像运行时确认：`RATE_LIMIT_AUTH_MAX_REQUESTS=300`、`RATE_LIMIT_OAUTH_MAX_REQUESTS=600`、`AUTH_PASSWORD_CONCURRENCY=8`。
+- [x] `bench_auth_login.py` 新增生成式登录用户池参数：`--login-user-count`、`--login-email-domain`、`--login-email-prefix`、`--login-run-id`。
+
+生成多账号登录池：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode register \
+  --requests 100 \
+  --concurrency 30 \
+  --email-domain linewell.com \
+  --email-prefix bench-login-pool \
+  --run-id 20260709-001 \
+  --org-slug linewell.com \
+  --department-slug technology-center \
+  --client-ip-mode unique \
+  --allow-errors
+```
+
+结果：100/100 注册成功，p50 `457.68ms`，p95 `700.48ms`，p99 `875.25ms`，无 409/429/500。
+
+复测结果：
+
+| 场景 | 请求/并发 | client/账号模式 | 成功/错误 | HTTP 状态 | RPS | p50 | p95 | p99 | 结论 |
+| --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| OAuth device flow | 200 flows/50 | 单 client | 400/0 HTTP result | 200=200, 400=200, 429=0, 500=0 | 207.43 | device=105.50ms, token=104.49ms | device=123.07ms, token=117.56ms | device=140.40ms, token=119.93ms | 新镜像已加载 OAuth 600/60s，旧的 `limit=10` 问题消失。 |
+| 登录 | 200/50 | 100 账号 / 100 IP 池 | 200/0 | 200=200, 429=0, 500=0 | 63.22 | 596.57ms | 1540.74ms | 1839.85ms | 真实多账号样本无错误；延迟明显优于 7.3 的单账号重复登录。 |
+| 登录 | 500/50 | 100 账号 / 100 IP 池 | 500/0 | 200=500, 429=0, 500=0 | 68.30 | 666.84ms | 913.76ms | 1091.37ms | 50 并发登录稳定，p95 低于 1s。 |
+| 登录 | 1000/100 | 100 账号 / 200 IP 池 | 1000/0 | 200=1000, 429=0, 500=0 | 54.47 | 1780.65ms | 2085.41ms | 2131.16ms | 100 并发可撑住但延迟进入 2s 级，说明 Argon2 verify 队列开始成为主要瓶颈。 |
+
+压测后旁路和资源快照：
+
+- `/health`: `5.063ms`
+- `/ready`: `7.291ms`
+- API: CPU `0.32%`，内存 `1.286GiB`
+- Postgres: CPU `0.04%`，内存 `95.67MiB`，连接 `active=1, idle=16`
+- Redis: CPU `1.18%`，内存 `19.18MiB`
+
+更新后的结论：
+
+- OAuth 大面积 429 已处理：根因是旧镜像未重新 build，仅重建容器不能更新二进制默认值。
+- 历史登录 500 未在 200/50、500/50、1000/100 多账号样本中复现，当前按偶发/旧镜像样本记录，后续只需继续观察。
+- 注册在 100/30 和 100/50 样本中稳定，无 409/429/500。
+- 登录 50 并发多账号样本表现健康；100 并发虽无错误，但 p95 约 `2.1s`，是当前登录路径的主要容量边界。
+- 下一步如要继续优化登录，应围绕 `AUTH_PASSWORD_CONCURRENCY` 做分档压测，例如 `8/12/16`，观察 p95、CPU、内存和 `/health` 延迟，而不是直接无限调高。
+
 ## 阶段 8: 上线和回滚
 
 ### 8.1 上线顺序

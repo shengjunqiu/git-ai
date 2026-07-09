@@ -123,6 +123,30 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("BENCH_LOGIN_USERS_FILE"),
         help="CSV file for --mode login with email,password columns. Overrides single login email.",
     )
+    parser.add_argument(
+        "--login-user-count",
+        type=int,
+        default=env_int("BENCH_LOGIN_USER_COUNT", 0),
+        help=(
+            "Generate this many login users using --login-email-prefix, --login-run-id, "
+            "and --login-email-domain. Useful after seeding users with --mode register."
+        ),
+    )
+    parser.add_argument(
+        "--login-email-domain",
+        default=os.environ.get("BENCH_LOGIN_EMAIL_DOMAIN"),
+        help="Email domain for generated login users. Defaults to --email-domain.",
+    )
+    parser.add_argument(
+        "--login-email-prefix",
+        default=os.environ.get("BENCH_LOGIN_EMAIL_PREFIX"),
+        help="Local-part prefix for generated login users. Defaults to --email-prefix.",
+    )
+    parser.add_argument(
+        "--login-run-id",
+        default=os.environ.get("BENCH_LOGIN_RUN_ID"),
+        help="Run id for generated login users. Defaults to --run-id.",
+    )
 
     parser.add_argument(
         "--email-domain",
@@ -174,7 +198,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def require_login_config(args: argparse.Namespace) -> None:
+    if args.login_user_count < 0:
+        raise SystemExit("--login-user-count cannot be negative")
     if args.login_users_file:
+        return
+    if args.login_user_count:
         return
     if not args.login_email:
         raise SystemExit("--login-email or BENCH_LOGIN_EMAIL is required for --mode login")
@@ -224,6 +252,11 @@ def client_ip_for_index(args: argparse.Namespace, index: int) -> str | None:
 def load_login_credentials(args: argparse.Namespace) -> list[tuple[str, str]]:
     require_login_config(args)
     if not args.login_users_file:
+        if args.login_user_count:
+            return [
+                (generated_login_email(args, index), args.login_password)
+                for index in range(args.login_user_count)
+            ]
         return [(args.login_email, args.login_password)]
 
     credentials: list[tuple[str, str]] = []
@@ -262,6 +295,17 @@ def unique_email(args: argparse.Namespace, index: int) -> str:
     run_id = args.run_id or str(int(time.time() * 1000))
     local_part = f"{args.email_prefix}+{run_id}-{index}"
     return f"{local_part}@{args.email_domain}"
+
+
+def generated_login_email(args: argparse.Namespace, index: int) -> str:
+    run_id = args.login_run_id or args.run_id
+    if not run_id:
+        raise SystemExit("--login-run-id or --run-id is required with --login-user-count")
+
+    prefix = args.login_email_prefix or args.email_prefix
+    domain = args.login_email_domain or args.email_domain
+    local_part = f"{prefix}+{run_id}-{index}"
+    return f"{local_part}@{domain}"
 
 
 def register_payload(args: argparse.Namespace, index: int) -> dict[str, Any]:
