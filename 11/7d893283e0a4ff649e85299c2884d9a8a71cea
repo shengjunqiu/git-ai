@@ -1,0 +1,24 @@
+enterprise-server/src/handlers/dashboard.rs
+  d2a37ee3fcb7cddb 1892,1895-1898,1900,1902-1931,1933-1949,1951,1953,1955,1957-2009,2011-2031,2033-2036,2038-2061,2063-2066
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "117d893283e0a4ff649e85299c2884d9a8a71cea",
+  "prompts": {
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 161,
+      "total_deletions": 117,
+      "accepted_lines": 3009,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/914fd15766a56cedce11f97fde71ff73a9bffb9b4fd6b9401eebef6ccb642f70"
+    }
+  }
+}
