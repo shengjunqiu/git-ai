@@ -166,6 +166,7 @@ mod droid;
 mod firebender;
 mod gemini;
 mod github_copilot;
+mod qoder;
 mod trae;
 mod windsurf;
 
@@ -179,5 +180,6 @@ pub use droid::DroidPreset;
 pub use firebender::FirebenderPreset;
 pub use gemini::GeminiPreset;
 pub use github_copilot::GithubCopilotPreset;
+pub use qoder::QoderPreset;
 pub use trae::TraePreset;
 pub use windsurf::WindsurfPreset;

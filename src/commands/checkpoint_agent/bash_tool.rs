@@ -442,6 +442,13 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             "RunCommand" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
+        Agent::Qoder => match tool_name {
+            "Write" | "Edit" | "create_file" | "search_replace" | "delete_file" => {
+                ToolClass::FileEdit
+            }
+            "Bash" | "run_in_terminal" => ToolClass::Bash,
+            _ => ToolClass::Skip,
+        },
         Agent::ContinueCli => match tool_name {
             "edit" => ToolClass::FileEdit,
             "terminal" | "local_shell_call" => ToolClass::Bash,
@@ -501,6 +508,7 @@ pub enum Agent {
     CodeBuddy,
     Gemini,
     Trae,
+    Qoder,
     ContinueCli,
     Droid,
     Amp,
@@ -1908,6 +1916,22 @@ mod tests {
         assert_eq!(classify_tool(Agent::Trae, "Edit"), ToolClass::FileEdit);
         assert_eq!(classify_tool(Agent::Trae, "RunCommand"), ToolClass::Bash);
         assert_eq!(classify_tool(Agent::Trae, "Read"), ToolClass::Skip);
+
+        assert_eq!(classify_tool(Agent::Qoder, "Write"), ToolClass::FileEdit);
+        assert_eq!(
+            classify_tool(Agent::Qoder, "create_file"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(
+            classify_tool(Agent::Qoder, "search_replace"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(classify_tool(Agent::Qoder, "Bash"), ToolClass::Bash);
+        assert_eq!(
+            classify_tool(Agent::Qoder, "run_in_terminal"),
+            ToolClass::Bash
+        );
+        assert_eq!(classify_tool(Agent::Qoder, "Read"), ToolClass::Skip);
     }
 
     #[test]

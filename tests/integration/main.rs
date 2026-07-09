@@ -79,6 +79,7 @@ mod prompt_picker_test;
 mod prompts_db_test;
 mod pull_rebase_ff;
 mod push_upstream_authorship;
+mod qoder;
 mod realistic_complex_edits;
 mod rebase;
 mod rebase_attribution_remaining;
