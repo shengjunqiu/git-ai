@@ -1,0 +1,44 @@
+src/commands/git_handlers.rs
+  60d75f4f35309f03 724-726,735
+src/commands/checkpoint_agent/bash_tool.rs
+  d2a37ee3fcb7cddb 446-447,1928-1931
+tests/integration/qoder.rs
+  d2a37ee3fcb7cddb 114-143
+agent-support/vscode/src/utils/host-kind.ts
+  d2a37ee3fcb7cddb 14,21,51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "a3265d5b5c2216d29969d48621348da6b7d3f5ad",
+  "prompts": {
+    "60d75f4f35309f03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4598-746b-70e3-ad44-e0c355afe762",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 3,
+      "accepted_lines": 4724,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/747f17afb519c4efb8ef8d9c6fe3dc2ae1a962d618913b1e7e15e5b9fafe95ec"
+    },
+    "d2a37ee3fcb7cddb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f44a1-ff00-7b81-9399-97dbf38eb297",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 41,
+      "total_deletions": 4,
+      "accepted_lines": 40,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/46570d144ba87065abf3727aed38158ec9d10b169c8bffb21633a16cc1e5e6a4"
+    }
+  }
+}
