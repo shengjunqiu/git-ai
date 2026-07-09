@@ -38,8 +38,8 @@ pub async fn aggregate_pull_requests(
         FROM pull_requests
         WHERE ($1::text IS NULL OR repo_url = $1)
           AND ($2::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $2))
-          AND ($3::timestamptz IS NULL OR merged_at >= $3)
-          AND ($4::timestamptz IS NULL OR merged_at <= $4)
+          AND ($3::timestamptz IS NULL OR merged_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR merged_at <= $4::timestamptz)
           AND ($5::uuid IS NULL OR org_id = $5)
         ORDER BY merged_at DESC"#
     )

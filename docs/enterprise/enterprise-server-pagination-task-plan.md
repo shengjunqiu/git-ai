@@ -311,11 +311,17 @@ curl -sS "http://127.0.0.1:8080/api/admin/users/list" -H "Authorization: Bearer 
 | --- | --- | --- |
 | `GET /api/v1/aggregate/pull-requests` 当前返回 500 | 阶段 4 改造前需要先修正 SQL 类型转换，否则无法做成功响应基线 | API 日志显示 Postgres `42883`: `operator does not exist: timestamp with time zone >= text` |
 
+修复记录：
+
+| 日期 | 修复 | 验证 |
+| --- | --- | --- |
+| 2026-07-09 | 将 `aggregate_pull_requests` 查询中的 `merged_at >= $3` 和 `merged_at <= $4` 改为显式 `timestamptz` cast | 临时本地服务 `GET /api/v1/aggregate/pull-requests` 返回 200，顶层字段为 `pull_requests`, `summary` |
+
 阶段 0 结论：
 
 - 本地服务端测试和基础依赖可用，可以进入阶段 1。
 - 数据量最大的是 `metrics_events`、`commit_stats`、`audit_log`，符合分页优先级判断。
-- P0 中的 `pull-requests` 接口存在既有 500，需要在阶段 4 或单独修复任务中先修 SQL cast。
+- P0 中的 `pull-requests` 接口存在既有 500；已在 2026-07-09 修复 SQL cast 并验证返回 200。
 
 ## 阶段 1: 增加通用分页基础设施
 
@@ -330,8 +336,8 @@ curl -sS "http://127.0.0.1:8080/api/admin/users/list" -H "Authorization: Bearer 
 
 实现步骤：
 
-- [ ] 新增 `pagination` 模块。
-- [ ] 定义分页查询结构：
+- [x] 新增 `pagination` 模块。
+- [x] 定义分页查询结构：
 
 ```rust
 #[derive(Debug, Deserialize)]
@@ -341,9 +347,9 @@ pub struct PaginationQuery {
 }
 ```
 
-- [ ] 增加 `clamp_limit(input, default, max) -> i64`。
-- [ ] 增加 cursor encode/decode helper。
-- [ ] 为日志类 cursor 定义结构：
+- [x] 增加 `clamp_limit(input, default, max) -> i64`。
+- [x] 增加 cursor encode/decode helper。
+- [x] 为日志类 cursor 定义结构：
 
 ```rust
 pub struct TimeIdCursor {
@@ -352,7 +358,7 @@ pub struct TimeIdCursor {
 }
 ```
 
-- [ ] 为 UUID id 列表定义结构：
+- [x] 为 UUID id 列表定义结构：
 
 ```rust
 pub struct TimeUuidCursor {
@@ -361,13 +367,13 @@ pub struct TimeUuidCursor {
 }
 ```
 
-- [ ] 增加 `has_more` 和 `next_cursor` 构造 helper。
+- [x] 增加 `has_more` 和 `next_cursor` 构造 helper。
 
 验收标准：
 
-- [ ] helper 不依赖具体业务 handler。
-- [ ] cursor 对客户端保持 opaque。
-- [ ] 错误统一走现有 `AppError::BadRequest`。
+- [x] helper 不依赖具体业务 handler。
+- [x] cursor 对客户端保持 opaque。
+- [x] 错误统一走现有 `AppError::BadRequest`。
 
 ### 1.2 增加单元测试
 
@@ -377,12 +383,12 @@ pub struct TimeUuidCursor {
 
 测试步骤：
 
-- [ ] 测试 `limit=None` 返回默认值。
-- [ ] 测试 `limit=0` 被提升到最小值。
-- [ ] 测试 `limit` 超过最大值时被 clamp。
-- [ ] 测试 cursor encode 后可以 decode。
-- [ ] 测试非法 cursor 返回错误。
-- [ ] 测试 cursor 版本不支持时返回错误。
+- [x] 测试 `limit=None` 返回默认值。
+- [x] 测试 `limit=0` 被提升到最小值。
+- [x] 测试 `limit` 超过最大值时被 clamp。
+- [x] 测试 cursor encode 后可以 decode。
+- [x] 测试非法 cursor 返回错误。
+- [x] 测试 cursor 版本不支持时返回错误。
 
 测试命令：
 
@@ -393,8 +399,8 @@ cargo test pagination
 
 验收标准：
 
-- [ ] `cargo test pagination` 通过。
-- [ ] 不影响其他 handler 编译。
+- [x] `cargo test pagination` 通过。
+- [x] 不影响其他 handler 编译。
 
 提交建议：
 
@@ -402,6 +408,33 @@ cargo test pagination
 git add enterprise-server/src
 git commit -m "Add pagination helpers"
 ```
+
+### 阶段 1 执行记录
+
+执行日期：2026-07-09
+
+实现内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `enterprise-server/src/pagination.rs` | 新增分页 query、limit clamp、cursor encode/decode、`TimeIdCursor`、`TimeUuidCursor`、`pagination_meta`、`truncate_to_limit` |
+| `enterprise-server/src/main.rs` | 挂载 `pagination` 模块 |
+| `enterprise-server/src/handlers/lifecycle.rs` | 修复 `aggregate_pull_requests` 的 `since/until` SQL cast |
+
+验证结果：
+
+| 命令或检查 | 结果 |
+| --- | --- |
+| `cargo fmt` | 执行过；产生全仓格式化噪音，已回退非任务范围改动 |
+| `cargo test pagination` | 9 passed, 0 failed |
+| `cargo test lifecycle` | 0 matched tests, 编译通过 |
+| `cargo test` | 129 passed, 0 failed |
+| 临时服务 `GET /api/v1/aggregate/pull-requests` | 200；`pull_requests_len=0`，`summary` 字段存在 |
+
+备注：
+
+- 阶段 1 的 helper 暂未接入业务 handler，已在模块内允许阶段性 `dead_code`，避免在阶段 2 前产生新增未使用 warning。
+- 当前测试输出仍有既有 warning，未在本阶段处理。
 
 ## 阶段 2: 改造日志类接口
 
@@ -416,22 +449,22 @@ git commit -m "Add pagination helpers"
 
 实现步骤：
 
-- [ ] 扩展 `AuditLogQuery`，增加 `cursor: Option<String>`。
-- [ ] 继续保留 `user_id`、`org_id`、`action`、`limit` 参数。
-- [ ] 解码 cursor 为 `(created_at, id)`。
-- [ ] 查询改为 `ORDER BY created_at DESC, id DESC`。
-- [ ] 增加 cursor 条件：
+- [x] 扩展 `AuditLogQuery`，增加 `cursor: Option<String>`。
+- [x] 继续保留 `user_id`、`org_id`、`action`、`limit` 参数。
+- [x] 解码 cursor 为 `(created_at, id)`。
+- [x] 查询改为 `ORDER BY created_at DESC, id DESC`。
+- [x] 增加 cursor 条件：
 
 ```sql
 AND (
-  $5::timestamptz IS NULL
-  OR (created_at, id) < ($5::timestamptz, $6::bigint)
+  $4::timestamptz IS NULL
+  OR (created_at, id) < ($4::timestamptz, $5::bigint)
 )
 ```
 
-- [ ] 查询 `limit + 1` 条。
-- [ ] 如果结果超过 `limit`，截断最后一条并生成 `next_cursor`。
-- [ ] 响应中保留 `entries` 和 `count`，新增 `pagination`。
+- [x] 查询 `limit + 1` 条。
+- [x] 如果结果超过 `limit`，截断最后一条并生成 `next_cursor`。
+- [x] 响应中保留 `entries` 和 `count`，新增 `pagination`。
 
 建议索引：
 
@@ -452,11 +485,11 @@ ON audit_log (user_id, created_at DESC, id DESC);
 
 验收标准：
 
-- [ ] `GET /api/v1/audit-log?limit=10` 返回最多 10 条。
-- [ ] 第一页有更多数据时返回 `pagination.next_cursor`。
-- [ ] 使用 `cursor` 请求第二页时不重复第一页最后一条。
-- [ ] `user_id/org_id/action` 过滤和 cursor 同时生效。
-- [ ] 非法 cursor 返回 400。
+- [x] `GET /api/v1/audit-log?limit=10` 返回最多 10 条。
+- [x] 第一页有更多数据时返回 `pagination.next_cursor`。
+- [x] 使用 `cursor` 请求第二页时不重复第一页最后一条。
+- [x] `user_id/org_id/action` 过滤和 cursor 同时生效。
+- [x] 非法 cursor 返回 400。
 
 ### 2.2 改造 CAS access log
 
@@ -467,12 +500,12 @@ ON audit_log (user_id, created_at DESC, id DESC);
 
 实现步骤：
 
-- [ ] 扩展 `CasAccessLogQuery`，增加 `cursor: Option<String>`。
-- [ ] 继续保留 `cas_hash`、`user_id`、`org_id`、`limit` 参数。
-- [ ] 查询改为 `ORDER BY created_at DESC, id DESC`。
-- [ ] 使用 `(created_at, id)` cursor 条件。
-- [ ] 查询 `limit + 1` 条。
-- [ ] 响应中保留 `entries` 和 `count`，新增 `pagination`。
+- [x] 扩展 `CasAccessLogQuery`，增加 `cursor: Option<String>`。
+- [x] 继续保留 `cas_hash`、`user_id`、`org_id`、`limit` 参数。
+- [x] 查询改为 `ORDER BY created_at DESC, id DESC`。
+- [x] 使用 `(created_at, id)` cursor 条件。
+- [x] 查询 `limit + 1` 条。
+- [x] 响应中保留 `entries` 和 `count`，新增 `pagination`。
 
 建议索引：
 
@@ -486,19 +519,19 @@ ON cas_access_log (cas_hash, created_at DESC, id DESC);
 
 验收标准：
 
-- [ ] `GET /api/admin/cas-access-log?limit=10` 返回最多 10 条。
-- [ ] `cursor` 翻页无重复、无明显漏项。
-- [ ] `cas_hash/user_id/org_id` 过滤和 cursor 同时生效。
+- [x] `GET /api/admin/cas-access-log?limit=10` 返回最多 10 条。
+- [x] `cursor` 翻页无重复、无明显漏项。
+- [x] `cas_hash/user_id/org_id` 过滤和 cursor 同时生效。
 
 ### 2.3 日志类接口测试
 
 测试步骤：
 
-- [ ] 增加或更新 handler/integration 测试，插入至少 3 条不同时间的 audit log。
-- [ ] 用 `limit=2` 断言第一页 2 条、`has_more=true`。
-- [ ] 用 `next_cursor` 断言第二页返回剩余数据。
-- [ ] 插入相同 `created_at` 的多条记录，确认 `id` 作为 tie breaker 生效。
-- [ ] 对 CAS access log 做同样测试。
+- [x] 增加或更新 handler/integration 测试，插入至少 3 条 audit log。
+- [x] 用 `limit=2` 断言第一页 2 条、`has_more=true`。
+- [x] 用 `next_cursor` 断言第二页返回剩余数据。
+- [x] 插入相同 `created_at` 的多条记录，确认 `id` 作为 tie breaker 生效。
+- [x] 对 CAS access log 做同样测试。
 
 测试命令：
 
@@ -515,6 +548,36 @@ cargo test
 git add enterprise-server/src enterprise-server/migrations
 git commit -m "Add cursor pagination for audit logs"
 ```
+
+### 阶段 2 执行记录
+
+执行日期：2026-07-09
+
+实现内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `enterprise-server/src/handlers/admin.rs` | `audit_log` 和 `cas_access_log` 增加 cursor 参数、稳定排序、`limit + 1` 查询、`pagination` 响应元数据和数据库级 handler 测试 |
+| `enterprise-server/migrations/020_log_pagination_indexes.sql` | 新增日志分页复合索引，覆盖无过滤、user、org、action/cas_hash 过滤场景 |
+| `enterprise-server/src/db/migrations.rs` | 注册 `020_log_pagination_indexes` |
+
+验证结果：
+
+| 命令或检查 | 结果 |
+| --- | --- |
+| `cd enterprise-server && cargo test decode_log_cursor` | 3 passed, 0 failed |
+| `cd enterprise-server && cargo test audit_log_cursor_paginates_without_repeating_tie_breaker_ids` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test cas_access_log_cursor_paginates_with_hash_filter` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test pagination` | 9 passed, 0 failed |
+| `cd enterprise-server && cargo test db::migrations` | 1 passed, 0 failed |
+| `cd enterprise-server && cargo test` | 134 passed, 0 failed |
+| 本地 Postgres `PREPARE/EXECUTE` 同形 SQL | `audit_log` 和 `cas_access_log` 查询均可执行 |
+| `cargo run -- --migrate` | 当前开发库已应用 `020_log_pagination_indexes` |
+
+备注：
+
+- 响应兼容旧字段：`entries` 和 `count` 保留，仅新增 `pagination`。
+- 当前测试输出仍有既有 warning，未在本阶段处理。
 
 ## 阶段 3: 改造管理后台列表
 

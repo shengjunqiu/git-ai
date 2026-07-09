@@ -12,6 +12,7 @@ mod db; // 数据库连接与迁移
 mod error; // 统一错误类型
 mod handlers; // HTTP 请求处理函数（按路由分组）
 mod models; // 数据模型 / 结构体定义
+mod pagination; // API 分页参数、cursor 编解码和响应元数据
 mod pos_encoded; // 游标分页（position-encoded）相关的编解码工具
 mod routes; // 路由定义与共享状态（AppState）
 mod services; // 业务逻辑层（CAS、限流、指标汇总等）

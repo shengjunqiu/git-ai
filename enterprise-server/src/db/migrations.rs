@@ -80,6 +80,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "019_metrics_rollup_dirty_scopes",
         include_str!("../../migrations/019_metrics_rollup_dirty_scopes.sql"),
     ),
+    (
+        "020_log_pagination_indexes",
+        include_str!("../../migrations/020_log_pagination_indexes.sql"),
+    ),
 ];
 
 /// Run all database migrations

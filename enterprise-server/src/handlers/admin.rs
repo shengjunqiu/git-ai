@@ -8,6 +8,10 @@ use crate::auth::jwt;
 use crate::auth::middleware::{AdminGuard, AuthExtractor};
 use crate::error::AppError;
 use crate::models::auth::CreateApiKeyRequest;
+use crate::pagination::{
+    clamp_limit, decode_time_id_cursor, encode_cursor, fetch_limit, pagination_meta,
+    truncate_to_limit, TimeIdCursor, DEFAULT_LIMIT, MAX_LIMIT,
+};
 use crate::routes::AppState;
 
 // ================================================================
@@ -616,6 +620,7 @@ fn generate_department_slug(name: &str, dept_id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     fn fixed_uuid() -> Uuid {
         Uuid::parse_str("12345678-1234-5678-1234-567812345678").unwrap()
@@ -635,6 +640,29 @@ mod tests {
             generate_department_slug("技术中心", fixed_uuid()),
             "dept-12345678"
         );
+    }
+
+    #[test]
+    fn decode_log_cursor_returns_none_without_cursor() {
+        assert!(decode_log_cursor(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn decode_log_cursor_round_trips_timestamp_and_id() {
+        let timestamp = chrono::Utc.with_ymd_and_hms(2026, 7, 9, 10, 0, 0).unwrap();
+        let encoded = encode_log_cursor(timestamp, 123).unwrap();
+
+        let decoded = decode_log_cursor(Some(&encoded)).unwrap().unwrap();
+
+        assert_eq!(decoded.timestamp, timestamp);
+        assert_eq!(decoded.id, 123);
+    }
+
+    #[test]
+    fn decode_log_cursor_rejects_invalid_input() {
+        let err = decode_log_cursor(Some("bad*cursor")).unwrap_err();
+
+        assert!(matches!(err, AppError::BadRequest(_)));
     }
 }
 
@@ -774,6 +802,355 @@ pub async fn list_api_keys(
     Ok(Json(json!({ "api_keys": result })))
 }
 
+#[cfg(test)]
+mod log_pagination_tests {
+    use super::*;
+    use crate::config::{AppConfig, MetricsRollupWriteMode};
+    use crate::models::user::{AuthIdentity, AuthMethod};
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
+
+    struct TestDatabase {
+        state: AppState,
+        admin_pool: PgPool,
+        db_name: String,
+    }
+
+    impl TestDatabase {
+        async fn new() -> anyhow::Result<Option<Self>> {
+            let database_url = test_database_url();
+            let db_name = unique_test_database_name();
+            let admin_url = database_url_for_database(&database_url, "postgres")?;
+            let test_url = database_url_for_database(&database_url, &db_name)?;
+
+            let admin_pool = match PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&admin_url)
+                .await
+            {
+                Ok(pool) => pool,
+                Err(error) => {
+                    eprintln!(
+                        "skipping admin log pagination test: could not connect to admin database: {error}"
+                    );
+                    return Ok(None);
+                }
+            };
+
+            if let Err(error) = create_database(&admin_pool, &db_name).await {
+                eprintln!(
+                    "skipping admin log pagination test: could not create isolated database {db_name}: {error}"
+                );
+                admin_pool.close().await;
+                return Ok(None);
+            }
+
+            let pool = PgPoolOptions::new()
+                .max_connections(4)
+                .connect(&test_url)
+                .await?;
+            crate::db::run_migrations(&pool).await?;
+
+            let config = test_config(&test_url);
+            let redis = redis::Client::open(config.redis_url.clone())?;
+            let auth_password_limiter = crate::routes::auth_password_limiter(&config);
+            let cas_store = crate::services::cas::CasStore::new(&config)?;
+            let state = AppState {
+                db: pool,
+                redis,
+                config,
+                cas_store,
+                rate_limiter: crate::services::rate_limit::RateLimiter::new(),
+                auth_password_limiter,
+            };
+
+            Ok(Some(Self {
+                state,
+                admin_pool,
+                db_name,
+            }))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.state.db.close().await;
+            drop_database(&self.admin_pool, &self.db_name).await?;
+            self.admin_pool.close().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn audit_log_cursor_paginates_without_repeating_tie_breaker_ids() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")?
+            .with_timezone(&chrono::Utc);
+        let first_id = insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
+        let second_id =
+            insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
+        let third_id = insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
+        insert_audit_log(&db.state.db, user_id, org_id, "other", created_at).await?;
+
+        let Json(first_page) = list_audit_log(
+            State(db.state.clone()),
+            admin_guard(user_id, org_id),
+            Query(AuditLogQuery {
+                user_id: Some(user_id),
+                org_id: Some(org_id),
+                action: Some("target".into()),
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(entry_ids(&first_page), vec![third_id, second_id]);
+        assert_eq!(first_page["pagination"]["limit"].as_i64(), Some(2));
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+
+        let cursor = first_page["pagination"]["next_cursor"]
+            .as_str()
+            .expect("first page should include next_cursor")
+            .to_string();
+        let Json(second_page) = list_audit_log(
+            State(db.state.clone()),
+            admin_guard(user_id, org_id),
+            Query(AuditLogQuery {
+                user_id: Some(user_id),
+                org_id: Some(org_id),
+                action: Some("target".into()),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(entry_ids(&second_page), vec![first_id]);
+        assert_eq!(second_page["pagination"]["has_more"].as_bool(), Some(false));
+        assert!(second_page["pagination"]["next_cursor"].is_null());
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cas_access_log_cursor_paginates_with_hash_filter() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")?
+            .with_timezone(&chrono::Utc);
+        let first_id = insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
+        let second_id =
+            insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
+        let third_id = insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
+        insert_cas_access_log(&db.state.db, user_id, org_id, "hash-b", created_at).await?;
+
+        let Json(first_page) = list_cas_access_log(
+            State(db.state.clone()),
+            admin_guard(user_id, org_id),
+            Query(CasAccessLogQuery {
+                cas_hash: Some("hash-a".into()),
+                user_id: Some(user_id),
+                org_id: Some(org_id),
+                limit: Some(2),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(entry_ids(&first_page), vec![third_id, second_id]);
+        assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
+
+        let cursor = first_page["pagination"]["next_cursor"]
+            .as_str()
+            .expect("first page should include next_cursor")
+            .to_string();
+        let Json(second_page) = list_cas_access_log(
+            State(db.state.clone()),
+            admin_guard(user_id, org_id),
+            Query(CasAccessLogQuery {
+                cas_hash: Some("hash-a".into()),
+                user_id: Some(user_id),
+                org_id: Some(org_id),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await?;
+        assert_eq!(entry_ids(&second_page), vec![first_id]);
+        assert_eq!(second_page["pagination"]["has_more"].as_bool(), Some(false));
+        assert!(second_page["pagination"]["next_cursor"].is_null());
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid)> {
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Admin Log Pagination Test Org")
+            .bind(format!("admin-log-pagination-test-{}", org_id.simple()))
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("Admin Log Pagination Test User")
+            .bind(org_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(org_id)
+            .bind("admin")
+            .execute(pool)
+            .await?;
+
+        Ok((user_id, org_id))
+    }
+
+    async fn insert_audit_log(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        action: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "INSERT INTO audit_log (user_id, org_id, action, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(org_id)
+        .bind(action)
+        .bind(created_at)
+        .fetch_one(pool)
+        .await?)
+    }
+
+    async fn insert_cas_access_log(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        cas_hash: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "INSERT INTO cas_access_log (user_id, org_id, cas_hash, access_method, created_at) VALUES ($1, $2, $3, 'api', $4) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(org_id)
+        .bind(cas_hash)
+        .bind(created_at)
+        .fetch_one(pool)
+        .await?)
+    }
+
+    fn entry_ids(page: &Value) -> Vec<i64> {
+        page["entries"]
+            .as_array()
+            .expect("entries should be an array")
+            .iter()
+            .map(|entry| entry["id"].as_i64().expect("entry id should be an integer"))
+            .collect()
+    }
+
+    fn admin_guard(user_id: Uuid, org_id: Uuid) -> AdminGuard {
+        AdminGuard(AuthIdentity {
+            user_id,
+            email: format!("{user_id}@example.com"),
+            name: "Admin Log Pagination Test User".into(),
+            org_id: Some(org_id),
+            org_slug: Some(format!("admin-log-pagination-test-{}", org_id.simple())),
+            department_id: None,
+            role: Some("admin".into()),
+            scopes: vec![],
+            auth_method: AuthMethod::BearerToken,
+        })
+    }
+
+    fn test_config(database_url: &str) -> AppConfig {
+        AppConfig {
+            database_url: database_url.to_string(),
+            database_max_connections: 20,
+            database_min_connections: 1,
+            database_acquire_timeout_seconds: 5,
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: "admin-log-pagination-test-secret".to_string(),
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_bucket: "git-ai-cas".to_string(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_region: "us-east-1".to_string(),
+            cas_upload_concurrency: 8,
+            auth_password_concurrency: 8,
+            metrics_rollup_write_mode: MetricsRollupWriteMode::Sync,
+            metrics_rollup_worker_enabled: false,
+            metrics_rollup_worker_interval_seconds: 5,
+            metrics_rollup_worker_batch_size: 100,
+            dashboard_use_rollups: false,
+            rate_limit_metrics_max_requests: 60,
+            rate_limit_metrics_window_seconds: 60,
+            rate_limit_cas_upload_max_requests: 30,
+            rate_limit_cas_upload_window_seconds: 60,
+            rate_limit_cas_read_max_requests: 100,
+            rate_limit_cas_read_window_seconds: 60,
+            rate_limit_oauth_max_requests: 600,
+            rate_limit_oauth_window_seconds: 60,
+            rate_limit_auth_max_requests: 300,
+            rate_limit_auth_window_seconds: 60,
+            rate_limit_admin_max_requests: 300,
+            rate_limit_admin_window_seconds: 60,
+            rate_limit_default_max_requests: 300,
+            rate_limit_default_window_seconds: 60,
+            base_url: "http://localhost:8080".to_string(),
+            sentry_dsn: String::new(),
+            posthog_host: String::new(),
+            posthog_api_key: String::new(),
+        }
+    }
+
+    fn test_database_url() -> String {
+        dotenvy::dotenv().ok();
+        std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gitai:gitai@localhost:5433/gitai_enterprise".into())
+    }
+
+    fn unique_test_database_name() -> String {
+        format!("git_ai_admin_log_pagination_test_{}", Uuid::new_v4().simple())
+    }
+
+    fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(database);
+        Ok(url.to_string())
+    }
+
+    async fn create_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!("CREATE DATABASE {}", quote_ident(db_name)))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_database(pool: &PgPool, db_name: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(db_name)
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn quote_ident(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
+}
+
 /// DELETE /api/admin/api-keys/{id} — Revoke an API key
 pub async fn revoke_api_key(
     State(state): State<AppState>,
@@ -862,12 +1239,24 @@ pub async fn generate_install_nonce(
 // Audit log
 // ================================================================
 
+fn decode_log_cursor(cursor: Option<&str>) -> Result<Option<TimeIdCursor>, AppError> {
+    cursor.map(decode_time_id_cursor).transpose()
+}
+
+fn encode_log_cursor(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    id: i64,
+) -> Result<String, AppError> {
+    encode_cursor(&TimeIdCursor::new(timestamp, id))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AuditLogQuery {
     pub user_id: Option<Uuid>,
     pub org_id: Option<Uuid>,
     pub action: Option<String>,
     pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 /// GET /api/v1/audit-log — Query audit log
@@ -876,24 +1265,41 @@ pub async fn list_audit_log(
     _auth: AdminGuard,
     axum::extract::Query(query): axum::extract::Query<AuditLogQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let limit = query.limit.unwrap_or(100).min(1000);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_log_cursor(query.cursor.as_deref())?;
+    let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
 
-    let rows: Vec<(i64, Option<Uuid>, Option<Uuid>, String, Option<String>, Option<String>, Option<serde_json::Value>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let mut rows: Vec<(i64, Option<Uuid>, Option<Uuid>, String, Option<String>, Option<String>, Option<serde_json::Value>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         r#"SELECT id, user_id, org_id, action, resource_type, resource_id, details, ip_address, user_agent, created_at
         FROM audit_log
         WHERE ($1::uuid IS NULL OR user_id = $1)
           AND ($2::uuid IS NULL OR org_id = $2)
           AND ($3::text IS NULL OR action = $3)
-        ORDER BY created_at DESC
-        LIMIT $4"#
+          AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::bigint))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $6"#
     )
     .bind(query.user_id)
     .bind(query.org_id)
     .bind(&query.action)
-    .bind(limit)
+    .bind(cursor_timestamp)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, _, _, _, _, _, created_at)| {
+                encode_log_cursor(created_at.clone(), *id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     let entries: Vec<Value> = rows
         .iter()
@@ -926,7 +1332,11 @@ pub async fn list_audit_log(
         )
         .collect();
 
-    Ok(Json(json!({ "entries": entries, "count": entries.len() })))
+    Ok(Json(json!({
+        "entries": entries,
+        "count": entries.len(),
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 // ================================================================
@@ -1485,6 +1895,7 @@ pub struct CasAccessLogQuery {
     pub user_id: Option<Uuid>,
     pub org_id: Option<Uuid>,
     pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 /// GET /api/admin/cas-access-log — Query CAS access audit log
@@ -1493,24 +1904,41 @@ pub async fn list_cas_access_log(
     _auth: AdminGuard,
     Query(query): Query<CasAccessLogQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let limit = query.limit.unwrap_or(100).min(1000);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
+    let cursor = decode_log_cursor(query.cursor.as_deref())?;
+    let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
+    let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
 
-    let rows: Vec<(i64, Option<Uuid>, Option<Uuid>, Option<Uuid>, String, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let mut rows: Vec<(i64, Option<Uuid>, Option<Uuid>, Option<Uuid>, String, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         r#"SELECT id, user_id, org_id, api_key_id, cas_hash, access_method, purpose, ip_address, user_agent, created_at
         FROM cas_access_log
         WHERE ($1::text IS NULL OR cas_hash = $1)
           AND ($2::uuid IS NULL OR user_id = $2)
           AND ($3::uuid IS NULL OR org_id = $3)
-        ORDER BY created_at DESC
-        LIMIT $4"#
+          AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::bigint))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $6"#
     )
     .bind(&query.cas_hash)
     .bind(query.user_id)
     .bind(query.org_id)
-    .bind(limit)
+    .bind(cursor_timestamp)
+    .bind(cursor_id)
+    .bind(fetch_limit(limit))
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let has_more = truncate_to_limit(&mut rows, limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(id, _, _, _, _, _, _, _, _, created_at)| {
+                encode_log_cursor(created_at.clone(), *id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     let entries: Vec<Value> = rows
         .iter()
@@ -1532,7 +1960,11 @@ pub async fn list_cas_access_log(
         )
         .collect();
 
-    Ok(Json(json!({ "entries": entries, "count": entries.len() })))
+    Ok(Json(json!({
+        "entries": entries,
+        "count": entries.len(),
+        "pagination": pagination_meta(limit, has_more, next_cursor),
+    })))
 }
 
 // ================================================================
