@@ -15,12 +15,33 @@ const TRAE_CATCH_ALL_MATCHER: &str = "*";
 pub struct TraeInstaller;
 
 impl TraeInstaller {
-    fn hooks_path() -> PathBuf {
-        Self::config_dir().join("hooks.json")
+    fn hooks_paths() -> Vec<PathBuf> {
+        Self::hooks_paths_for_home(&home_dir())
     }
 
     fn config_dir() -> PathBuf {
         home_dir().join(".trae-cn")
+    }
+
+    fn hooks_paths_for_home(home: &Path) -> Vec<PathBuf> {
+        let documented_dir = home.join(".trae-cn");
+        let stable_dir = home.join(".trae");
+        let stable_hooks_path = stable_dir.join("hooks.json");
+
+        let mut paths = vec![documented_dir.join("hooks.json")];
+
+        if stable_dir.exists() || stable_hooks_path.exists() {
+            paths.push(stable_hooks_path);
+        }
+
+        paths
+    }
+
+    fn has_dotfiles() -> bool {
+        let home = home_dir();
+        [Self::config_dir(), home.join(".trae")]
+            .iter()
+            .any(|path| path.exists())
     }
 
     fn app_exists() -> bool {
@@ -274,6 +295,40 @@ impl TraeInstaller {
 
         Ok(Some(diff_output))
     }
+
+    fn hook_status_for_paths(paths: &[PathBuf]) -> Result<(bool, bool), GitAiError> {
+        let mut saw_relevant_path = false;
+        let mut hooks_installed = false;
+        let mut hooks_up_to_date = true;
+
+        for hooks_path in paths {
+            let parent_exists = hooks_path
+                .parent()
+                .map(|parent| parent.exists())
+                .unwrap_or(false);
+            if !hooks_path.exists() && !parent_exists {
+                continue;
+            }
+
+            saw_relevant_path = true;
+            if !hooks_path.exists() {
+                hooks_up_to_date = false;
+                continue;
+            }
+
+            let content = fs::read_to_string(hooks_path)?;
+            let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
+            let (path_hooks_installed, path_hooks_up_to_date) = Self::hook_status(&existing);
+            hooks_installed |= path_hooks_installed;
+            hooks_up_to_date &= path_hooks_up_to_date;
+        }
+
+        if !saw_relevant_path {
+            hooks_up_to_date = false;
+        }
+
+        Ok((hooks_installed, hooks_up_to_date))
+    }
 }
 
 impl HookInstaller for TraeInstaller {
@@ -287,7 +342,7 @@ impl HookInstaller for TraeInstaller {
 
     fn check_hooks(&self, _params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
         let has_binary = binary_exists("trae");
-        let has_dotfiles = Self::config_dir().exists();
+        let has_dotfiles = Self::has_dotfiles();
         let has_app = Self::app_exists();
 
         if !has_binary && !has_dotfiles && !has_app {
@@ -298,18 +353,8 @@ impl HookInstaller for TraeInstaller {
             });
         }
 
-        let hooks_path = Self::hooks_path();
-        if !hooks_path.exists() {
-            return Ok(HookCheckResult {
-                tool_installed: true,
-                hooks_installed: false,
-                hooks_up_to_date: false,
-            });
-        }
-
-        let content = fs::read_to_string(&hooks_path)?;
-        let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
-        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing);
+        let paths = Self::hooks_paths();
+        let (hooks_installed, hooks_up_to_date) = Self::hook_status_for_paths(&paths)?;
 
         Ok(HookCheckResult {
             tool_installed: true,
@@ -327,7 +372,18 @@ impl HookInstaller for TraeInstaller {
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        Self::install_hooks_at(&Self::hooks_path(), params, dry_run)
+        let mut diffs = Vec::new();
+        for hooks_path in Self::hooks_paths() {
+            if let Some(diff) = Self::install_hooks_at(&hooks_path, params, dry_run)? {
+                diffs.push(diff);
+            }
+        }
+
+        if diffs.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(diffs.join("\n")))
+        }
     }
 
     fn uninstall_hooks(
@@ -335,7 +391,18 @@ impl HookInstaller for TraeInstaller {
         _params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        Self::uninstall_hooks_at(&Self::hooks_path(), dry_run)
+        let mut diffs = Vec::new();
+        for hooks_path in Self::hooks_paths() {
+            if let Some(diff) = Self::uninstall_hooks_at(&hooks_path, dry_run)? {
+                diffs.push(diff);
+            }
+        }
+
+        if diffs.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(diffs.join("\n")))
+        }
     }
 }
 
@@ -424,5 +491,35 @@ mod tests {
         });
 
         assert_eq!(TraeInstaller::hook_status(&settings), (true, false));
+    }
+
+    #[test]
+    fn hooks_paths_include_stable_dir_when_present() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::create_dir_all(temp_dir.path().join(".trae")).unwrap();
+
+        assert_eq!(
+            TraeInstaller::hooks_paths_for_home(temp_dir.path()),
+            vec![
+                temp_dir.path().join(".trae-cn").join("hooks.json"),
+                temp_dir.path().join(".trae").join("hooks.json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hook_status_for_paths_requires_each_relevant_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let documented_path = temp_dir.path().join(".trae-cn").join("hooks.json");
+        let stable_path = temp_dir.path().join(".trae").join("hooks.json");
+        fs::create_dir_all(documented_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(stable_path.parent().unwrap()).unwrap();
+
+        TraeInstaller::install_hooks_at(&documented_path, &params(), false).unwrap();
+
+        assert_eq!(
+            TraeInstaller::hook_status_for_paths(&[documented_path, stable_path]).unwrap(),
+            (true, false)
+        );
     }
 }

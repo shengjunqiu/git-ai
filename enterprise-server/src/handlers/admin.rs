@@ -252,8 +252,32 @@ pub async fn list_users(
         String,
         Option<Uuid>,
         chrono::DateTime<chrono::Utc>,
+        Value,
     )> = sqlx::query_as(
-        "SELECT id, email, name, personal_org_id, created_at FROM users ORDER BY created_at DESC",
+        r#"SELECT
+            u.id,
+            u.email,
+            u.name,
+            u.personal_org_id,
+            u.created_at,
+            COALESCE(
+                jsonb_agg(
+                    jsonb_build_object(
+                        'id', ak.id,
+                        'key_prefix', ak.key_prefix,
+                        'name', ak.name,
+                        'created_at', ak.created_at,
+                        'expires_at', ak.expires_at,
+                        'last_used_at', ak.last_used_at
+                    )
+                    ORDER BY ak.created_at DESC
+                ) FILTER (WHERE ak.id IS NOT NULL),
+                '[]'::jsonb
+            ) AS api_keys
+        FROM users u
+        LEFT JOIN api_keys ak ON ak.user_id = u.id AND ak.revoked_at IS NULL
+        GROUP BY u.id, u.email, u.name, u.personal_org_id, u.created_at
+        ORDER BY u.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await
@@ -261,13 +285,14 @@ pub async fn list_users(
 
     let users: Vec<Value> = rows
         .iter()
-        .map(|(id, email, name, personal_org_id, created_at)| {
+        .map(|(id, email, name, personal_org_id, created_at, api_keys)| {
         json!({
             "id": id.to_string(),
             "email": email,
             "name": name,
             "personal_org_id": personal_org_id.map(|u| u.to_string()),
             "created_at": created_at,
+            "api_keys": api_keys,
         })
         })
         .collect();

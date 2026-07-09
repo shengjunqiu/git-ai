@@ -1,4 +1,5 @@
 use axum::extract::{Request, State};
+use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 use std::collections::HashMap;
@@ -202,12 +203,18 @@ fn current_window_start(window_seconds: u64) -> u64 {
     (now / window_seconds) * window_seconds
 }
 
+const ADMIN_WRITE_MAX_REQUESTS: u32 = 60;
+
 fn should_bypass_rate_limit(path: &str) -> bool {
     matches!(path, "/health" | "/ready")
 }
 
 /// Determine rate limit tier from request path
-fn tier_for_path(config: &AppConfig, path: &str) -> (&'static str, RateLimitTier) {
+fn tier_for_request(
+    config: &AppConfig,
+    method: &Method,
+    path: &str,
+) -> (&'static str, RateLimitTier) {
     if path.starts_with("/worker/metrics") {
         (
             "metrics",
@@ -240,6 +247,16 @@ fn tier_for_path(config: &AppConfig, path: &str) -> (&'static str, RateLimitTier
                 config.rate_limit_oauth_window_seconds,
             ),
         )
+    } else if path.starts_with("/api/admin") && is_write_method(method) {
+        (
+            "admin_write",
+            RateLimitTier::new(
+                config
+                    .rate_limit_admin_max_requests
+                    .min(ADMIN_WRITE_MAX_REQUESTS),
+                config.rate_limit_admin_window_seconds,
+            ),
+        )
     } else if path.starts_with("/api/admin") {
         (
             "admin",
@@ -267,37 +284,90 @@ fn tier_for_path(config: &AppConfig, path: &str) -> (&'static str, RateLimitTier
     }
 }
 
+fn is_write_method(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
+}
+
 fn is_auth_path(path: &str) -> bool {
     matches!(path, "/login" | "/logout" | "/verify") || path.starts_with("/auth/")
 }
 
 /// Extract a client identifier from the request.
-/// Prefers X-API-Key prefix, falls back to Authorization header, then IP address.
-fn extract_client_key(request: &Request) -> String {
-    // Try X-API-Key prefix
-    if let Some(api_key) = request.headers().get("X-API-Key") {
-        if let Ok(key_str) = api_key.to_str() {
-            return format!("key:{}", &key_str[..key_str.len().min(8)]);
-        }
-    }
-    // Try Authorization (just the first 16 chars as identifier)
-    if let Some(auth) = request.headers().get("Authorization") {
-        if let Ok(auth_str) = auth.to_str() {
-            return format!("auth:{}", &auth_str[..auth_str.len().min(24)]);
-        }
-    }
-    // Fall back to X-Forwarded-For or X-Real-IP
-    if let Some(ip) = request
-        .headers()
-        .get("X-Forwarded-For")
-        .or_else(|| request.headers().get("X-Real-IP"))
+/// Prefers browser session user, then X-API-Key, Authorization header, then IP address.
+async fn extract_client_key(parts: ClientKeyParts, state: &AppState) -> String {
+    if let Some(user_id) =
+        extract_browser_session_user_id(parts.web_session_token.as_deref(), state).await
     {
-        if let Ok(ip_str) = ip.to_str() {
-            return format!("ip:{}", ip_str);
+        return format!("user:{}", user_id);
+    }
+
+    if let Some(api_key) = parts.api_key {
+        return format!("key:{}", &api_key[..api_key.len().min(8)]);
+    }
+    if let Some(auth) = parts.authorization {
+        return format!("auth:{}", &auth[..auth.len().min(24)]);
+    }
+    if let Some(ip) = parts.forwarded_ip {
+        return format!("ip:{}", ip);
+    }
+    "anonymous".to_string()
+}
+
+async fn extract_browser_session_user_id(
+    session_token: Option<&str>,
+    state: &AppState,
+) -> Option<uuid::Uuid> {
+    let session_token = session_token?;
+    match crate::services::sessions::load_web_session_user(&state.db, &session_token).await {
+        Ok(user_id) => user_id,
+        Err(error) => {
+            tracing::debug!(%error, "failed to load web session for rate limit key");
+            None
         }
     }
-    // Last resort: anonymous
-    "anonymous".to_string()
+}
+
+struct ClientKeyParts {
+    web_session_token: Option<String>,
+    api_key: Option<String>,
+    authorization: Option<String>,
+    forwarded_ip: Option<String>,
+}
+
+fn client_key_parts(request: &Request) -> ClientKeyParts {
+    ClientKeyParts {
+        web_session_token: cookie_value(request, crate::services::sessions::WEB_SESSION_COOKIE),
+        api_key: header_value(request, "X-API-Key"),
+        authorization: header_value(request, "Authorization"),
+        forwarded_ip: header_value(request, "X-Forwarded-For")
+            .or_else(|| header_value(request, "X-Real-IP")),
+    }
+}
+
+fn header_value(request: &Request, name: &str) -> Option<String> {
+    request
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
+}
+
+fn cookie_value(request: &Request, name: &str) -> Option<String> {
+    let cookie_header = request.headers().get("Cookie")?;
+    let cookie_str = cookie_header.to_str().ok()?;
+
+    cookie_str.split(';').find_map(|cookie| {
+        let cookie = cookie.trim();
+        let (cookie_name, cookie_value) = cookie.split_once('=')?;
+        if cookie_name == name {
+            Some(cookie_value.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// Rate limiting middleware using AppState's RateLimiter
@@ -311,8 +381,9 @@ pub async fn rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    let (tier_name, tier_limit) = tier_for_path(&state.config, &path);
-    let client_key = extract_client_key(&request);
+    let (tier_name, tier_limit) = tier_for_request(&state.config, request.method(), &path);
+    let key_parts = client_key_parts(&request);
+    let client_key = extract_client_key(key_parts, &state).await;
 
     state
         .rate_limiter
@@ -385,45 +456,84 @@ mod tests {
 
         assert_path_tier(
             &config,
+            Method::POST,
             "/worker/oauth/device/code",
             "oauth",
             RateLimitTier::new(601, 61),
         );
         assert_path_tier(
             &config,
+            Method::POST,
             "/worker/oauth/token",
             "oauth",
             RateLimitTier::new(601, 61),
         );
-        assert_path_tier(&config, "/auth/login", "auth", RateLimitTier::new(301, 31));
         assert_path_tier(
             &config,
+            Method::POST,
+            "/auth/login",
+            "auth",
+            RateLimitTier::new(301, 31),
+        );
+        assert_path_tier(
+            &config,
+            Method::POST,
             "/auth/register",
             "auth",
             RateLimitTier::new(301, 31),
         );
         assert_path_tier(
             &config,
+            Method::GET,
             "/auth/organizations",
             "auth",
             RateLimitTier::new(301, 31),
         );
-        assert_path_tier(&config, "/login", "auth", RateLimitTier::new(301, 31));
-        assert_path_tier(&config, "/verify", "auth", RateLimitTier::new(301, 31));
         assert_path_tier(
             &config,
+            Method::GET,
+            "/login",
+            "auth",
+            RateLimitTier::new(301, 31),
+        );
+        assert_path_tier(
+            &config,
+            Method::GET,
+            "/verify",
+            "auth",
+            RateLimitTier::new(301, 31),
+        );
+        assert_path_tier(
+            &config,
+            Method::POST,
             "/worker/metrics/upload",
             "metrics",
             RateLimitTier::new(60, 10),
         );
         assert_path_tier(
             &config,
+            Method::GET,
             "/api/admin/users/list",
             "admin",
-            RateLimitTier::new(30, 30),
+            RateLimitTier::new(300, 60),
         );
         assert_path_tier(
             &config,
+            Method::POST,
+            "/api/admin/departments",
+            "admin_write",
+            RateLimitTier::new(60, 60),
+        );
+        assert_path_tier(
+            &config,
+            Method::DELETE,
+            "/api/admin/departments/00000000-0000-0000-0000-000000000000",
+            "admin_write",
+            RateLimitTier::new(60, 60),
+        );
+        assert_path_tier(
+            &config,
+            Method::GET,
             "/api/other",
             "default",
             RateLimitTier::new(300, 300),
@@ -432,11 +542,12 @@ mod tests {
 
     fn assert_path_tier(
         config: &AppConfig,
+        method: Method,
         path: &str,
         expected_name: &'static str,
         expected_limit: RateLimitTier,
     ) {
-        let (name, limit) = tier_for_path(config, path);
+        let (name, limit) = tier_for_request(config, &method, path);
         assert_eq!(name, expected_name);
         assert_eq!(limit, expected_limit);
     }
@@ -471,8 +582,8 @@ mod tests {
             rate_limit_oauth_window_seconds: 61,
             rate_limit_auth_max_requests: 301,
             rate_limit_auth_window_seconds: 31,
-            rate_limit_admin_max_requests: 30,
-            rate_limit_admin_window_seconds: 30,
+            rate_limit_admin_max_requests: 300,
+            rate_limit_admin_window_seconds: 60,
             rate_limit_default_max_requests: 300,
             rate_limit_default_window_seconds: 300,
             base_url: String::new(),

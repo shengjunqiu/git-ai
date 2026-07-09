@@ -3,6 +3,35 @@ use git_ai::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, TraePreset,
 };
 use serde_json::json;
+use std::path::Path;
+
+struct ScopedTraeUserDir {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedTraeUserDir {
+    fn set(path: &Path) -> Self {
+        let previous = std::env::var_os("GIT_AI_TRAE_USER_DIR");
+        unsafe {
+            // SAFETY: tests using this helper are serialized with serial_test.
+            std::env::set_var("GIT_AI_TRAE_USER_DIR", path);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ScopedTraeUserDir {
+    fn drop(&mut self) {
+        unsafe {
+            // SAFETY: tests using this helper are serialized with serial_test.
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var("GIT_AI_TRAE_USER_DIR", previous);
+            } else {
+                std::env::remove_var("GIT_AI_TRAE_USER_DIR");
+            }
+        }
+    }
+}
 
 fn flags_from_json(value: serde_json::Value) -> AgentCheckpointFlags {
     AgentCheckpointFlags {
@@ -11,8 +40,11 @@ fn flags_from_json(value: serde_json::Value) -> AgentCheckpointFlags {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_trae_preset_pre_write_returns_human_scope() {
     let temp_dir = tempfile::tempdir().unwrap();
+    let temp_trae_user_dir = tempfile::tempdir().unwrap();
+    let _env = ScopedTraeUserDir::set(temp_trae_user_dir.path());
     let file_path = temp_dir.path().join("src/main.rs");
 
     let hook_input = json!({
@@ -43,8 +75,11 @@ fn test_trae_preset_pre_write_returns_human_scope() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_trae_preset_post_write_extracts_path_and_dirty_file() {
     let temp_dir = tempfile::tempdir().unwrap();
+    let temp_trae_user_dir = tempfile::tempdir().unwrap();
+    let _env = ScopedTraeUserDir::set(temp_trae_user_dir.path());
     let file_path = temp_dir.path().join("src/main.rs");
 
     let hook_input = json!({
@@ -85,8 +120,11 @@ fn test_trae_preset_post_write_extracts_path_and_dirty_file() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_trae_preset_skips_read_without_path() {
     let temp_dir = tempfile::tempdir().unwrap();
+    let temp_trae_user_dir = tempfile::tempdir().unwrap();
+    let _env = ScopedTraeUserDir::set(temp_trae_user_dir.path());
     let hook_input = json!({
         "session_id": "trae-session-3",
         "cwd": temp_dir.path(),

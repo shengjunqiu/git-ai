@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 pub struct QoderPreset;
 
@@ -45,6 +46,24 @@ impl AgentCheckpointPreset for QoderPreset {
 
         let model = transcript_model
             .or_else(|| Self::model_from_value(&hook_data))
+            .or_else(|| match Self::model_from_qoder_storage(session_id) {
+                Ok(model) => model,
+                Err(e) => {
+                    tracing::debug!(
+                        "Failed to resolve Qoder model for session {} from storage: {}",
+                        session_id,
+                        e
+                    );
+                    log_error(
+                        &e,
+                        Some(serde_json::json!({
+                            "agent_tool": "qoder",
+                            "operation": "model_from_qoder_storage"
+                        })),
+                    );
+                    None
+                }
+            })
             .unwrap_or_else(|| "unknown".to_string());
 
         let agent_id = AgentId {
@@ -174,6 +193,29 @@ impl AgentCheckpointPreset for QoderPreset {
 }
 
 impl QoderPreset {
+    pub fn model_from_qoder_storage(session_id: &str) -> Result<Option<String>, GitAiError> {
+        let Some(user_dir) = Self::qoder_user_dir() else {
+            return Ok(None);
+        };
+
+        Self::model_from_qoder_user_dir(session_id, &user_dir)
+    }
+
+    pub fn model_from_qoder_user_dir(
+        session_id: &str,
+        user_dir: &Path,
+    ) -> Result<Option<String>, GitAiError> {
+        let Some(selected_model) = Self::selected_model_from_qoder_workspace_storage(
+            session_id,
+            &user_dir.join("workspaceStorage"),
+        )?
+        else {
+            return Ok(None);
+        };
+
+        Self::resolve_qoder_model_name(&selected_model, &user_dir.join("globalStorage"))
+    }
+
     pub fn transcript_and_model_from_qoder_path(
         transcript_path: &str,
     ) -> Result<(AiTranscript, Option<String>), GitAiError> {
@@ -196,6 +238,149 @@ impl QoderPreset {
 
     fn string_at<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
         keys.iter().find_map(|key| value.get(*key)?.as_str())
+    }
+
+    fn qoder_user_dir() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("GIT_AI_QODER_USER_DIR")
+            && !path.trim().is_empty()
+        {
+            return Some(PathBuf::from(path));
+        }
+
+        dirs::config_dir().map(|config| config.join("Qoder").join("User"))
+    }
+
+    fn open_sqlite_readonly(path: &Path) -> Result<Connection, GitAiError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| GitAiError::Generic(format!("Failed to open {:?}: {}", path, e)))?;
+
+        let _ = conn.execute_batch("PRAGMA cache_size = -2000;");
+
+        Ok(conn)
+    }
+
+    fn selected_model_from_qoder_workspace_storage(
+        session_id: &str,
+        workspace_storage_dir: &Path,
+    ) -> Result<Option<String>, GitAiError> {
+        if !workspace_storage_dir.exists() {
+            return Ok(None);
+        }
+
+        let key = format!("chat.modelConfig.session.{session_id}");
+        let entries = std::fs::read_dir(workspace_storage_dir).map_err(GitAiError::IoError)?;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    tracing::debug!("Failed to read Qoder workspace storage entry: {}", e);
+                    continue;
+                }
+            };
+            let db_path = entry.path().join("state.vscdb");
+            if !db_path.exists() {
+                continue;
+            }
+
+            match Self::read_qoder_storage_value(&db_path, &key) {
+                Ok(Some(model)) if !model.trim().is_empty() => return Ok(Some(model)),
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(
+                        "Failed to read Qoder workspace model from {:?}: {}",
+                        db_path,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn resolve_qoder_model_name(
+        selected_model: &str,
+        global_storage_dir: &Path,
+    ) -> Result<Option<String>, GitAiError> {
+        let selected_model = selected_model.trim();
+        if selected_model.is_empty() {
+            return Ok(None);
+        }
+
+        let global_db = global_storage_dir.join("state.vscdb");
+        if !global_db.exists() {
+            return Ok(Some(selected_model.to_string()));
+        }
+
+        if let Some(custom_model_id) = selected_model.strip_prefix("custom:") {
+            if let Some(models_json) =
+                Self::read_qoder_storage_value(&global_db, "aicoding.customModels")?
+                && let Some(model) =
+                    Self::model_name_from_qoder_custom_models(&models_json, custom_model_id)
+            {
+                return Ok(Some(model));
+            }
+
+            return Ok(Some(custom_model_id.to_string()));
+        }
+
+        for key in [
+            "aicoding.modelConfigs.cache.assistant",
+            "aicoding.modelConfigs.cache.quest",
+            "aicoding.modelConfigs.cache.experts",
+        ] {
+            if let Some(models_json) = Self::read_qoder_storage_value(&global_db, key)?
+                && let Some(model) =
+                    Self::model_name_from_qoder_model_configs(&models_json, selected_model)
+            {
+                return Ok(Some(model));
+            }
+        }
+
+        Ok(Some(selected_model.to_string()))
+    }
+
+    fn read_qoder_storage_value(db_path: &Path, key: &str) -> Result<Option<String>, GitAiError> {
+        let conn = Self::open_sqlite_readonly(db_path)?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM ItemTable WHERE key = ?1")
+            .map_err(GitAiError::SqliteError)?;
+        stmt.query_row([key], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(GitAiError::SqliteError)
+    }
+
+    fn model_name_from_qoder_custom_models(models_json: &str, model_id: &str) -> Option<String> {
+        let models: serde_json::Value = serde_json::from_str(models_json).ok()?;
+        models.as_array()?.iter().find_map(|model| {
+            let id = Self::string_at(model, &["id"])?;
+            if id != model_id {
+                return None;
+            }
+
+            Self::string_at(model, &["displayName", "model", "name"])
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+        })
+    }
+
+    fn model_name_from_qoder_model_configs(
+        models_json: &str,
+        selected_model: &str,
+    ) -> Option<String> {
+        let models: serde_json::Value = serde_json::from_str(models_json).ok()?;
+        models.as_array()?.iter().find_map(|model| {
+            let name = Self::string_at(model, &["name"])?;
+            if name != selected_model {
+                return None;
+            }
+
+            Self::string_at(model, &["displayName", "name"])
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+        })
     }
 
     fn is_pre_tool_use(event_name: Option<&str>) -> bool {

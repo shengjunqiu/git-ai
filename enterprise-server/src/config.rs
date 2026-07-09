@@ -12,7 +12,7 @@ const DEFAULT_RATE_LIMIT_OAUTH_MAX_REQUESTS: u32 = 600;
 const DEFAULT_RATE_LIMIT_OAUTH_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_RATE_LIMIT_AUTH_MAX_REQUESTS: u32 = 300;
 const DEFAULT_RATE_LIMIT_AUTH_WINDOW_SECONDS: u64 = 60;
-const DEFAULT_RATE_LIMIT_ADMIN_MAX_REQUESTS: u32 = 30;
+const DEFAULT_RATE_LIMIT_ADMIN_MAX_REQUESTS: u32 = 300;
 const DEFAULT_RATE_LIMIT_ADMIN_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_RATE_LIMIT_DEFAULT_MAX_REQUESTS: u32 = 300;
 const DEFAULT_RATE_LIMIT_DEFAULT_WINDOW_SECONDS: u64 = 60;
@@ -256,6 +256,8 @@ mod tests {
         assert_eq!(config.rate_limit_oauth_window_seconds, 60);
         assert_eq!(config.rate_limit_auth_max_requests, 300);
         assert_eq!(config.rate_limit_auth_window_seconds, 60);
+        assert_eq!(config.rate_limit_admin_max_requests, 300);
+        assert_eq!(config.rate_limit_admin_window_seconds, 60);
         assert_eq!(config.rate_limit_default_max_requests, 300);
         assert_eq!(config.rate_limit_default_window_seconds, 60);
         assert_eq!(config.auth_password_concurrency, 8);

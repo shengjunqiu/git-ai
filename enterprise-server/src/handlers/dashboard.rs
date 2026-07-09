@@ -599,7 +599,8 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
         async function loadOverview() {{
             const rangeLabel = getTimeRangeLabel();
             document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${{rangeLabel}}）`;
-            try {{
+
+            const summaryPromise = (async () => {{
                 const r = await fetch(withTimeRange('/api/v1/aggregate/summary'));
                 const d = await r.json();
                 document.getElementById('s-commits').textContent = fmt(d.total_commits);
@@ -608,9 +609,9 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                 document.getElementById('s-ai-pct').textContent = (d.pct_ai_lines || 0).toFixed(1) + '%';
                 document.getElementById('s-devs').textContent = fmt(d.total_developers);
                 document.getElementById('s-projects').textContent = fmt(d.total_projects);
-            }} catch(e) {{ console.error(e); }}
+            }})().catch(e => console.error(e));
 
-            try {{
+            const developersPromise = (async () => {{
                 const r = await fetch(withTimeRange('/api/v1/aggregate/developers'));
                 const d = await r.json();
                 const top = [...(d.developers || [])]
@@ -631,10 +632,10 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                         <div class="chart-value">${{fmt(total)}} <span class="badge ai">${{(ai/(total||1)*100).toFixed(0)}}% AI</span></div>
                     </div>`;
                 }}).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
-            }} catch(e) {{ console.error(e); }}
+            }})().catch(e => console.error(e));
 
-            // Load mini trend chart for overview
-            loadOverviewTrend();
+            const trendPromise = loadOverviewTrend();
+            await Promise.allSettled([summaryPromise, developersPromise, trendPromise]);
         }}
 
         async function loadClientStatus() {{
@@ -979,21 +980,10 @@ pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) ->
                         '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
                     return;
                 }}
-                // For each user, also load their API keys
-                const usersWithKeys = await Promise.all(users.map(async u => {{
-                    try {{
-                        const kr = await fetch(`/api/admin/users/${{u.id}}/api-keys`);
-                        if (kr.ok) {{
-                            const kd = await kr.json();
-                            return {{ ...u, apiKeys: kd.api_keys || [] }};
-                        }}
-                    }} catch(e) {{}}
-                    return {{ ...u, apiKeys: [] }};
-                }}));
-
-                document.getElementById('users-table').innerHTML = usersWithKeys.map(u => {{
-                    const keyCount = u.apiKeys.length;
-                    const keyBadges = u.apiKeys.slice(0, 3).map(k =>
+                document.getElementById('users-table').innerHTML = users.map(u => {{
+                    const apiKeys = u.api_keys || [];
+                    const keyCount = apiKeys.length;
+                    const keyBadges = apiKeys.slice(0, 3).map(k =>
                         `<span class="badge ai" style="margin-right:0.25rem">${{k.key_prefix}}...</span>`
                     ).join('');
                     const moreKeys = keyCount > 3 ? `<span style="color:var(--text-muted);font-size:0.75rem">+${{keyCount-3}}</span>` : '';
