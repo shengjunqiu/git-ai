@@ -52,13 +52,13 @@
 
 步骤：
 
-- [ ] 查看工作区状态：
+- [x] 查看工作区状态：
 
 ```bash
 git status --short
 ```
 
-- [ ] 启动依赖和 API：
+- [x] 启动依赖和 API：
 
 ```bash
 cd enterprise-server
@@ -66,7 +66,7 @@ docker compose up -d postgres redis minio
 docker compose up -d --build api
 ```
 
-- [ ] 确认服务状态：
+- [x] 确认服务状态：
 
 ```bash
 docker compose ps
@@ -74,7 +74,7 @@ curl -sS http://127.0.0.1:8080/health
 curl -sS http://127.0.0.1:8080/ready
 ```
 
-- [ ] 确认 API 关键环境变量：
+- [x] 确认 API 关键环境变量：
 
 ```bash
 docker compose exec -T api printenv METRICS_WRITE_ROLLUPS
@@ -86,9 +86,9 @@ docker compose exec -T api printenv RATE_LIMIT_OAUTH_MAX_REQUESTS
 
 验收标准：
 
-- [ ] API、Postgres、Redis、MinIO 正常。
-- [ ] `/health` 和 `/ready` 正常。
-- [ ] 运行环境变量与本轮要测试的配置一致。
+- [x] API、Postgres、Redis、MinIO 正常。
+- [x] `/health` 和 `/ready` 正常。
+- [x] 运行环境变量与本轮要测试的配置一致。
 
 ### 0.2 准备本地 benchmark API key
 
@@ -96,9 +96,9 @@ docker compose exec -T api printenv RATE_LIMIT_OAUTH_MAX_REQUESTS
 
 步骤：
 
-- [ ] 优先使用管理页面或 admin API 创建 5-10 个测试 API key。
-- [ ] 如果只在本地 Docker 测试库执行，可用临时 SQL 创建本地 key；不要把明文 key 写入仓库。
-- [ ] 导出：
+- [x] 优先使用管理页面或 admin API 创建 5-10 个测试 API key。
+- [x] 如果只在本地 Docker 测试库执行，可用临时 SQL 创建本地 key；不要把明文 key 写入仓库。
+- [x] 导出：
 
 ```bash
 export ENTERPRISE_BASE_URL=http://127.0.0.1:8080
@@ -107,15 +107,15 @@ export ENTERPRISE_API_KEYS=key-1,key-2,key-3
 
 验收标准：
 
-- [ ] `bench_metrics_upload.py --requests 1 --batch-size 1` 成功。
-- [ ] `bench_cas_upload.py --requests 1 --objects-per-request 1` 成功。
-- [ ] `bench_report_upload.py --requests 1 --commit-count 1` 成功。
+- [x] `bench_metrics_upload.py --requests 1 --batch-size 1` 成功。
+- [x] `bench_cas_upload.py --requests 1 --objects-per-request 1` 成功。
+- [x] `bench_report_upload.py --requests 1 --commit-count 1` 成功。
 
 ### 0.3 复跑基线压测
 
 步骤：
 
-- [ ] metrics 上传：
+- [x] metrics 上传：
 
 ```bash
 python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
@@ -124,7 +124,7 @@ python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
   --concurrency 50
 ```
 
-- [ ] CAS 上传：
+- [x] CAS 上传：
 
 ```bash
 python3 scripts/benchmarks/enterprise/bench_cas_upload.py \
@@ -134,7 +134,7 @@ python3 scripts/benchmarks/enterprise/bench_cas_upload.py \
   --concurrency 40
 ```
 
-- [ ] report 大报告：
+- [x] report 大报告：
 
 ```bash
 python3 scripts/benchmarks/enterprise/bench_report_upload.py \
@@ -144,7 +144,7 @@ python3 scripts/benchmarks/enterprise/bench_report_upload.py \
   --timeout 120
 ```
 
-- [ ] 登录：
+- [x] 登录：
 
 ```bash
 python3 scripts/benchmarks/enterprise/bench_auth_login.py \
@@ -163,17 +163,17 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
 
 记录项：
 
-- [ ] 每组 p50/p95/p99。
-- [ ] 401/409/429/500。
-- [ ] 压测前后 `/health`、`/ready`。
-- [ ] `docker stats --no-stream`。
-- [ ] Postgres 连接状态。
+- [x] 每组 p50/p95/p99。
+- [x] 401/409/429/500。
+- [x] 压测前后 `/health`、`/ready`。
+- [x] `docker stats --no-stream`。
+- [x] Postgres 连接状态。
 
 验收标准：
 
-- [ ] 能复现 metrics upload p95 明显高于 CAS/report。
-- [ ] 无大面积 429 或 500。
-- [ ] 结果写入本文档的阶段 0 执行记录。
+- [x] 能复现 metrics upload p95 明显高于 CAS/report。
+- [x] 无大面积 429 或 500。
+- [x] 结果写入本文档的阶段 0 执行记录。
 
 提交建议：
 
@@ -181,6 +181,106 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
 git add docs/enterprise-server-next-concurrency-optimization-task-plan.md
 git commit -m "Record next enterprise concurrency baseline"
 ```
+
+### 阶段 0 执行记录
+
+执行日期：2026-07-09。
+
+环境确认：
+
+| 项 | 结果 |
+| --- | --- |
+| `git status --short` | 开始执行时工作区干净 |
+| `docker compose up -d postgres redis minio` | Postgres、Redis、MinIO 已启动 |
+| `docker compose up -d --build api` | 成功，release build 用时约 6m41s；存在既有 warning，无构建失败 |
+| `docker compose ps` | API healthy，Postgres healthy，Redis healthy，MinIO running |
+| `pg_isready` | `/var/run/postgresql:5432 - accepting connections` |
+| `redis-cli ping` | `PONG` |
+| `/health` | `2.771ms` |
+| `/ready` | `3.288ms` |
+
+运行配置：
+
+| 配置 | 值 |
+| --- | --- |
+| `METRICS_WRITE_ROLLUPS` | `true` |
+| `DASHBOARD_USE_ROLLUPS` | `true` |
+| `AUTH_PASSWORD_CONCURRENCY` | `12` |
+| `RATE_LIMIT_AUTH_MAX_REQUESTS` | `300` |
+| `RATE_LIMIT_OAUTH_MAX_REQUESTS` | `600` |
+
+备注：标准 `docker compose up -d --build api` 后 `AUTH_PASSWORD_CONCURRENCY` 为默认 `8`。为复现上一轮登录基线，本阶段已用 `AUTH_PASSWORD_CONCURRENCY=12 RATE_LIMIT_AUTH_MAX_REQUESTS=300 RATE_LIMIT_OAUTH_MAX_REQUESTS=600 docker compose up -d --force-recreate --no-deps api` 重新创建 API 容器。
+
+本地 benchmark API key：
+
+| 项 | 结果 |
+| --- | --- |
+| benchmark key 数量 | 10 |
+| 创建方式 | 本地 Docker 测试库临时 SQL，使用服务端同样的 SHA256 hash 规则；明文 key 未写入仓库 |
+| metrics 烟测 | 1/1 成功，p95 `58.88ms` |
+| CAS 烟测 | 1/1 成功，p95 `45.81ms` |
+| report 烟测 | 1/1 成功，p95 `39.80ms` |
+
+压测前数据量：
+
+| 表 | 行数 |
+| --- | ---: |
+| `metrics_events` | 163591 |
+| `metrics_daily_rollups` | 13912 |
+| `metrics_tool_model_events` | 163559 |
+| `cas_objects` | 2059 |
+| `report_uploads` | 122 |
+| `commit_stats` | 30004 |
+| `users` | 304 |
+
+压测前资源快照：
+
+| 容器 | CPU | 内存 |
+| --- | ---: | ---: |
+| API | 0.20% | 7.055MiB |
+| Postgres | 0.00% | 86.2MiB |
+| Redis | 0.72% | 18.51MiB |
+| MinIO | 0.04% | 150.4MiB |
+
+基线压测结果：
+
+| 链路 | 参数 | 成功/错误 | RPS | p50 | p95 | p99 | 结论 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| metrics upload | 500 requests / 50 concurrency / batch=100 / 50000 events | 500/0 | 22.45 req/s | 1740.77ms | 5002.62ms | 7226.40ms | 仍是最慢写入链路，约 2245 events/s |
+| CAS upload | 200 requests / 40 concurrency / 10 objects/request / 2000 objects | 200/0 | 57.17 req/s | 645.07ms | 946.09ms | 998.38ms | 明显快于 metrics，但仍可继续做批量 DB 写入 |
+| report upload large | 20 requests / 10 concurrency / 1000 commits/report / 20000 commits | 20/0 | 20.42 req/s | 403.39ms | 532.73ms | 555.09ms | 当前不是瓶颈 |
+| auth login | 1000 requests / 100 concurrency / 100 users / 200 IP pool / `AUTH_PASSWORD_CONCURRENCY=12` | 1000/0 | 93.73 req/s | 1048.27ms | 1117.96ms | 1149.90ms | 全部 200，无 401/409/429/500 |
+
+压测后状态：
+
+| 项 | 值 |
+| --- | ---: |
+| `/health` | 5.843ms |
+| `/ready` | 6.261ms |
+| Postgres 连接 | active=2, idle=20 |
+| `metrics_events` | 213595 |
+| `metrics_daily_rollups` | 14313 |
+| `metrics_tool_model_events` | 213561 |
+| `cas_objects` | 4061 |
+| `report_uploads` | 143 |
+| `commit_stats` | 50005 |
+| `users` | 304 |
+
+压测后资源快照：
+
+| 容器 | CPU | 内存 |
+| --- | ---: | ---: |
+| API | 14.21% | 1.111GiB |
+| Postgres | 8.73% | 335.9MiB |
+| Redis | 9.87% | 18.91MiB |
+| MinIO | 0.30% | 334.7MiB |
+
+阶段 0 结论：
+
+- 四条核心链路均无 500，登录无 401/409/429。
+- metrics upload p95 `5002.62ms`，仍明显高于 CAS `946.09ms` 和 report `532.73ms`，阶段 1 应优先拆解 metrics 写入耗时。
+- 登录在 `AUTH_PASSWORD_CONCURRENCY=12` 下表现好于上一轮记录，100 并发 p95 `1117.96ms`；阶段 4 仍需要补 Argon2 队列观测，避免生产盲调。
+- health/ready 在压测后仍为 6ms 内，说明轻量接口未被本轮压测明显拖慢。
 
 ## 阶段 1: 拆解 metrics 写入耗时
 
