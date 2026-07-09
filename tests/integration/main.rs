@@ -103,6 +103,7 @@ mod subdirs;
 mod sublime_merge_installer;
 mod sync_authorship_types;
 mod tls_native_certs;
+mod trae;
 mod utf8_filenames;
 mod virtual_attribution_merge;
 mod windsurf;

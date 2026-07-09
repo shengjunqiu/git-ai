@@ -437,6 +437,11 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             "shell" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
+        Agent::Trae => match tool_name {
+            "Write" | "Edit" => ToolClass::FileEdit,
+            "RunCommand" => ToolClass::Bash,
+            _ => ToolClass::Skip,
+        },
         Agent::ContinueCli => match tool_name {
             "edit" => ToolClass::FileEdit,
             "terminal" | "local_shell_call" => ToolClass::Bash,
@@ -495,6 +500,7 @@ pub enum Agent {
     Claude,
     CodeBuddy,
     Gemini,
+    Trae,
     ContinueCli,
     Droid,
     Amp,
@@ -1897,6 +1903,11 @@ mod tests {
         );
         assert_eq!(classify_tool(Agent::CodeBuddy, "Bash"), ToolClass::Bash);
         assert_eq!(classify_tool(Agent::CodeBuddy, "Read"), ToolClass::Skip);
+
+        assert_eq!(classify_tool(Agent::Trae, "Write"), ToolClass::FileEdit);
+        assert_eq!(classify_tool(Agent::Trae, "Edit"), ToolClass::FileEdit);
+        assert_eq!(classify_tool(Agent::Trae, "RunCommand"), ToolClass::Bash);
+        assert_eq!(classify_tool(Agent::Trae, "Read"), ToolClass::Skip);
     }
 
     #[test]
