@@ -158,6 +158,7 @@ mod tests {
 
 mod ai_tab;
 mod claude;
+mod codebuddy;
 mod codex;
 mod continue_cli;
 mod cursor;
@@ -169,6 +170,7 @@ mod windsurf;
 
 pub use ai_tab::AiTabPreset;
 pub use claude::{ClaudePreset, extract_plan_from_tool_use, is_plan_file_path};
+pub use codebuddy::CodeBuddyPreset;
 pub use codex::CodexPreset;
 pub use continue_cli::ContinueCliPreset;
 pub use cursor::CursorPreset;

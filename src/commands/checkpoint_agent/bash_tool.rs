@@ -427,6 +427,11 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             "Bash" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
+        Agent::CodeBuddy => match tool_name {
+            "Write" | "Edit" | "MultiEdit" | "Create" => ToolClass::FileEdit,
+            "Bash" | "bash" | "Shell" | "shell" => ToolClass::Bash,
+            _ => ToolClass::Skip,
+        },
         Agent::Gemini => match tool_name {
             "write_file" | "replace" => ToolClass::FileEdit,
             "shell" => ToolClass::Bash,
@@ -488,6 +493,7 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     Claude,
+    CodeBuddy,
     Gemini,
     ContinueCli,
     Droid,
@@ -1884,6 +1890,13 @@ mod tests {
         assert_eq!(classify_tool(Agent::Claude, "Bash"), ToolClass::Bash);
         assert_eq!(classify_tool(Agent::Claude, "Read"), ToolClass::Skip);
         assert_eq!(classify_tool(Agent::Claude, "unknown"), ToolClass::Skip);
+
+        assert_eq!(
+            classify_tool(Agent::CodeBuddy, "Write"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(classify_tool(Agent::CodeBuddy, "Bash"), ToolClass::Bash);
+        assert_eq!(classify_tool(Agent::CodeBuddy, "Read"), ToolClass::Skip);
     }
 
     #[test]
