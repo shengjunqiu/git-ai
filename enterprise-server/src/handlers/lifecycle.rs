@@ -16,6 +16,10 @@ use crate::pagination::{
 };
 use crate::routes::AppState;
 
+const PERSISTENCE_DEFAULT_DAYS: i64 = 365;
+const LIFECYCLE_EVENT_LIMIT: i64 = 100;
+const LIFECYCLE_EVENT_FETCH_LIMIT: i64 = LIFECYCLE_EVENT_LIMIT + 1;
+
 // ================================================================
 // PR-level aggregation
 // ================================================================
@@ -266,6 +270,64 @@ pub struct PersistenceQuery {
     pub org: Option<String>,
     pub repo: Option<String>,
     pub since: Option<String>,
+    pub until: Option<String>,
+}
+
+fn parse_persistence_date_param(
+    name: &str,
+    value: Option<&str>,
+) -> Result<Option<chrono::NaiveDate>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return Ok(Some(date));
+    }
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(Some(datetime.with_timezone(&chrono::Utc).date_naive()));
+    }
+
+    Err(AppError::BadRequest(format!(
+        "{} must be an RFC3339 timestamp or YYYY-MM-DD date",
+        name
+    )))
+}
+
+fn bounded_persistence_dates(
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<(chrono::NaiveDate, chrono::NaiveDate), AppError> {
+    let until_date =
+        parse_persistence_date_param("until", until)?.unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let since_date = parse_persistence_date_param("since", since)?
+        .unwrap_or_else(|| until_date - chrono::Duration::days(PERSISTENCE_DEFAULT_DAYS));
+
+    if since_date > until_date {
+        return Err(AppError::BadRequest(
+            "since must be earlier than or equal to until".into(),
+        ));
+    }
+
+    Ok((since_date, until_date))
+}
+
+fn date_start_epoch_seconds(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc()
+        .timestamp()
+}
+
+fn date_end_epoch_seconds(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(23, 59, 59)
+        .expect("23:59:59 is a valid time")
+        .and_utc()
+        .timestamp()
 }
 
 /// GET /api/v1/ai-code-persistence — AI code survival rate tracking
@@ -275,6 +337,10 @@ pub async fn get_ai_code_persistence(
     Query(query): Query<PersistenceQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = crate::handlers::dashboard::build_data_filters(&auth.0);
+    let (since_date, until_date) =
+        bounded_persistence_dates(query.since.as_deref(), query.until.as_deref())?;
+    let since_epoch = date_start_epoch_seconds(since_date);
+    let until_epoch = date_end_epoch_seconds(until_date);
 
     // Get the latest snapshot
     let snapshot: Option<(Uuid, Option<Uuid>, String, chrono::NaiveDate, i32, i32, i32, i32, f32, Option<serde_json::Value>)> = sqlx::query_as(
@@ -283,15 +349,17 @@ pub async fn get_ai_code_persistence(
         FROM ai_code_persistence_snapshots
         WHERE ($1::text IS NULL OR repo_url = $1)
           AND ($2::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $2))
-          AND ($3::date IS NULL OR snapshot_date >= $3)
+          AND snapshot_date >= $3::date
           AND ($4::uuid IS NULL OR org_id = $4)
+          AND snapshot_date <= $5::date
         ORDER BY snapshot_date DESC
         LIMIT 1"#
     )
     .bind(&query.repo)
     .bind(&query.org)
-    .bind(&query.since)
+    .bind(since_date)
     .bind(org_filter)
+    .bind(until_date)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -320,11 +388,15 @@ pub async fn get_ai_code_persistence(
         WHERE ($1::text IS NULL OR repo_url = $1)
           AND ($2::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $2))
           AND ($3::uuid IS NULL OR org_id = $3)
+          AND snapshot_date >= $4::date
+          AND snapshot_date <= $5::date
         ORDER BY snapshot_date"#
     )
     .bind(&query.repo)
     .bind(&query.org)
     .bind(org_filter)
+    .bind(since_date)
+    .bind(until_date)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -339,10 +411,14 @@ pub async fn get_ai_code_persistence(
             r#"SELECT COALESCE(SUM(ai_additions), 0), COALESCE(SUM(human_additions), 0)
             FROM metrics_events WHERE event_type = 1
               AND ($1::uuid IS NULL OR user_id = $1)
-              AND ($2::uuid IS NULL OR org_id = $2)"#
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND timestamp >= $3::bigint
+              AND timestamp <= $4::bigint"#
         )
         .bind(user_filter)
         .bind(org_filter)
+        .bind(since_epoch)
+        .bind(until_epoch)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Database(e))?;
@@ -350,7 +426,7 @@ pub async fn get_ai_code_persistence(
         let (ai_lines, _human_lines) = fallback.unwrap_or((Some(0), Some(0)));
 
         return Ok(Json(json!({
-            "period": { "since": query.since, "until": Option::<String>::None },
+            "period": { "since": since_date, "until": until_date },
             "ai_code_snapshot": {
                 "total_ai_lines_introduced": ai_lines.unwrap_or(0),
                 "lines_still_present": ai_lines.unwrap_or(0),  // Assumed present without historical data
@@ -365,7 +441,7 @@ pub async fn get_ai_code_persistence(
     }
 
     Ok(Json(json!({
-        "period": { "since": query.since, "until": Option::<String>::None },
+        "period": { "since": since_date, "until": until_date },
         "ai_code_snapshot": snapshot_data,
         "trend": trend,
     })))
@@ -479,7 +555,7 @@ pub async fn get_ai_code_lifecycle(
 
     // Get metrics event for this commit (with data isolation)
     let commit_data: Option<(String, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"SELECT author_email, ai_additions, human_additions
+        r#"SELECT author_email, ai_additions::bigint, human_additions::bigint
         FROM metrics_events
         WHERE commit_sha = $1 AND event_type = 1
           AND ($2::uuid IS NULL OR user_id = $2)
@@ -547,7 +623,7 @@ pub async fn get_ai_code_lifecycle(
 
     // Stage 2: Committed
     let commit_ts: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        r#"SELECT MIN(timestamp) FROM metrics_events WHERE commit_sha = $1 AND event_type = 1
+        r#"SELECT MIN(to_timestamp(timestamp)) FROM metrics_events WHERE commit_sha = $1 AND event_type = 1
           AND ($2::uuid IS NULL OR user_id = $2)
           AND ($3::uuid IS NULL OR org_id = $3)"#
     )
@@ -570,13 +646,21 @@ pub async fn get_ai_code_lifecycle(
         r#"SELECT event_type, timestamp, deployment_env, status
         FROM ci_events WHERE commit_sha = $1
           AND ($2::uuid IS NULL OR org_id = $2)
-        ORDER BY timestamp"#
+        ORDER BY timestamp
+        LIMIT $3"#
     )
     .bind(commit_sha)
     .bind(org_filter)
+    .bind(LIFECYCLE_EVENT_FETCH_LIMIT)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
+
+    let mut ci_rows = ci_rows;
+    let ci_events_truncated = ci_rows.len() as i64 > LIFECYCLE_EVENT_LIMIT;
+    if ci_events_truncated {
+        ci_rows.truncate(LIFECYCLE_EVENT_LIMIT as usize);
+    }
 
     for (event_type, ts, env, status) in &ci_rows {
         match event_type.as_str() {
@@ -606,23 +690,42 @@ pub async fn get_ai_code_lifecycle(
     }
 
     // Stage 4: Alerts
+    let ai_code_involved_in_alert: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS (
+            SELECT 1
+            FROM alert_events
+            WHERE commit_sha = $1
+              AND ($2::uuid IS NULL OR org_id = $2)
+              AND severity IN ('critical', 'warning')
+        )"#,
+    )
+    .bind(commit_sha)
+    .bind(org_filter)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
+
     let alert_rows: Vec<(String, Option<chrono::DateTime<chrono::Utc>>, String, Option<String>)> = sqlx::query_as(
         r#"SELECT alert_source, timestamp, severity, description
         FROM alert_events WHERE commit_sha = $1
           AND ($2::uuid IS NULL OR org_id = $2)
-        ORDER BY timestamp"#
+        ORDER BY timestamp
+        LIMIT $3"#
     )
     .bind(commit_sha)
     .bind(org_filter)
+    .bind(LIFECYCLE_EVENT_FETCH_LIMIT)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let mut ai_code_involved_in_alert = false;
+    let mut alert_rows = alert_rows;
+    let alert_events_truncated = alert_rows.len() as i64 > LIFECYCLE_EVENT_LIMIT;
+    if alert_events_truncated {
+        alert_rows.truncate(LIFECYCLE_EVENT_LIMIT as usize);
+    }
+
     for (source, ts, severity, desc) in &alert_rows {
-        if severity == "critical" || severity == "warning" {
-            ai_code_involved_in_alert = true;
-        }
         lifecycle.push(json!({
             "stage": "alert",
             "timestamp": ts,
@@ -639,6 +742,12 @@ pub async fn get_ai_code_lifecycle(
         "human_lines": human_lines.unwrap_or(0),
         "lifecycle": lifecycle,
         "ai_code_involved_in_alert": ai_code_involved_in_alert,
+        "truncated": ci_events_truncated || alert_events_truncated,
+        "truncation": {
+            "limit_per_event_type": LIFECYCLE_EVENT_LIMIT,
+            "ci_events": ci_events_truncated,
+            "alert_events": alert_events_truncated,
+        },
     })))
 }
 
@@ -881,6 +990,116 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn persistence_defaults_to_recent_year() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id, org_slug) = insert_test_identity(&db.state.db).await?;
+        let today = chrono::Utc::now().date_naive();
+        let old_date = today - chrono::Duration::days(PERSISTENCE_DEFAULT_DAYS + 35);
+        let recent_date = today - chrono::Duration::days(10);
+
+        insert_persistence_snapshot(
+            &db.state.db,
+            org_id,
+            "https://example.com/persist",
+            old_date,
+            33.0,
+        )
+        .await?;
+        insert_persistence_snapshot(
+            &db.state.db,
+            org_id,
+            "https://example.com/persist",
+            recent_date,
+            81.5,
+        )
+        .await?;
+
+        let Json(response) = get_ai_code_persistence(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(PersistenceQuery {
+                org: Some(org_slug),
+                repo: Some("https://example.com/persist".into()),
+                since: None,
+                until: None,
+            }),
+        )
+        .await?;
+
+        let expected_since = (today - chrono::Duration::days(PERSISTENCE_DEFAULT_DAYS)).to_string();
+        let expected_until = today.to_string();
+        let expected_snapshot_date = recent_date.to_string();
+        assert_eq!(
+            response["period"]["since"].as_str(),
+            Some(expected_since.as_str())
+        );
+        assert_eq!(
+            response["period"]["until"].as_str(),
+            Some(expected_until.as_str())
+        );
+        assert_eq!(
+            response["ai_code_snapshot"]["snapshot_date"].as_str(),
+            Some(expected_snapshot_date.as_str())
+        );
+        let trend = response["trend"].as_array().expect("trend should be an array");
+        assert_eq!(trend.len(), 1);
+        assert_eq!(trend[0]["week"].as_str(), Some(expected_snapshot_date.as_str()));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lifecycle_truncates_ci_and_alert_events() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id, org_slug) = insert_test_identity(&db.state.db).await?;
+        let commit_sha = "feedface";
+        let base_ts = fixed_timestamp("2026-07-09T10:00:00Z");
+        insert_lifecycle_metric_event(&db.state.db, user_id, org_id, commit_sha, base_ts).await?;
+
+        for offset in 0..=LIFECYCLE_EVENT_LIMIT {
+            let timestamp = base_ts + chrono::Duration::seconds(offset);
+            insert_ci_event(&db.state.db, org_id, commit_sha, timestamp).await?;
+            let severity = if offset == LIFECYCLE_EVENT_LIMIT {
+                "warning"
+            } else {
+                "info"
+            };
+            insert_alert_event(&db.state.db, org_id, commit_sha, timestamp, severity).await?;
+        }
+
+        let Json(response) = get_ai_code_lifecycle(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id, &org_slug),
+            Query(LifecycleQuery {
+                org: Some(org_slug),
+                commit_sha: Some(commit_sha.into()),
+            }),
+        )
+        .await?;
+
+        assert_eq!(response["truncated"].as_bool(), Some(true));
+        assert_eq!(response["truncation"]["ci_events"].as_bool(), Some(true));
+        assert_eq!(response["truncation"]["alert_events"].as_bool(), Some(true));
+        assert_eq!(response["ai_code_involved_in_alert"].as_bool(), Some(true));
+        assert_eq!(
+            lifecycle_stage_count(&response, "ci_run"),
+            LIFECYCLE_EVENT_LIMIT as usize
+        );
+        assert_eq!(
+            lifecycle_stage_count(&response, "alert"),
+            LIFECYCLE_EVENT_LIMIT as usize
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     async fn insert_test_identity(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid, String)> {
         let user_id = Uuid::new_v4();
         let org_id = Uuid::new_v4();
@@ -971,6 +1190,110 @@ mod tests {
         .await
     }
 
+    async fn insert_persistence_snapshot(
+        pool: &PgPool,
+        org_id: Uuid,
+        repo_url: &str,
+        snapshot_date: chrono::NaiveDate,
+        survival_rate: f32,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO ai_code_persistence_snapshots (
+                org_id, repo_url, snapshot_date,
+                total_ai_lines_introduced, lines_still_present, lines_modified, lines_deleted,
+                survival_rate
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+        )
+        .bind(org_id)
+        .bind(repo_url)
+        .bind(snapshot_date)
+        .bind(100_i32)
+        .bind(80_i32)
+        .bind(10_i32)
+        .bind(10_i32)
+        .bind(survival_rate)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_lifecycle_metric_event(
+        pool: &PgPool,
+        user_id: Uuid,
+        org_id: Uuid,
+        commit_sha: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO metrics_events (
+                event_type, timestamp, user_id, org_id, repo_url, author_email, tool, model,
+                commit_sha, human_additions, ai_additions, git_diff_added_lines
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
+        )
+        .bind(1_i16)
+        .bind(timestamp.timestamp())
+        .bind(user_id)
+        .bind(org_id)
+        .bind("https://example.com/lifecycle")
+        .bind("dev@example.com")
+        .bind("codex")
+        .bind("gpt-5")
+        .bind(commit_sha)
+        .bind(3_i32)
+        .bind(7_i32)
+        .bind(10_i32)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_ci_event(
+        pool: &PgPool,
+        org_id: Uuid,
+        commit_sha: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO ci_events (org_id, event_type, timestamp, repo_url, commit_sha, status)
+            VALUES ($1, $2, $3, $4, $5, $6)"#,
+        )
+        .bind(org_id)
+        .bind("ci_run")
+        .bind(timestamp)
+        .bind("https://example.com/lifecycle")
+        .bind(commit_sha)
+        .bind("success")
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_alert_event(
+        pool: &PgPool,
+        org_id: Uuid,
+        commit_sha: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        severity: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO alert_events (
+                org_id, alert_source, event_type, timestamp, repo_url, commit_sha, severity,
+                description
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+        )
+        .bind(org_id)
+        .bind("test")
+        .bind("alert")
+        .bind(timestamp)
+        .bind("https://example.com/lifecycle")
+        .bind(commit_sha)
+        .bind(severity)
+        .bind("test alert")
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     fn auth_extractor(user_id: Uuid, org_id: Uuid, org_slug: &str) -> AuthExtractor {
         AuthExtractor(AuthIdentity {
             user_id,
@@ -1002,6 +1325,15 @@ mod tests {
             .as_str()
             .expect("page should include next_cursor")
             .to_string()
+    }
+
+    fn lifecycle_stage_count(page: &Value, stage: &str) -> usize {
+        page["lifecycle"]
+            .as_array()
+            .expect("lifecycle should be an array")
+            .iter()
+            .filter(|entry| entry["stage"].as_str() == Some(stage))
+            .count()
     }
 
     fn assert_full_summary(page: &Value) {

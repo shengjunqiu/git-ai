@@ -1,6 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -15,6 +16,10 @@ use crate::pagination::{
     CURSOR_VERSION, DASHBOARD_MAX_LIMIT, DEFAULT_LIMIT,
 };
 use crate::routes::AppState;
+
+const TREND_DAY_BUCKET_LIMIT: i64 = 366;
+const TREND_WEEK_BUCKET_LIMIT: i64 = 260;
+const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
 
 /// GET /me — Dashboard home page
 pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
@@ -408,6 +413,114 @@ fn parse_epoch_filters(
         parse_epoch_seconds_param("since", since)?,
         parse_epoch_seconds_param("until", until)?,
     ))
+}
+
+fn bounded_trend_epoch_filters(
+    since: Option<&str>,
+    until: Option<&str>,
+    granularity: &str,
+) -> Result<(i64, i64), AppError> {
+    let parsed_until =
+        parse_epoch_seconds_param("until", until)?.unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let parsed_since = match parse_epoch_seconds_param("since", since)? {
+        Some(value) => value,
+        None => default_trend_since(parsed_until, granularity)?,
+    };
+
+    if parsed_since > parsed_until {
+        return Err(AppError::BadRequest(
+            "since must be earlier than or equal to until".into(),
+        ));
+    }
+
+    let bucket_count = trend_bucket_count(parsed_since, parsed_until, granularity)?;
+    let max_buckets = trend_bucket_limit(granularity);
+    if bucket_count > max_buckets {
+        return Err(AppError::BadRequest(format!(
+            "Requested trend range produces {bucket_count} {granularity} buckets; maximum is {max_buckets}. Reduce since/until or use a coarser granularity."
+        )));
+    }
+
+    Ok((parsed_since, parsed_until))
+}
+
+fn default_trend_since(until_ts: i64, granularity: &str) -> Result<i64, AppError> {
+    let until_date = epoch_seconds_to_date(until_ts)?;
+    let since_date = match granularity {
+        "day" => until_date - chrono::Duration::days(TREND_DAY_BUCKET_LIMIT - 1),
+        "week" => until_date - chrono::Duration::weeks(TREND_WEEK_BUCKET_LIMIT - 1),
+        "month" => subtract_months(until_date, (TREND_MONTH_BUCKET_LIMIT - 1) as u32)?,
+        _ => until_date - chrono::Duration::weeks(TREND_WEEK_BUCKET_LIMIT - 1),
+    };
+    Ok(date_start_epoch_seconds(since_date))
+}
+
+fn trend_bucket_limit(granularity: &str) -> i64 {
+    match granularity {
+        "day" => TREND_DAY_BUCKET_LIMIT,
+        "week" => TREND_WEEK_BUCKET_LIMIT,
+        "month" => TREND_MONTH_BUCKET_LIMIT,
+        _ => TREND_WEEK_BUCKET_LIMIT,
+    }
+}
+
+fn trend_bucket_count(since_ts: i64, until_ts: i64, granularity: &str) -> Result<i64, AppError> {
+    let since_date = epoch_seconds_to_date(since_ts)?;
+    let until_date = epoch_seconds_to_date(until_ts)?;
+    let days = (until_date - since_date).num_days().max(0);
+    let buckets = match granularity {
+        "day" => days + 1,
+        "week" => (days / 7) + 1,
+        "month" => {
+            let since_month = i64::from(since_date.year()) * 12 + i64::from(since_date.month0());
+            let until_month = i64::from(until_date.year()) * 12 + i64::from(until_date.month0());
+            (until_month - since_month) + 1
+        }
+        _ => (days / 7) + 1,
+    };
+    Ok(buckets)
+}
+
+fn epoch_seconds_to_date(timestamp: i64) -> Result<chrono::NaiveDate, AppError> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(|dt| dt.date_naive())
+        .ok_or_else(|| AppError::BadRequest("timestamp is out of range".into()))
+}
+
+fn date_start_epoch_seconds(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc()
+        .timestamp()
+}
+
+fn epoch_seconds_to_rfc3339(timestamp: i64) -> Result<String, AppError> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(|dt| dt.to_rfc3339())
+        .ok_or_else(|| AppError::BadRequest("timestamp is out of range".into()))
+}
+
+fn subtract_months(
+    date: chrono::NaiveDate,
+    months: u32,
+) -> Result<chrono::NaiveDate, AppError> {
+    let month_index = date.year() * 12 + date.month0() as i32 - months as i32;
+    let year = month_index.div_euclid(12);
+    let month0 = month_index.rem_euclid(12) as u32;
+    let month = month0 + 1;
+    let day = date.day().min(days_in_month(year, month));
+    chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| AppError::BadRequest("timestamp is out of range".into()))
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    let first_next_month = if month == 12 {
+        chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
+    .expect("valid month");
+    (first_next_month - chrono::Duration::days(1)).day()
 }
 
 type SummaryMetricRow = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
@@ -2088,7 +2201,6 @@ pub async fn aggregate_trends(
     Query(query): Query<TrendsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (user_filter, org_filter) = build_data_filters(&auth.0);
-    let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
 
     let metric = query.metric.as_deref().unwrap_or("ai_ratio");
     let granularity = query.granularity.as_deref().unwrap_or("week");
@@ -2116,16 +2228,21 @@ pub async fn aggregate_trends(
         _ => "week",
     };
 
+    let (since_ts, until_ts) =
+        bounded_trend_epoch_filters(query.since.as_deref(), query.until.as_deref(), granularity)?;
+    let effective_since = Some(epoch_seconds_to_rfc3339(since_ts)?);
+    let effective_until = Some(epoch_seconds_to_rfc3339(until_ts)?);
+
     let rows = fetch_trend_rows(
         &state.db,
         state.config.dashboard_use_rollups,
         user_filter,
         org_filter,
         &query.org,
-        since_ts,
-        until_ts,
-        &query.since,
-        &query.until,
+        Some(since_ts),
+        Some(until_ts),
+        &effective_since,
+        &effective_until,
         date_trunc,
     )
     .await?;
@@ -2165,6 +2282,10 @@ pub async fn aggregate_trends(
     Ok(Json(json!({
         "metric": metric,
         "granularity": granularity,
+        "period": {
+            "since": effective_since,
+            "until": effective_until,
+        },
         "data": data,
     })))
 }
@@ -2404,6 +2525,39 @@ mod tests {
     }
 
     #[test]
+    fn bounded_trend_epoch_filters_defaults_missing_since_to_max_window() {
+        let until = "2026-07-09T00:00:00Z";
+
+        let (since_ts, until_ts) =
+            bounded_trend_epoch_filters(None, Some(until), "day").unwrap();
+
+        assert_eq!(
+            epoch_seconds_to_date(since_ts).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2025, 7, 9).unwrap()
+        );
+        assert_eq!(
+            epoch_seconds_to_date(until_ts).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap()
+        );
+        assert_eq!(
+            trend_bucket_count(since_ts, until_ts, "day").unwrap(),
+            TREND_DAY_BUCKET_LIMIT
+        );
+    }
+
+    #[test]
+    fn bounded_trend_epoch_filters_rejects_too_many_day_buckets() {
+        let error = bounded_trend_epoch_filters(
+            Some("2025-01-01"),
+            Some("2026-01-02"),
+            "day",
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
     fn tool_aggregate_merges_sources_and_fills_missing_totals() {
         let mut aggregate = ToolAggregate::default();
 
@@ -2538,12 +2692,18 @@ mod tests {
         };
         let state = db.state()?;
         let auth = global_admin_auth(Uuid::new_v4());
-        let (alpha_org_id, _) = insert_organization(&db.pool, "Alpha Org").await?;
-        let (beta_org_id, _) = insert_organization(&db.pool, "Beta Org").await?;
-        insert_organization(&db.pool, "Gamma Org").await?;
-        insert_department(&db.pool, alpha_org_id, "Alpha Dept").await?;
-        insert_department(&db.pool, alpha_org_id, "Beta Dept").await?;
-        insert_department(&db.pool, beta_org_id, "Gamma Dept").await?;
+        let alpha_org_name = "000 Alpha Org";
+        let beta_org_name = "000 Beta Org";
+        let gamma_org_name = "000 Gamma Org";
+        let alpha_dept_name = "000 Alpha Dept";
+        let beta_dept_name = "000 Beta Dept";
+        let gamma_dept_name = "000 Gamma Dept";
+        let (alpha_org_id, _) = insert_organization(&db.pool, alpha_org_name).await?;
+        let (beta_org_id, _) = insert_organization(&db.pool, beta_org_name).await?;
+        insert_organization(&db.pool, gamma_org_name).await?;
+        insert_department(&db.pool, alpha_org_id, alpha_dept_name).await?;
+        insert_department(&db.pool, alpha_org_id, beta_dept_name).await?;
+        insert_department(&db.pool, beta_org_id, gamma_dept_name).await?;
 
         let Json(first_org_page) = aggregate_organizations(
             State(state.clone()),
@@ -2553,7 +2713,7 @@ mod tests {
         .await?;
         assert_eq!(
             string_values(&first_org_page, "organizations", "organization"),
-            vec!["Alpha Org", "Beta Org"]
+            vec![alpha_org_name, beta_org_name]
         );
         assert_eq!(
             first_org_page["pagination"]["has_more"].as_bool(),
@@ -2571,14 +2731,10 @@ mod tests {
             )),
         )
         .await?;
-        assert_eq!(
-            string_values(&second_org_page, "organizations", "organization"),
-            vec!["Gamma Org"]
-        );
-        assert_eq!(
-            second_org_page["pagination"]["has_more"].as_bool(),
-            Some(false)
-        );
+        let second_org_names = string_values(&second_org_page, "organizations", "organization");
+        assert_eq!(second_org_names.first().map(String::as_str), Some(gamma_org_name));
+        assert!(!second_org_names.contains(&alpha_org_name.to_string()));
+        assert!(!second_org_names.contains(&beta_org_name.to_string()));
 
         let Json(first_department_page) = aggregate_departments(
             State(state.clone()),
@@ -2594,8 +2750,8 @@ mod tests {
                 "department"
             ),
             vec![
-                ("Alpha Org".to_string(), "Alpha Dept".to_string()),
-                ("Alpha Org".to_string(), "Beta Dept".to_string())
+                (alpha_org_name.to_string(), alpha_dept_name.to_string()),
+                (alpha_org_name.to_string(), beta_dept_name.to_string())
             ]
         );
 
@@ -2610,19 +2766,26 @@ mod tests {
             )),
         )
         .await?;
-        assert_eq!(
-            pair_values(
-                &second_department_page,
-                "departments",
-                "organization",
-                "department"
-            ),
-            vec![("Beta Org".to_string(), "Gamma Dept".to_string())]
+        let second_department_pairs = pair_values(
+            &second_department_page,
+            "departments",
+            "organization",
+            "department",
         );
         assert_eq!(
-            second_department_page["pagination"]["has_more"].as_bool(),
-            Some(false)
+            second_department_pairs
+                .first()
+                .map(|(organization, department)| (organization.as_str(), department.as_str())),
+            Some((beta_org_name, gamma_dept_name))
         );
+        assert!(!second_department_pairs.contains(&(
+            alpha_org_name.to_string(),
+            alpha_dept_name.to_string()
+        )));
+        assert!(!second_department_pairs.contains(&(
+            alpha_org_name.to_string(),
+            beta_dept_name.to_string()
+        )));
 
         db.cleanup().await?;
         Ok(())
@@ -3116,7 +3279,15 @@ mod tests {
                 commits, total_lines, ai_lines, human_lines, mixed_lines, ai_accepted
             ) VALUES
             ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, '', 1, $5, $6, $7, $8, $9),
-            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, $10, 1, 0, $11, 0, $12, $13)"#,
+            ((to_timestamp($1) AT TIME ZONE 'UTC')::date, $2, $3, $4, $10, 1, 0, $11, 0, $12, $13)
+            ON CONFLICT (day, org_id, user_id, repo_url, tool_model) DO UPDATE SET
+                commits = metrics_daily_rollups.commits + EXCLUDED.commits,
+                total_lines = metrics_daily_rollups.total_lines + EXCLUDED.total_lines,
+                ai_lines = metrics_daily_rollups.ai_lines + EXCLUDED.ai_lines,
+                human_lines = metrics_daily_rollups.human_lines + EXCLUDED.human_lines,
+                mixed_lines = metrics_daily_rollups.mixed_lines + EXCLUDED.mixed_lines,
+                ai_accepted = metrics_daily_rollups.ai_accepted + EXCLUDED.ai_accepted,
+                updated_at = now()"#,
         )
         .bind(timestamp)
         .bind(org_id)

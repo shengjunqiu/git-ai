@@ -1008,16 +1008,16 @@ git commit -m "Paginate dashboard aggregate APIs"
 
 实现步骤：
 
-- [ ] 为 `aggregate_trends` 增加最大 bucket 规则。
-- [ ] day 粒度最大 366 个 bucket。
-- [ ] week 粒度最大 260 个 bucket。
-- [ ] month 粒度最大 120 个 bucket。
-- [ ] 超出范围时返回 400，提示缩小 `since/until` 或降低粒度。
+- [x] 为 `aggregate_trends` 增加最大 bucket 规则。
+- [x] day 粒度最大 366 个 bucket。
+- [x] week 粒度最大 260 个 bucket。
+- [x] month 粒度最大 120 个 bucket。
+- [x] 超出范围时返回 400，提示缩小 `since/until` 或降低粒度。
 
 验收标准：
 
-- [ ] 无 `since` 的请求仍有默认范围，或明确被拒绝。
-- [ ] 超大时间范围不会返回无限长数组。
+- [x] 无 `since` 的请求仍有默认范围，或明确被拒绝。
+- [x] 超大时间范围不会返回无限长数组。
 
 ### 6.2 限制 persistence trend
 
@@ -1027,14 +1027,14 @@ git commit -m "Paginate dashboard aggregate APIs"
 
 实现步骤：
 
-- [ ] 为 `get_ai_code_persistence` 增加 `until` 或默认最近一年。
-- [ ] trend 查询增加时间范围。
-- [ ] 对无时间范围请求使用安全默认值。
+- [x] 为 `get_ai_code_persistence` 增加 `until` 或默认最近一年。
+- [x] trend 查询增加时间范围。
+- [x] 对无时间范围请求使用安全默认值。
 
 验收标准：
 
-- [ ] 默认响应不会随多年 snapshot 无限增长。
-- [ ] 客户端可以通过明确时间范围获取历史数据。
+- [x] 默认响应不会随多年 snapshot 无限增长。
+- [x] 客户端可以通过明确时间范围获取历史数据。
 
 ### 6.3 限制 single commit lifecycle 子列表
 
@@ -1044,14 +1044,14 @@ git commit -m "Paginate dashboard aggregate APIs"
 
 实现步骤：
 
-- [ ] 对单 commit 的 CI events 和 alert events 增加合理上限。
-- [ ] 如果超过上限，在响应中返回 `truncated: true`。
+- [x] 对单 commit 的 CI events 和 alert events 增加合理上限。
+- [x] 如果超过上限，在响应中返回 `truncated: true`。
 - [ ] 或新增独立事件列表接口后做分页。
 
 验收标准：
 
-- [ ] 单 commit 异常多事件时不会返回超大响应。
-- [ ] 响应能提示客户端数据被截断。
+- [x] 单 commit 异常多事件时不会返回超大响应。
+- [x] 响应能提示客户端数据被截断。
 
 提交建议：
 
@@ -1059,6 +1059,27 @@ git commit -m "Paginate dashboard aggregate APIs"
 git add enterprise-server/src
 git commit -m "Bound time series dashboard responses"
 ```
+
+### 阶段 6 执行记录
+
+完成内容：
+
+- `aggregate_trends` 现在始终使用有界时间范围；缺省范围按粒度限制为最近 366 天、260 周或 120 个月，超出 bucket 上限时返回 400。
+- `get_ai_code_persistence` 新增 `until` 查询参数，缺省返回最近一年，并将 snapshot、trend 和 metrics fallback 都限制在同一时间窗口内。
+- `get_ai_code_lifecycle` 对 CI events 和 alert events 各限制 100 条，响应新增 `truncated` 与 `truncation`；告警参与判断改为独立 `EXISTS` 查询，避免被截断列表影响。
+- 修复 single commit lifecycle 中 `metrics_events.ai_additions` / `human_additions` 的 SQL 类型解码问题。
+- 补充 dashboard 趋势窗口单测、persistence 默认窗口测试和 lifecycle 截断测试。
+- 修复 dashboard 分页测试夹具对 seed 组织和 daily rollup 重复主键的依赖，保证完整测试套件真实连库通过。
+
+验证结果：
+
+```bash
+cargo test bounded_trend -- --nocapture
+cargo test lifecycle -- --nocapture
+cargo test
+```
+
+结果：`enterprise-server` 完整测试套件通过，145 passed，0 failed。测试输出仍包含既有 unused/dead-code warning。
 
 ## 阶段 7: API 文档和前端适配
 
