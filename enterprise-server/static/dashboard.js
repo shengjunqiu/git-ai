@@ -95,6 +95,10 @@ async function fetchPaginatedJson(key, url, errorMessage) {
     }
 }
 
+function pageItems(data, field) {
+    return (data[field] || []).slice(0, TABLE_PAGE_SIZE);
+}
+
 function setTableLoading(tbodyId, colspan) {
     document.getElementById(tbodyId).innerHTML =
         `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`;
@@ -532,7 +536,7 @@ async function loadOrgs() {
     setTableLoading('org-table', 5);
     try {
         const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败');
-        document.getElementById('org-table').innerHTML = (d.organizations || []).map(o => {
+        document.getElementById('org-table').innerHTML = pageItems(d, 'organizations').map(o => {
             return `<tr>
                 <td><strong>${escapeHtml(o.organization)}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(o.org_slug || '')}</span></td>
                 <td>${fmt(o.total_commits)}</td>
@@ -555,7 +559,7 @@ async function loadDevs() {
     setTableLoading('dev-table', 8);
     try {
         const d = await fetchPaginatedJson('developers', '/api/v1/aggregate/developers', '加载开发者数据失败');
-        const developers = d.developers || [];
+        const developers = pageItems(d, 'developers');
         developerGitInfo = new Map();
         if (developers.length === 0) {
             document.getElementById('dev-table').innerHTML =
@@ -646,7 +650,7 @@ async function loadProjects() {
     setTableLoading('proj-table', 6);
     try {
         const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败');
-        document.getElementById('proj-table').innerHTML = (d.projects || []).map(p => {
+        document.getElementById('proj-table').innerHTML = pageItems(d, 'projects').map(p => {
             const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
             const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
             const branch = escapeHtml(p.branch || '—');
@@ -673,7 +677,7 @@ async function loadTools() {
     setTableLoading('tools-table', 5);
     try {
         const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败');
-        const tools = (d.tools || []);
+        const tools = pageItems(d, 'tools');
         if (tools.length === 0) {
             document.getElementById('tools-table').innerHTML =
                 '<tr><td colspan="5" style="color:var(--text-muted)">暂无工具使用数据，数据将在报告上传或指标事件后显示</td></tr>';
@@ -712,7 +716,7 @@ async function loadUsers() {
     setTableLoading('users-table', 5);
     try {
         const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败');
-        const users = d.users || [];
+        const users = pageItems(d, 'users');
         if (users.length === 0) {
             document.getElementById('users-table').innerHTML =
                 '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
@@ -929,7 +933,7 @@ async function loadDepartments() {
     setTableLoading('departments-table', 5);
     try {
         const d = await fetchPaginatedJson('departments', '/api/v1/aggregate/departments', '加载部门列表失败');
-        const departments = d.departments || [];
+        const departments = pageItems(d, 'departments');
         if (departments.length === 0) {
             document.getElementById('departments-table').innerHTML =
                 '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
@@ -1031,7 +1035,7 @@ async function loadApiKeys() {
     setTableLoading('apikeys-table', 7);
     try {
         const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败');
-        const keys = d.api_keys || [];
+        const keys = pageItems(d, 'api_keys');
         if (keys.length === 0) {
             document.getElementById('apikeys-table').innerHTML =
                 '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔑</div><p>暂无 API 密钥，点击上方按钮创建</p></div></td></tr>';
