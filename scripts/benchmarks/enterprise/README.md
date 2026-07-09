@@ -68,6 +68,42 @@ python3 scripts/benchmarks/enterprise/bench_metrics_upload.py \
 
 该脚本每个请求都会构造新的 committed event batch，并检查服务端返回的 `errors` 数组。如果出现 partial success，也会按失败处理。
 
+## CAS 上传压测
+
+```bash
+ENTERPRISE_API_KEYS=key-1,key-2,key-3 \
+python3 scripts/benchmarks/enterprise/bench_cas_upload.py \
+  --requests 200 \
+  --objects-per-request 10 \
+  --content-bytes 2048 \
+  --concurrency 40
+```
+
+该脚本生成低熵的 prompt record JSON，并按服务端 canonical JSON 规则计算 SHA256 hash。单请求 objects 数不能超过服务端限制 100。CAS upload 默认限流比 metrics 更低，高并发样本建议通过 `ENTERPRISE_API_KEYS` 轮换多个 key。
+
+## Report 上传压测
+
+```bash
+ENTERPRISE_API_KEYS=key-1,key-2,key-3 \
+python3 scripts/benchmarks/enterprise/bench_report_upload.py \
+  --requests 100 \
+  --commit-count 100 \
+  --concurrency 20
+```
+
+大报告样本：
+
+```bash
+ENTERPRISE_API_KEYS=key-1,key-2,key-3 \
+python3 scripts/benchmarks/enterprise/bench_report_upload.py \
+  --requests 20 \
+  --commit-count 1000 \
+  --concurrency 10 \
+  --timeout 120
+```
+
+该脚本会生成完整的 `git-ai-report/1.0.0` payload，覆盖 `projects`、`report_uploads`、`commit_stats` 和 `tool_model_stats` 写入路径，并校验 `inserted_commits + updated_commits` 与请求内 commit 数一致。
+
 ## 注册、登录和 OAuth 压测
 
 网页登录压测使用已有测试用户：

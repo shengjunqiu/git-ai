@@ -1550,6 +1550,83 @@ git add docs/enterprise-server-performance-task-plan.md enterprise-server/docker
 git commit -m "Add enterprise Postgres observability queries"
 ```
 
+### 4.4 补齐 CAS/report 上传压测并复测写入链路
+
+目标：把 metrics、CAS、report 三条主要上传路径都纳入可重复压测，避免只凭 dashboard 和认证登录结果评估整体并发。
+
+涉及文件：
+
+- `scripts/benchmarks/enterprise/bench_cas_upload.py`
+- `scripts/benchmarks/enterprise/bench_report_upload.py`
+- `scripts/benchmarks/enterprise/README.md`
+
+实现结果：
+
+| 项 | 结果 |
+| --- | --- |
+| CAS 上传脚本 | 已新增 `bench_cas_upload.py`，生成 prompt record JSON，按服务端 canonical JSON 规则计算 SHA256 hash，校验 `failure_count=0` 和 `success_count` |
+| report 上传脚本 | 已新增 `bench_report_upload.py`，生成 `git-ai-report/1.0.0` payload，覆盖 project/report upload/commit stats/tool model stats 写入 |
+| API key 策略 | 本地测试库创建 10 个不同前缀的临时 benchmark key，压测时通过 `ENTERPRISE_API_KEYS` 轮换，避免单 key 限流掩盖真实写入成本 |
+| 烟测 | metrics、CAS、report 各 1 请求均通过，无 401/400/hash mismatch |
+
+执行日期：2026-07-09。
+
+压测前状态：
+
+| 项 | 值 |
+| --- | ---: |
+| `/health` | 2.316ms |
+| `/ready` | 3.477ms |
+| `metrics_events` | 113575 |
+| `cas_objects` | 58 |
+| `report_uploads` | 2 |
+| `commit_stats` | 4 |
+
+上传压测结果：
+
+| 场景 | 请求/并发 | 写入规模 | 成功/错误 | RPS | p50 | p95 | p99 | 结论 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| metrics upload | 500/50 | 50000 events，batch=100 | 500/0 | 14.58 req/s | 2595.66ms | 7825.79ms | 12267.32ms | 全部成功但尾延迟高；约 1458 events/s，是当前写入链路主要重路径。 |
+| CAS upload | 200/40 | 2000 objects，10/request，约 2KB/object | 200/0 | 49.63 req/s | 711.95ms | 1472.66ms | 1771.90ms | 全部成功；主要成本来自每对象 MinIO put 加 DB ownership 事务。 |
+| report upload | 100/20 | 10000 commits，100/report | 100/0 | 167.32 req/s | 93.65ms | 151.16ms | 168.39ms | 小中型 report 非常稳定，批量 upsert 效果明显。 |
+| report upload large | 20/10 | 20000 commits，1000/report | 20/0 | 18.60 req/s | 440.76ms | 603.45ms | 636.36ms | 1000 commit 大报告仍在 1s 内，当前不是主要瓶颈。 |
+
+压测后状态：
+
+| 项 | 值 |
+| --- | ---: |
+| `/health` | 2.868ms |
+| `/ready` | 3.476ms |
+| Postgres 连接 | active=2, idle=20 |
+| `metrics_events` | 163575 |
+| `cas_objects` | 2058 |
+| `report_uploads` | 122 |
+| `commit_stats` | 30004 |
+
+压测后资源快照：
+
+| 容器 | CPU | 内存 |
+| --- | ---: | ---: |
+| API | 0.20% | 306.7MiB |
+| Postgres | 4.08% | 366.9MiB |
+| Redis | 0.64% | 19.18MiB |
+| MinIO | 13.61% | 335.9MiB |
+
+结论：
+
+- 上传链路没有出现 401/400/429/500，压测后 health/ready 仍保持 3ms 左右，说明轻量接口没有被写入压测拖慢。
+- report 批量 upsert 已经足够健康，1000 commit/report 的 p95 为 `603.45ms`。
+- CAS p95 `1.47s` 可接受，但如果生产 prompt record 明显大于 2KB，下一轮应按真实 payload 大小复测。
+- metrics upload 当前是主要写入瓶颈；500 请求、50 并发、batch 100 的 p95 已到 `7.83s`。后续优化应优先看 rollup 同步写入、`metrics_tool_model_events` 批量写入和 Postgres 写放大，而不是 report。
+
+验证结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `python3 -m py_compile scripts/benchmarks/enterprise/bench_cas_upload.py scripts/benchmarks/enterprise/bench_report_upload.py` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_cas_upload.py --help` | 通过 |
+| `python3 scripts/benchmarks/enterprise/bench_report_upload.py --help` | 通过 |
+
 ## 阶段 5: 上线和回滚
 
 ### 5.1 分阶段上线

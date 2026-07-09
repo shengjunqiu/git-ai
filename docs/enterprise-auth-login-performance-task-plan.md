@@ -1118,6 +1118,56 @@ python3 scripts/benchmarks/enterprise/bench_auth_login.py \
 - 登录 50 并发多账号样本表现健康；100 并发虽无错误，但 p95 约 `2.1s`，是当前登录路径的主要容量边界。
 - 下一步如要继续优化登录，应围绕 `AUTH_PASSWORD_CONCURRENCY` 做分档压测，例如 `8/12/16`，观察 p95、CPU、内存和 `/health` 延迟，而不是直接无限调高。
 
+### 7.5 `AUTH_PASSWORD_CONCURRENCY` 分档压测
+
+执行日期：2026-07-09。
+
+目标：验证 Argon2 blocking worker 并发度在当前本地 Docker 环境下的合理取值，避免盲目提高并行度导致 CPU/内存争用。
+
+共同测试参数：
+
+```bash
+python3 scripts/benchmarks/enterprise/bench_auth_login.py \
+  --mode login \
+  --login-user-count 100 \
+  --login-email-domain linewell.com \
+  --login-email-prefix bench-login-pool \
+  --login-run-id 20260709-001 \
+  --login-password correct-horse-battery \
+  --requests 1000 \
+  --concurrency 100 \
+  --client-ip-mode pool \
+  --client-ip-pool-size 200 \
+  --allow-errors
+```
+
+每档通过以下方式重建 API 容器：
+
+```bash
+AUTH_PASSWORD_CONCURRENCY=<8|12|16> \
+RATE_LIMIT_AUTH_MAX_REQUESTS=300 \
+RATE_LIMIT_AUTH_WINDOW_SECONDS=60 \
+RATE_LIMIT_OAUTH_MAX_REQUESTS=600 \
+RATE_LIMIT_OAUTH_WINDOW_SECONDS=60 \
+docker compose up -d --force-recreate --no-deps api
+```
+
+结果：
+
+| `AUTH_PASSWORD_CONCURRENCY` | 请求/并发 | 成功/错误 | HTTP 状态 | RPS | p50 | p95 | p99 | 压测后 health/ready | API 空闲内存 |
+| ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | ---: |
+| 8 | 1000/100 | 1000/0 | 200=1000 | 77.34 | 1143.01ms | 1855.81ms | 1993.75ms | 2.628ms / 3.246ms | 894.1MiB |
+| 12 | 1000/100 | 1000/0 | 200=1000 | 88.84 | 1018.04ms | 1744.61ms | 1859.88ms | 2.507ms / 2.958ms | 1.266GiB |
+| 16 | 1000/100 | 1000/0 | 200=1000 | 76.98 | 1061.89ms | 2620.40ms | 2946.39ms | 2.468ms / 3.680ms | 2.66GiB |
+
+结论：
+
+- 三档都没有 401/409/429/500，说明当前多账号、多 IP 登录样本在限流和 DB 层面稳定。
+- `12` 是本机样本的最优点：相对 `8`，吞吐从 `77.34/s` 提升到 `88.84/s`，p95 从 `1855.81ms` 降到 `1744.61ms`。
+- `16` 明显变差：p95 上升到 `2620.40ms`，p99 上升到 `2946.39ms`，API 空闲内存升到 `2.66GiB`；不建议作为默认值。
+- 本地 API 已恢复到 `AUTH_PASSWORD_CONCURRENCY=12` 继续运行。
+- 生产建议：先以 `8` 为保守默认，CPU 核数和内存充足时灰度到 `12`；不要直接设为 `16+`，除非有同等压测证明尾延迟没有恶化。
+
 ## 阶段 8: 上线和回滚
 
 ### 8.1 上线顺序
