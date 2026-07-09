@@ -105,10 +105,6 @@ function renderPaginationControls(key) {
     const container = containerId ? document.getElementById(containerId) : null;
     if (!container) return;
     const state = getTablePageState(key);
-    if (state.page === 1 && !state.hasMore) {
-        container.innerHTML = '';
-        return;
-    }
     container.innerHTML = `
         <button class="btn btn-sm" onclick="goToTablePage('${key}', 'prev')" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
         <span class="pagination-status">第 ${state.page} 页</span>
