@@ -443,9 +443,8 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             _ => ToolClass::Skip,
         },
         Agent::Qoder => match tool_name {
-            "Write" | "Edit" | "create_file" | "search_replace" | "delete_file" => {
-                ToolClass::FileEdit
-            }
+            "Write" | "Edit" | "SearchReplace" | "create_file" | "search_replace"
+            | "delete_file" => ToolClass::FileEdit,
             "Bash" | "run_in_terminal" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
@@ -1924,6 +1923,10 @@ mod tests {
         );
         assert_eq!(
             classify_tool(Agent::Qoder, "search_replace"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(
+            classify_tool(Agent::Qoder, "SearchReplace"),
             ToolClass::FileEdit
         );
         assert_eq!(classify_tool(Agent::Qoder, "Bash"), ToolClass::Bash);

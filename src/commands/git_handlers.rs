@@ -721,8 +721,9 @@ fn maybe_show_async_post_commit_stats(parsed: &ParsedGitInvocation, repo: &Repos
         None => return,
     };
 
-    // Use a longer timeout under test to avoid flakiness on saturated CI machines.
-    // GIT_AI_POST_COMMIT_TIMEOUT_MS allows tests to override the timeout.
+    // GIT_AI_POST_COMMIT_TIMEOUT_MS allows users and tests to override the timeout.
+    // The default gives the daemon enough time to finish typical commits so the
+    // user can see stats in the same terminal interaction.
     let timeout = if let Some(ms) = std::env::var("GIT_AI_POST_COMMIT_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -731,7 +732,7 @@ fn maybe_show_async_post_commit_stats(parsed: &ParsedGitInvocation, repo: &Repos
     } else if std::env::var_os("GIT_AI_TEST_DB_PATH").is_some() {
         std::time::Duration::from_secs(20)
     } else {
-        std::time::Duration::from_millis(500)
+        std::time::Duration::from_secs(30)
     };
 
     // Poll for the authorship note the daemon should be producing.

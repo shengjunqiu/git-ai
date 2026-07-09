@@ -111,6 +111,37 @@ fn test_qoder_preset_post_create_file_extracts_path_dirty_file_and_transcript() 
 }
 
 #[test]
+fn test_qoder_preset_post_search_replace_extracts_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("src/main.rs");
+
+    let hook_input = json!({
+        "session_id": "qoder-session-4",
+        "cwd": temp_dir.path(),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "SearchReplace",
+        "tool_input": {
+            "file_path": file_path,
+            "replacements": [{
+                "original_text": "old",
+                "new_text": "new"
+            }]
+        },
+        "tool_response": "edit file by SearchReplace success"
+    });
+
+    let result = QoderPreset
+        .run(flags_from_json(hook_input))
+        .expect("Qoder SearchReplace hook should parse");
+
+    assert_eq!(result.agent_id.tool, "qoder");
+    assert_eq!(
+        result.edited_filepaths,
+        Some(vec![file_path.to_string_lossy().to_string()])
+    );
+}
+
+#[test]
 fn test_qoder_preset_skips_read_without_path() {
     let temp_dir = tempfile::tempdir().unwrap();
     let hook_input = json!({
