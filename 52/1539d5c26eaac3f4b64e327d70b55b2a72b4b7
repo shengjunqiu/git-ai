@@ -1,0 +1,24 @@
+.vscode/settings.json
+  a73676cfded0c055 4-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "521539d5c26eaac3f4b64e327d70b55b2a72b4b7",
+  "prompts": {
+    "a73676cfded0c055": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3f42-ade9-76c3-b0ee-d583888b88a0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "邱圣军 <20949349+shengjunqiu@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/1651624f6a895af6cce594c73e3b0fb05389071d098e14b7b56730f9dc22f07e"
+    }
+  }
+}
