@@ -1,0 +1,30 @@
+src/api/cas.rs
+  h_8c00d195f87269 9
+  4db6a61732a6174e 1-8,16,18-22,31,35-36,43-44,50-51,64-66,76-77,95-99,111-113,123-124,130-131,143-144,166,187,190-191,205,225
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "d71afdf0796f35b19d0edd35b73565765a870266",
+  "prompts": {
+    "4db6a61732a6174e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a11-c1fc-7141-911e-1d7b50ab1631",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 17,
+      "accepted_lines": 46,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/d313547c9fd6698acf891c9364466d981108261b04a52d11fd20da13756d1161"
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
