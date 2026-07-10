@@ -1,0 +1,60 @@
+enterprise-server/src/db/migrations.rs
+  9b34970df6197bbc 119-126,362-422
+enterprise-server/src/handlers/admin.rs
+  9b34970df6197bbc 751-752,774-775,779-780,786,789,793-794,798,802-803,819,830-843,847,850-852,881-906,908-911,914,917,929-934,944,947,1032-1046
+enterprise-server/static/dashboard.js
+  9b34970df6197bbc 33-34,976-981,987-1059,1061,1063-1068,1072,1074-1079,1084,1110,1116-1125,1132-1156,1162-1163,1174
+enterprise-server/migrations/030_promote_linewell_top_level_departments.sql
+  9b34970df6197bbc 1-37
+enterprise-server/src/models/user.rs
+  9b34970df6197bbc 37-45
+enterprise-server/migrations/029_hierarchical_default_departments.sql
+  9b34970df6197bbc 1-527
+src/git/repo_storage.rs
+  88db43a3a21c9331 427-436,468-470
+src/commands/checkpoint.rs
+  88db43a3a21c9331 108-121,392-398,408-410,475-504,1089-1091,1101-1103,1108-1110,2497-2571
+enterprise-server/src/handlers/dashboard.rs
+  9b34970df6197bbc 196,1270-1271,1276,1283,1286,1291,1297,1315-1316,1331,1334,1339,1348,1351-1352,1391,1396-1397,1401-1404,1409,1412-1413,1417-1420,1425,1433-1437,1442,1446,1449-1452,1457-1479,1482-1488,1490,1493-1510,1514,1525,1529-1532,1543,1545-1546,1549-1562,1566,1568-1569,1577,1588,1592,1603-1637,3117-3226,3557-3565,3573-3583
+enterprise-server/src/handlers/auth_pages.rs
+  9b34970df6197bbc 226,228-237
+enterprise-server/static/dashboard.html
+  9b34970df6197bbc 250,255-261
+enterprise-server/src/services/registration.rs
+  9b34970df6197bbc 19,22,74-75,78,87-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "eac87322f5367288a9fc5f859351a17ae9d633a8",
+  "prompts": {
+    "88db43a3a21c9331": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a86-042f-7ff3-91fa-4c62bde18cba",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 251,
+      "total_deletions": 109,
+      "accepted_lines": 155,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/a215570245ec1c03efde056e91e6a40bdc3e33a8b359e6be54d0e3a52ea1e5b5"
+    },
+    "9b34970df6197bbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4b0d-7ffe-71a2-a2cc-0c6f5094a774",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1200,
+      "total_deletions": 113,
+      "accepted_lines": 1180,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/d1e5a6844842c96d59ebe1a35208137ea7316422b839b7ce369c3b0f69f6fb62"
+    }
+  }
+}
