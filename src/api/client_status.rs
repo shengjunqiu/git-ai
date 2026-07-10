@@ -1,8 +1,13 @@
+//! Reports CLI login and logout state to the configured server.
+
 use crate::api::client::{ApiClient, ApiContext};
 use crate::api::types::ApiErrorResponse;
 use crate::error::GitAiError;
 use serde::{Deserialize, Serialize};
 
+// test
+
+/// Login state values understood by the client-status API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientStatusKind {
     LoggedIn,
@@ -10,6 +15,7 @@ pub enum ClientStatusKind {
 }
 
 impl ClientStatusKind {
+    /// Converts the enum to the server's wire-format value.
     fn as_str(self) -> &'static str {
         match self {
             Self::LoggedIn => "logged_in",
@@ -18,6 +24,7 @@ impl ClientStatusKind {
     }
 }
 
+/// Client state and environment metadata sent with a status update.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientStatusRequest {
     pub status: String,
@@ -29,6 +36,7 @@ pub struct ClientStatusRequest {
 }
 
 impl ClientStatusRequest {
+    /// Builds a status report using metadata from the current process.
     pub fn new(status: ClientStatusKind) -> Self {
         Self {
             status: status.as_str().to_string(),
@@ -40,12 +48,15 @@ impl ClientStatusRequest {
     }
 }
 
+/// Uploads a status update using the currently configured credentials.
 pub fn upload_current_client_status(status: ClientStatusKind) -> Result<(), GitAiError> {
+    // Status reporting should not hold up login or logout for long.
     let context = ApiContext::new(None).with_timeout(5);
     let client = ApiClient::new(context);
     client.upload_client_status(&ClientStatusRequest::new(status))
 }
 
+/// Uploads a status update with credentials obtained by the current login flow.
 pub fn upload_client_status_with_token(
     base_url: String,
     access_token: String,
@@ -57,6 +68,7 @@ pub fn upload_client_status_with_token(
 }
 
 impl ApiClient {
+    /// Sends one client-status report to the server.
     pub fn upload_client_status(&self, request: &ClientStatusRequest) -> Result<(), GitAiError> {
         let response = self.context().post_json("/worker/client/status", request)?;
         let status_code = response.status_code;
@@ -67,6 +79,7 @@ impl ApiClient {
         match status_code {
             200 => Ok(()),
             400 => {
+                // Keep a useful error when the server body is not valid JSON.
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Invalid request body".to_string(),
@@ -90,6 +103,7 @@ impl ApiClient {
     }
 }
 
+/// Reads the hostname from platform variables, then falls back to `hostname`.
 fn collect_hostname() -> Option<String> {
     if let Ok(hostname) = std::env::var("HOSTNAME")
         && !hostname.trim().is_empty()
