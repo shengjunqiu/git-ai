@@ -35,6 +35,7 @@ pub fn success_page(title: &str, message: &str) -> Html<String> {
       <div class="page-kicker">账户状态</div>
       <h1>{title}</h1>
       <p class="page-copy">{message}</p>
+      <a class="btn btn-primary success-action" href="/auth/login">立即登录</a>
     </section>
   </main>
 </body>
@@ -475,6 +476,12 @@ p {
 .page-copy {
   font-size: 0.875rem;
 }
+.success-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
 .alternate {
   margin-top: 1rem;
   text-align: center;
@@ -543,6 +550,15 @@ p {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_success_page_links_to_login() {
+        let Html(html) = success_page("注册成功", "账号已创建。");
+
+        assert!(html.contains(
+            r#"<a class="btn btn-primary success-action" href="/auth/login">立即登录</a>"#
+        ));
+    }
 
     #[test]
     fn login_page_links_to_register_with_return_to() {
