@@ -1,12 +1,25 @@
+//! Client-side bindings for the content-addressable storage (CAS) API.
+//!
+//! CAS payloads are addressed by their content hash. This module only translates
+//! between the shared HTTP client and the CAS request/response types; authentication,
+//! base-URL handling, and transport errors remain centralized in [`ApiContext`].
+//!
+//! [`ApiContext`]: crate::api::client::ApiContext
+
+
 use crate::api::client::ApiClient;
 use crate::api::types::{
     ApiErrorResponse, CAPromptStoreReadResponse, CasUploadRequest, CasUploadResponse,
 };
 use crate::error::GitAiError;
 
-/// CAS API endpoints
+/// CAS-specific extensions to the shared API client.
 impl ApiClient {
-    /// Upload CAS objects to the server
+    /// Uploads a batch of content-addressed objects to the server.
+    ///
+    /// A successful HTTP response can still contain per-object failures in
+    /// [`CasUploadResponse`]. Batch sizing and the decision to retry failed objects
+    /// are intentionally left to the caller.
     ///
     /// # Arguments
     /// * `request` - The CAS upload request containing objects to upload
@@ -15,20 +28,27 @@ impl ApiClient {
     /// * `Ok(CasUploadResponse)` - Success response
     /// * `Err(GitAiError)` - Error response
     pub fn upload_cas(&self, request: CasUploadRequest) -> Result<CasUploadResponse, GitAiError> {
+        // ApiContext adds the configured credentials and common request headers.
         let response = self.context().post_json("/worker/cas/upload", &request)?;
         let status_code = response.status_code;
 
+        // Read the body once before dispatching on the status so both successful
+        // payloads and server-provided error details use the same response data.
         let body = response
             .as_str()
             .map_err(|e| GitAiError::Generic(format!("Failed to read response body: {}", e)))?;
 
         match status_code {
             200 => {
+                // The response reports the outcome of each object independently;
+                // callers use it to remove only successful objects from local queues.
                 let cas_response: CasUploadResponse =
                     serde_json::from_str(body).map_err(GitAiError::JsonError)?;
                 Ok(cas_response)
             }
             400 => {
+                // Some compatible servers may return a non-JSON error page. Keep a
+                // stable user-facing message while retaining the raw body in details.
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Invalid request body".to_string(),
@@ -41,6 +61,9 @@ impl ApiClient {
             }
             401 => Err(GitAiError::Generic("Unauthorized".to_string())),
             403 => {
+                // Authorization denial is a durable administrator policy decision,
+                // not a transient HTTP failure. The dedicated variant lets upload
+                // workers avoid retry delays and keep the objects queued locally.
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Administrator authorization is required for Git tracking uploads"
@@ -50,6 +73,8 @@ impl ApiClient {
                 Err(GitAiError::UploadForbidden(error_response.error))
             }
             500 => {
+                // As with 400 responses, tolerate legacy or proxy-generated bodies
+                // that do not follow the structured API error schema.
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Internal server error".to_string(),
@@ -67,7 +92,11 @@ impl ApiClient {
         }
     }
 
-    /// Read CAS objects by hash from the server
+    /// Reads a batch of CAS objects by content hash.
+    ///
+    /// Missing objects are represented as data rather than transport failures: an
+    /// all-missing `404` response becomes an empty successful result, while mixed
+    /// batches are described by the per-hash statuses returned with `200`.
     ///
     /// # Arguments
     /// * `hashes` - Slice of CAS hashes to fetch (max 100 per call)
@@ -79,8 +108,9 @@ impl ApiClient {
         &self,
         hashes: &[&str],
     ) -> Result<CAPromptStoreReadResponse, GitAiError> {
-        // Validate all hashes are hex-only before building the URL to prevent
-        // injection via crafted hash values in the query string.
+        // Hashes are interpolated into a comma-separated query value rather than
+        // passed through a URL encoder. Restricting them to their canonical hex
+        // alphabet prevents `&`, `=`, or `,` from changing the query structure.
         for hash in hashes {
             if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(GitAiError::Generic(format!(
@@ -90,11 +120,15 @@ impl ApiClient {
             }
         }
 
+        // The server accepts a comma-separated batch (currently at most 100 hashes;
+        // callers are responsible for chunking larger collections).
         let query = hashes.join(",");
         let endpoint = format!("/worker/cas/?hashes={}", query);
         let response = self.context().get(&endpoint)?;
         let status_code = response.status_code;
 
+        // Preserve the body for either response deserialization or diagnostics on
+        // an unexpected status code.
         let body = response
             .as_str()
             .map_err(|e| GitAiError::Generic(format!("Failed to read response body: {}", e)))?;
@@ -106,7 +140,8 @@ impl ApiClient {
                 Ok(cas_response)
             }
             404 => {
-                // All hashes not found — return empty response gracefully
+                // An all-missing batch is a cache miss, not an operational error.
+                // This allows callers to continue to their local-database fallback.
                 Ok(CAPromptStoreReadResponse {
                     results: Vec::new(),
                     success_count: 0,
@@ -128,13 +163,12 @@ mod tests {
     use crate::api::types::{CasObject, CasUploadRequest};
     use std::collections::HashMap;
 
-    /// Test that CAS hash validation rejects non-hex characters
+    /// Query delimiters and other non-hex characters must not reach the HTTP layer.
     #[test]
     fn test_cas_hash_validation_rejects_non_hex() {
         let ctx = ApiContext::without_auth(Some("https://example.com".to_string()));
         let client = ApiClient::new(ctx);
 
-        // Non-hex characters should be rejected
         let result = client.read_ca_prompt_store(&["abc123", "not-hex!"]);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -150,20 +184,16 @@ mod tests {
         }
     }
 
-    /// Test that CAS hash validation accepts valid hex hashes
+    /// Valid hashes must pass local validation even if the subsequent request fails.
     #[test]
     fn test_cas_hash_validation_accepts_hex() {
-        // We can't test the actual HTTP call, but we can verify the validation
-        // by checking that hex-only hashes don't trigger the validation error.
-        // The actual HTTP call will fail (no server), but it should fail with
-        // a network error, not a validation error.
+        // `.invalid` is reserved for names that cannot resolve, so this isolates the
+        // validation assertion without depending on a live CAS server.
         let ctx = ApiContext::without_auth(Some("https://nonexistent.invalid".to_string()));
         let client = ApiClient::new(ctx);
 
         let result = client.read_ca_prompt_store(&["abc123", "def456"]);
-        // The validation should pass; the HTTP call will fail
         if let Err(GitAiError::Generic(msg)) = result {
-            // Should NOT be the hash validation error
             assert!(
                 !msg.contains("non-hex characters"),
                 "Hex hashes should not trigger validation error, got: {}",
@@ -172,7 +202,7 @@ mod tests {
         }
     }
 
-    /// Test that CAS upload request serializes correctly
+    /// CAS uploads must preserve the hash, content, and metadata wire fields.
     #[test]
     fn test_cas_upload_request_serialization() {
         let mut metadata = HashMap::new();
@@ -192,7 +222,7 @@ mod tests {
         assert!(json.contains("prompt"));
     }
 
-    /// Test that empty CAS upload request is valid
+    /// Empty batches remain serializable for callers that use them as probes.
     #[test]
     fn test_cas_upload_request_empty() {
         let request = CasUploadRequest { objects: vec![] };
