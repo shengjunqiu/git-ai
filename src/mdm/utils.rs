@@ -314,6 +314,54 @@ fn get_editor_cli_candidates(cli_name: &str) -> Vec<(PathBuf, PathBuf)> {
                 }
             }
         }
+        "trae" => {
+            #[cfg(target_os = "macos")]
+            {
+                for apps_dir in [PathBuf::from("/Applications"), home.join("Applications")] {
+                    for app_name in ["Trae.app", "TRAE.app", "Trae CN.app"] {
+                        let app = apps_dir.join(app_name);
+                        candidates.push((
+                            app.join("Contents").join("MacOS").join("Electron"),
+                            app.join("Contents")
+                                .join("Resources")
+                                .join("app")
+                                .join("out")
+                                .join("cli.js"),
+                        ));
+                    }
+                }
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                for base in [
+                    PathBuf::from("/opt/Trae"),
+                    PathBuf::from("/usr/share/trae"),
+                    home.join(".local").join("share").join("trae"),
+                    home.join(".local").join("share").join("Trae"),
+                ] {
+                    candidates.push((
+                        base.join("trae"),
+                        base.join("resources")
+                            .join("app")
+                            .join("out")
+                            .join("cli.js"),
+                    ));
+                }
+            }
+            #[cfg(windows)]
+            {
+                if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                    let base = PathBuf::from(local_app_data).join("Programs").join("Trae");
+                    candidates.push((
+                        base.join("Trae.exe"),
+                        base.join("resources")
+                            .join("app")
+                            .join("out")
+                            .join("cli.js"),
+                    ));
+                }
+            }
+        }
         "code" => {
             #[cfg(target_os = "macos")]
             {
@@ -1208,6 +1256,30 @@ mod tests {
                     .any(|(k, _)| k == "ELECTRON_RUN_AS_NODE")
             );
         }
+    }
+
+    #[test]
+    fn test_trae_editor_cli_candidates_include_known_install_locations() {
+        let candidates = get_editor_cli_candidates("trae");
+
+        #[cfg(target_os = "macos")]
+        assert!(candidates.iter().any(|(electron, cli_js)| {
+            electron.ends_with("Trae.app/Contents/MacOS/Electron")
+                && cli_js.ends_with("Trae.app/Contents/Resources/app/out/cli.js")
+        }));
+
+        #[cfg(windows)]
+        if std::env::var("LOCALAPPDATA").is_ok() {
+            assert!(candidates.iter().any(|(electron, cli_js)| {
+                electron.ends_with("Trae/Trae.exe")
+                    && cli_js.ends_with("Trae/resources/app/out/cli.js")
+            }));
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert!(candidates.iter().any(|(electron, cli_js)| {
+            electron.ends_with("trae/trae") && cli_js.ends_with("trae/resources/app/out/cli.js")
+        }));
     }
 
     #[test]

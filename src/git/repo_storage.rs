@@ -1,7 +1,7 @@
 use crate::authorship::attribution_tracker::LineAttribution;
 use crate::authorship::authorship_log::{HumanRecord, PromptRecord};
 use crate::authorship::authorship_log_serialization::generate_short_hash;
-use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
+use crate::authorship::working_log::{AgentId, CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
 use crate::utils::{LockFile, normalize_to_posix};
@@ -15,6 +15,19 @@ use std::time::{Duration, Instant, SystemTime};
 const WORKING_LOG_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKING_LOG_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 const WORKING_LOG_LOCK_FILE: &str = "working_log.lock";
+const ACTIVE_AGENT_EDITS_FILE: &str = "active_agent_edits.json";
+const ACTIVE_AGENT_EDIT_TTL_SECS: u64 = 120;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ActiveAgentEdit {
+    agent: AgentId,
+    started_at: u64,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ActiveAgentEdits {
+    files: HashMap<String, ActiveAgentEdit>,
+}
 
 /// Initial attributions data structure stored in the INITIAL file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -349,7 +362,97 @@ impl PersistedWorkingLog {
             fs::remove_file(&self.initial_file)?;
         }
 
+        let active_agent_edits_file = self.dir.join(ACTIVE_AGENT_EDITS_FILE);
+        if active_agent_edits_file.exists() {
+            fs::remove_file(active_agent_edits_file)?;
+        }
+
         Ok(())
+    }
+
+    fn read_active_agent_edits_unlocked(&self) -> ActiveAgentEdits {
+        let path = self.dir.join(ACTIVE_AGENT_EDITS_FILE);
+        let Ok(content) = fs::read_to_string(&path) else {
+            return ActiveAgentEdits::default();
+        };
+
+        match serde_json::from_str(&content) {
+            Ok(edits) => edits,
+            Err(error) => {
+                tracing::debug!(
+                    "Ignoring invalid active agent edit state at {}: {}",
+                    path.display(),
+                    error
+                );
+                ActiveAgentEdits::default()
+            }
+        }
+    }
+
+    fn write_active_agent_edits_unlocked(
+        &self,
+        edits: &ActiveAgentEdits,
+    ) -> Result<(), GitAiError> {
+        let path = self.dir.join(ACTIVE_AGENT_EDITS_FILE);
+        if edits.files.is_empty() {
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+            return Ok(());
+        }
+
+        fs::write(path, serde_json::to_vec(edits)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_agent_edits_active_unlocked(
+        &self,
+        files: &[String],
+        agent: &AgentId,
+        started_at: u64,
+    ) -> Result<(), GitAiError> {
+        let mut edits = self.read_active_agent_edits_unlocked();
+        for file in files {
+            edits.files.insert(
+                normalize_to_posix(file),
+                ActiveAgentEdit {
+                    agent: agent.clone(),
+                    started_at,
+                },
+            );
+        }
+        self.write_active_agent_edits_unlocked(&edits)
+    }
+
+    pub(crate) fn has_active_agent_edits_unlocked(
+        &self,
+        files: &[String],
+        now: u64,
+    ) -> Result<bool, GitAiError> {
+        let mut edits = self.read_active_agent_edits_unlocked();
+        let count_before = edits.files.len();
+        edits
+            .files
+            .retain(|_, edit| now.saturating_sub(edit.started_at) < ACTIVE_AGENT_EDIT_TTL_SECS);
+        if edits.files.len() != count_before {
+            self.write_active_agent_edits_unlocked(&edits)?;
+        }
+
+        Ok(files
+            .iter()
+            .map(|file| normalize_to_posix(file))
+            .any(|file| edits.files.contains_key(&file)))
+    }
+
+    pub(crate) fn clear_active_agent_edits_unlocked(
+        &self,
+        files: &[String],
+    ) -> Result<(), GitAiError> {
+        let mut edits = self.read_active_agent_edits_unlocked();
+        for file in files {
+            edits.files.remove(&normalize_to_posix(file));
+        }
+        self.write_active_agent_edits_unlocked(&edits)
     }
 
     /* blob storage */
@@ -916,6 +1019,75 @@ mod tests {
 
         let content = fs::read_to_string(&rewrite_log_file).expect("Failed to read rewrite_log");
         assert_eq!(content, "", "rewrite_log should be empty by default");
+    }
+
+    #[test]
+    fn test_active_agent_edit_marker_lifecycle() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+        let working_log = repo_storage
+            .working_log_for_base_commit("test-commit-sha")
+            .unwrap();
+        let agent = AgentId {
+            tool: "trae".to_string(),
+            id: "session-1".to_string(),
+            model: "test-model".to_string(),
+        };
+        let files = vec!["src/a.rs".to_string(), "src/b.rs".to_string()];
+        let _guard = working_log.acquire_lock().unwrap();
+
+        working_log
+            .mark_agent_edits_active_unlocked(&files, &agent, 100)
+            .unwrap();
+        assert!(
+            working_log
+                .has_active_agent_edits_unlocked(&["src/a.rs".to_string()], 101)
+                .unwrap()
+        );
+
+        working_log
+            .clear_active_agent_edits_unlocked(&["src/a.rs".to_string()])
+            .unwrap();
+        assert!(
+            !working_log
+                .has_active_agent_edits_unlocked(&["src/a.rs".to_string()], 101)
+                .unwrap()
+        );
+        assert!(
+            working_log
+                .has_active_agent_edits_unlocked(&["src/b.rs".to_string()], 101)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_active_agent_edit_marker_expires() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+        let working_log = repo_storage
+            .working_log_for_base_commit("test-commit-sha")
+            .unwrap();
+        let agent = AgentId {
+            tool: "qoder".to_string(),
+            id: "session-1".to_string(),
+            model: "test-model".to_string(),
+        };
+        let files = vec!["src/main.rs".to_string()];
+        let _guard = working_log.acquire_lock().unwrap();
+
+        working_log
+            .mark_agent_edits_active_unlocked(&files, &agent, 100)
+            .unwrap();
+        assert!(
+            !working_log
+                .has_active_agent_edits_unlocked(&files, 100 + ACTIVE_AGENT_EDIT_TTL_SECS,)
+                .unwrap()
+        );
+        assert!(!working_log.dir.join(ACTIVE_AGENT_EDITS_FILE).exists());
     }
 
     #[test]

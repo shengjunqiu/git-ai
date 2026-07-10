@@ -800,6 +800,29 @@ fn execute_resolved_checkpoint(
         read_checkpoints_start.elapsed()
     );
 
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if kind == CheckpointKind::Human
+        && let Some(agent_run) = &agent_run_result
+        && agent_run.will_edit_filepaths.is_some()
+    {
+        working_log.mark_agent_edits_active_unlocked(
+            &resolved.files,
+            &agent_run.agent_id,
+            now_secs,
+        )?;
+    }
+
+    if kind == CheckpointKind::KnownHuman
+        && working_log.has_active_agent_edits_unlocked(&resolved.files, now_secs)?
+    {
+        tracing::debug!("[KnownHuman] Rejected: native agent edit is active on the same file");
+        return Ok((0, 0, 0));
+    }
+
     // Reject KnownHuman checkpoints that arrive within KNOWN_HUMAN_MIN_SECS_AFTER_AI
     // seconds of an AI checkpoint on any of the same files. These are likely spurious
     // IDE save events triggered by the AI completing its edit, not genuine human keystrokes.
@@ -807,10 +830,6 @@ fn execute_resolved_checkpoint(
     // clippy would otherwise flag the comparisons as always-false for u64.
     #[cfg(not(any(test, feature = "test-support")))]
     if kind == CheckpointKind::KnownHuman {
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
         let too_soon = checkpoints.iter().rev().any(|cp| {
             cp.kind.is_ai()
                 && now_secs.saturating_sub(cp.timestamp) < KNOWN_HUMAN_MIN_SECS_AFTER_AI
@@ -954,6 +973,10 @@ fn execute_resolved_checkpoint(
                 crate::metrics::record(values, file_attrs);
             }
         }
+    }
+
+    if kind.is_ai() {
+        working_log.clear_active_agent_edits_unlocked(&resolved.files)?;
     }
 
     let agent_tool = if kind.is_ai()

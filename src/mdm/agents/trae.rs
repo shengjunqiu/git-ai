@@ -1,8 +1,11 @@
 use crate::error::GitAiError;
-use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
+use crate::mdm::hook_installer::{
+    HookCheckResult, HookInstaller, HookInstallerParams, InstallResult,
+};
 use crate::mdm::utils::{
-    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, to_git_bash_path,
-    write_atomic,
+    binary_exists, generate_diff, home_dir, install_vsc_editor_extension,
+    is_git_ai_checkpoint_command, is_vsc_editor_extension_installed, resolve_editor_cli,
+    to_git_bash_path, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -402,6 +405,61 @@ impl HookInstaller for TraeInstaller {
             Ok(None)
         } else {
             Ok(Some(diffs.join("\n")))
+        }
+    }
+
+    fn install_extras(
+        &self,
+        _params: &HookInstallerParams,
+        dry_run: bool,
+    ) -> Result<Vec<InstallResult>, GitAiError> {
+        let Some(cli) = resolve_editor_cli("trae") else {
+            return Ok(vec![InstallResult {
+                changed: false,
+                diff: None,
+                message: "Trae: Unable to install the user extension automatically. Install 'git-ai.git-ai-vscode' from Trae's extensions tab to enable human-save attribution outside managed-runtime regions."
+                    .to_string(),
+            }]);
+        };
+
+        match is_vsc_editor_extension_installed(&cli, "git-ai.git-ai-vscode") {
+            Ok(true) => Ok(vec![InstallResult {
+                changed: false,
+                diff: None,
+                message: "Trae: User extension already installed".to_string(),
+            }]),
+            Ok(false) if dry_run => Ok(vec![InstallResult {
+                changed: true,
+                diff: None,
+                message: "Trae: Pending user extension install for human-save attribution"
+                    .to_string(),
+            }]),
+            Ok(false) => match install_vsc_editor_extension(&cli, "git-ai.git-ai-vscode") {
+                Ok(()) => Ok(vec![InstallResult {
+                    changed: true,
+                    diff: None,
+                    message:
+                        "Trae: User extension installed for region-independent human-save attribution"
+                            .to_string(),
+                }]),
+                Err(error) => {
+                    tracing::debug!(
+                        "Trae: Error automatically installing user extension: {}",
+                        error
+                    );
+                    Ok(vec![InstallResult {
+                        changed: false,
+                        diff: None,
+                        message: "Trae: Unable to install the user extension automatically. Install 'git-ai.git-ai-vscode' from Trae's extensions tab to enable human-save attribution outside managed-runtime regions."
+                            .to_string(),
+                    }])
+                }
+            },
+            Err(error) => Ok(vec![InstallResult {
+                changed: false,
+                diff: None,
+                message: format!("Trae: Failed to check user extension: {}", error),
+            }]),
         }
     }
 }

@@ -48,6 +48,7 @@ export function activate(context: vscode.ExtensionContext) {
   const knownHumanManager = new KnownHumanCheckpointManager(
     vscode.version,
     context.extension.packageJSON.version,
+    ideHostCfg.kind,
   );
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {

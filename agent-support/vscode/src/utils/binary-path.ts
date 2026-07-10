@@ -1,5 +1,7 @@
 import { execFile } from "child_process";
+import * as fs from "fs";
 import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 
 let resolvedPath: string | null = null;
@@ -11,23 +13,53 @@ let extensionMode: vscode.ExtensionMode | null = null;
  */
 export function initBinaryResolver(mode: vscode.ExtensionMode): void {
   extensionMode = mode;
+  resolvedPath = findInstalledGitAiBinary();
+}
+
+export function getInstalledGitAiBinaryCandidates(
+  homeDir: string,
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform === "win32") {
+    return [path.join(homeDir, ".git-ai", "bin", "git-ai.exe")];
+  }
+  return [path.join(homeDir, ".git-ai", "bin", "git-ai")];
+}
+
+function findInstalledGitAiBinary(): string | null {
+  return getInstalledGitAiBinaryCandidates(os.homedir(), os.platform())
+    .find((candidate) => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    }) ?? null;
 }
 
 /**
- * Resolve the full path to the `git-ai` binary using a login shell.
- * Only runs in development mode — in production the plain "git-ai" name
- * is used directly (relies on the process PATH).
+ * Resolve the full path to the `git-ai` binary. Production first uses the
+ * standard per-user installation; development may additionally query a login
+ * shell so locally built binaries remain discoverable.
  *
  * The result is cached after the first successful resolution.
  */
 export function resolveGitAiBinary(): Promise<string | null> {
-  // Skip shell resolution in production — just use "git-ai"
-  if (extensionMode !== vscode.ExtensionMode.Development) {
-    return Promise.resolve(null);
-  }
-
   if (resolvedPath) {
     return Promise.resolve(resolvedPath);
+  }
+
+  const installedBinary = findInstalledGitAiBinary();
+  if (installedBinary) {
+    resolvedPath = installedBinary;
+    return Promise.resolve(resolvedPath);
+  }
+
+  // Production installations normally use ~/.git-ai/bin. If it is absent,
+  // retain the PATH fallback without spawning a login shell from the editor.
+  if (extensionMode !== vscode.ExtensionMode.Development) {
+    return Promise.resolve(null);
   }
   if (resolvePromise) {
     return resolvePromise;

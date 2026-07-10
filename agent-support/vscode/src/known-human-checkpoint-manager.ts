@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import { spawn } from "child_process";
-import { getGitAiBinary } from "./utils/binary-path";
+import { getGitAiBinary, resolveGitAiBinary } from "./utils/binary-path";
 import { getGitRepoRoot } from "./utils/git-api";
 
 /**
@@ -12,7 +12,7 @@ import { getGitRepoRoot } from "./utils/git-api";
  * Skips non-file-scheme documents and .vscode/ internal files.
  */
 export class KnownHumanCheckpointManager {
-  private readonly debounceMs = 500;
+  private readonly debounceMs: number;
 
   // per repo root: pending debounce timer
   private pendingTimers = new Map<string, NodeJS.Timeout>();
@@ -23,7 +23,11 @@ export class KnownHumanCheckpointManager {
   constructor(
     private readonly editorVersion: string,
     private readonly extensionVersion: string,
-  ) {}
+    private readonly editor: string = "vscode",
+    debounceMs: number = 500,
+  ) {
+    this.debounceMs = debounceMs;
+  }
 
   public handleSaveEvent(doc: vscode.TextDocument): void {
     if (doc.uri.scheme !== "file") {
@@ -109,8 +113,13 @@ export class KnownHumanCheckpointManager {
 
     const editedFilepaths = Object.keys(dirtyFiles);
 
+    // Trae and other VS Code-derived hosts may start extension hosts without
+    // ~/.git-ai/bin on PATH. Resolve the normal per-user installation before
+    // spawning so human-save attribution does not depend on managed runtimes.
+    await resolveGitAiBinary();
+
     const hookInput = JSON.stringify({
-      editor: "vscode",
+      editor: this.editor,
       editor_version: this.editorVersion,
       extension_version: this.extensionVersion,
       cwd: repoRoot,

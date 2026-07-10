@@ -12,6 +12,7 @@ export type IDEHostConfiguration = {
 
 export const IDEHostKindCursor = 'cursor' as const;
 export const IDEHostKindQoder = 'qoder' as const;
+export const IDEHostKindTrae = 'trae' as const;
 export const IDEHostKindWindsurf = 'windsurf' as const;
 export const IDEHostKindVSCode = 'vscode' as const;
 export const IDEHostKindUnknown = 'unknown' as const;
@@ -19,6 +20,7 @@ export const IDEHostKindUnknown = 'unknown' as const;
 export type IDEHostKind =
   | typeof IDEHostKindCursor
   | typeof IDEHostKindQoder
+  | typeof IDEHostKindTrae
   | typeof IDEHostKindWindsurf
   | typeof IDEHostKindVSCode
   | typeof IDEHostKindUnknown;
@@ -49,6 +51,7 @@ export function detectIDEHost(): IDEHostConfiguration {
   let kind: IDEHostKind =
     has("cursor") ? "cursor" :
     has("qoder") ? "qoder" :
+    has("trae") ? "trae" :
     has("windsurf") ? "windsurf" :
     has("vscodium") || uriScheme === "vscode-insiders" || uriScheme === "vscode" || appName.includes("visual studio code") ? "vscode" :
     "unknown";

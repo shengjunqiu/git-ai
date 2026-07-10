@@ -167,6 +167,10 @@ if (!isAdmin) {
     document.getElementById('admin-nav-section').style.display = 'none';
     document.getElementById('admin-nav-users').style.display = 'none';
     document.getElementById('admin-nav-apikeys').style.display = 'none';
+    const orgNavItem = document.getElementById('org-nav-item');
+    if (orgNavItem) orgNavItem.style.display = 'none';
+    const orgSection = document.getElementById('section-organizations');
+    if (orgSection) orgSection.style.display = 'none';
     document.getElementById('gitai-status-card').style.display = '';
     document.getElementById('developer-count-card').style.display = 'none';
 }
@@ -193,8 +197,8 @@ function refreshCurrentSection() {
 
 // --- Navigation ---
 function showSection(id) {
-    // Non-admin users cannot access admin sections
-    if (!isAdmin && (id === 'users' || id === 'apikeys')) {
+    // Non-admin users cannot access restricted sections
+    if (!isAdmin && (id === 'users' || id === 'apikeys' || id === 'organizations')) {
         return;
     }
     currentSection = id;
