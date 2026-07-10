@@ -223,8 +223,18 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
         return;
       }
 
+      const departmentsById = new Map(departments.map(department => [department.id, department]));
       departments.forEach(department => {
-        appendOption(departmentSelect, department.id, department.name);
+        const path = [];
+        const visited = new Set();
+        let current = department;
+        while (current && !visited.has(current.id)) {
+          visited.add(current.id);
+          path.push(current.name);
+          current = current.parent_id ? departmentsById.get(current.parent_id) : null;
+        }
+        const code = department.code ? ` (${department.code})` : '';
+        appendOption(departmentSelect, department.id, `${path.reverse().join(' / ')}${code}`);
       });
       departmentSelect.disabled = false;
       if (departments.length === 1) {

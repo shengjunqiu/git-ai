@@ -30,6 +30,8 @@ function fmtTimeAgo(value) {
 let refreshInterval = null;
 const AUTO_REFRESH_MS = 60000; // 60 seconds
 let currentSection = 'overview';
+let departmentTreeRows = [];
+let activeDepartmentParentId = null;
 const TABLE_PAGE_SIZE = 25;
 const tablePageState = {};
 const tablePagerContainers = {
@@ -971,36 +973,115 @@ async function loadAdminOrganizations() {
 async function loadDepartments() {
     setTableLoading('departments-table', 5);
     try {
-        const d = await fetchPaginatedJson('departments', '/api/v1/aggregate/departments', '加载部门列表失败');
-        const departments = pageItems(d, 'departments');
-        if (departments.length === 0) {
+        departmentTreeRows = await fetchAllPaginated(
+            '/api/v1/aggregate/departments',
+            'departments'
+        );
+        if (departmentTreeRows.length === 0) {
+            renderDepartmentBreadcrumb();
             document.getElementById('departments-table').innerHTML =
                 '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
-            renderPaginationControls('departments');
             return;
         }
 
-        document.getElementById('departments-table').innerHTML = departments.map(dept => {
-            const departmentName = escapeHtml(dept.department || '—');
-            const orgName = escapeHtml(dept.organization || '—');
-            const total = dept.w_total || 0;
-            const ai = dept.w_ai || 0;
-            const pct = total > 0 ? (ai / total) * 100 : 0;
-            return `<tr>
-                <td><strong>${orgName}</strong></td>
-                <td><strong>${departmentName}</strong></td>
-                <td>${fmt(dept.total_commits || 0)}</td>
-                <td>${pctBar(pct)} <span style="font-size:0.8rem">${pct.toFixed(1)}%</span></td>
-                <td>${fmt(total)}</td>
-            </tr>`;
-        }).join('');
-        renderPaginationControls('departments');
+        if (activeDepartmentParentId && !departmentTreeRows.some(dept => dept.id === activeDepartmentParentId)) {
+            activeDepartmentParentId = null;
+        }
+        renderDepartmentLevel();
     } catch(e) {
         console.error(e);
         document.getElementById('departments-table').innerHTML =
             '<tr><td colspan="5" style="color:var(--danger)">加载部门列表失败</td></tr>';
-        renderPaginationControls('departments');
     }
+}
+
+function openDepartmentLevel(parentId) {
+    activeDepartmentParentId = parentId || null;
+    renderDepartmentLevel();
+}
+
+function backDepartmentLevel() {
+    if (!activeDepartmentParentId) return;
+    const current = departmentTreeRows.find(dept => dept.id === activeDepartmentParentId);
+    activeDepartmentParentId = current?.parent_id || null;
+    renderDepartmentLevel();
+}
+
+function renderDepartmentBreadcrumb() {
+    const breadcrumb = document.getElementById('departments-breadcrumb');
+    const levelTitle = document.getElementById('departments-level-title');
+    const backButton = document.getElementById('departments-back');
+    if (!breadcrumb || !levelTitle || !backButton) return;
+
+    const byId = new Map(departmentTreeRows.map(dept => [dept.id, dept]));
+    const trail = [];
+    const visited = new Set();
+    let current = activeDepartmentParentId ? byId.get(activeDepartmentParentId) : null;
+    while (current && !visited.has(current.id)) {
+        visited.add(current.id);
+        trail.push(current);
+        current = current.parent_id ? byId.get(current.parent_id) : null;
+    }
+    trail.reverse();
+
+    const parts = [activeDepartmentParentId
+        ? '<button class="btn btn-sm" onclick="openDepartmentLevel(null)">全部部门</button>'
+        : '<strong>全部部门</strong>'];
+    trail.forEach((dept, index) => {
+        parts.push('<span style="color:var(--text-muted)">/</span>');
+        if (index === trail.length - 1) {
+            parts.push(`<strong>${escapeHtml(dept.department || '—')}</strong>`);
+        } else {
+            parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel('${dept.id}')">${escapeHtml(dept.department || '—')}</button>`);
+        }
+    });
+    breadcrumb.innerHTML = parts.join(' ');
+
+    const parent = activeDepartmentParentId ? byId.get(activeDepartmentParentId) : null;
+    levelTitle.textContent = parent
+        ? `当前显示「${parent.department || '—'}」的直属下级部门`
+        : '当前显示顶层部门';
+    backButton.style.display = activeDepartmentParentId ? '' : 'none';
+}
+
+function renderDepartmentLevel() {
+    renderDepartmentBreadcrumb();
+    const departments = departmentTreeRows.filter(dept =>
+        (dept.parent_id || null) === activeDepartmentParentId
+    );
+
+    if (departments.length === 0) {
+        document.getElementById('departments-table').innerHTML =
+            '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>当前层级暂无下级部门</p></div></td></tr>';
+        return;
+    }
+
+    document.getElementById('departments-table').innerHTML = departments.map(dept => {
+            const departmentName = escapeHtml(dept.department || '—');
+            const departmentCode = escapeHtml(dept.code || '—');
+            const orgName = escapeHtml(dept.organization || '—');
+            const depth = Math.max(1, Number(dept.depth) || 1);
+            const nodeIcon = dept.has_children ? '›' : '•';
+            const nodeType = dept.has_children ? '汇总' : '终端';
+            const rowAction = dept.has_children
+                ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer" title="点击进入下一级部门"`
+                : '';
+            const total = dept.w_total || 0;
+            const ai = dept.w_ai || 0;
+            const pct = total > 0 ? (ai / total) * 100 : 0;
+            return `<tr${rowAction}>
+                <td><strong>${orgName}</strong></td>
+                <td>
+                    <div style="display:flex;align-items:center;gap:0.45rem" title="第 ${depth} 层 · ${nodeType}节点">
+                        <span style="color:var(--text-muted);width:0.9rem">${nodeIcon}</span>
+                        <span><strong>${departmentName}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${departmentCode} · 第 ${depth} 层 · ${nodeType}${dept.has_children ? ' · 点击进入' : ''}</span></span>
+                    </div>
+                </td>
+                <td>${fmt(dept.total_commits || 0)}</td>
+                <td>${pctBar(pct)} <span style="font-size:0.8rem">${pct.toFixed(1)}%</span></td>
+                <td>${fmt(total)}</td>
+            </tr>`;
+    }).join('');
 }
 
 async function showCreateDepartmentModal() {
@@ -1026,11 +1107,21 @@ async function showCreateDepartmentModal() {
             <div class="modal-title">新增部门</div>
             <div class="form-group">
                 <label class="form-label">所属组织</label>
-                <select id="create-dept-org" class="form-input">${orgOptions}</select>
+                <select id="create-dept-org" class="form-input" onchange="loadCreateDepartmentParents()">${orgOptions}</select>
             </div>
             <div class="form-group">
                 <label class="form-label">部门名称</label>
                 <input type="text" id="create-dept-name" class="form-input" placeholder="例如：技术中心" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">部门编码（可选）</label>
+                <input type="text" id="create-dept-code" class="form-input" placeholder="例如：F01289；留空自动生成" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">上级部门（可选）</label>
+                <select id="create-dept-parent" class="form-input">
+                    <option value="">无（根部门）</option>
+                </select>
             </div>
             <div class="form-actions">
                 <button class="btn" onclick="closeModal()">取消</button>
@@ -1038,11 +1129,38 @@ async function showCreateDepartmentModal() {
             </div>
         </div>
     </div>`;
+    await loadCreateDepartmentParents();
+}
+
+async function loadCreateDepartmentParents() {
+    const orgId = document.getElementById('create-dept-org')?.value;
+    const parentSelect = document.getElementById('create-dept-parent');
+    if (!orgId || !parentSelect) return;
+
+    parentSelect.disabled = true;
+    parentSelect.innerHTML = '<option value="">加载上级部门中...</option>';
+    try {
+        const departments = await fetchAllPaginated(
+            `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
+            'departments'
+        );
+        parentSelect.innerHTML = '<option value="">无（根部门）</option>' + departments.map(dept => {
+            const label = `${escapeHtml(dept.code || '—')} · ${escapeHtml(dept.name || '—')}`;
+            return `<option value="${dept.id}">${label}</option>`;
+        }).join('');
+    } catch (e) {
+        parentSelect.innerHTML = '<option value="">上级部门加载失败</option>';
+        showToast(e.message || '加载上级部门失败', 'error');
+    } finally {
+        parentSelect.disabled = false;
+    }
 }
 
 async function createDepartment() {
     const org_id = document.getElementById('create-dept-org').value;
     const name = document.getElementById('create-dept-name').value.trim();
+    const code = document.getElementById('create-dept-code').value.trim() || null;
+    const parent_id = document.getElementById('create-dept-parent').value || null;
 
     if (!org_id || !name) {
         showToast('请填写组织和部门名称', 'error');
@@ -1053,7 +1171,7 @@ async function createDepartment() {
         const r = await fetch('/api/admin/departments', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ org_id, name })
+            body: JSON.stringify({ org_id, name, code, parent_id })
         });
         const d = await r.json();
         if (r.ok) {

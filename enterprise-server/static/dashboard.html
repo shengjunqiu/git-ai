@@ -247,16 +247,22 @@
                 <div class="page-header">
                     <div>
                         <div class="page-title">部门</div>
-                        <div class="page-subtitle">查看组织下的部门信息</div>
+                        <div class="page-subtitle">点击汇总节点逐层进入下级部门；汇总节点包含自身及全部下级数据，终端节点显示直属数据</div>
                     </div>
                     <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
                 </div>
                 <div class="table-card">
+                    <div style="display:flex;align-items:center;gap:0.75rem;padding:1rem 1rem 0.25rem;flex-wrap:wrap">
+                        <button id="departments-back" class="btn btn-sm" onclick="backDepartmentLevel()" style="display:none">← 上一级</button>
+                        <div>
+                            <div id="departments-breadcrumb" style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap"><strong>全部部门</strong></div>
+                            <div id="departments-level-title" style="margin-top:0.35rem;color:var(--text-muted);font-size:0.82rem">当前显示顶层部门</div>
+                        </div>
+                    </div>
                     <table>
                         <thead><tr><th>组织</th><th>部门</th><th>提交数</th><th>AI 代码占比</th><th>总代码行</th></tr></thead>
                         <tbody id="departments-table"><tr><td colspan="5">加载中...</td></tr></tbody>
                     </table>
-                    <div id="departments-pagination" class="table-pagination"></div>
                 </div>
             </div>
 

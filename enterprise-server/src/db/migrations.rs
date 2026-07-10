@@ -116,6 +116,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "028_git_tracking_upload_authorization",
         include_str!("../../migrations/028_git_tracking_upload_authorization.sql"),
     ),
+    (
+        "029_hierarchical_default_departments",
+        include_str!("../../migrations/029_hierarchical_default_departments.sql"),
+    ),
+    (
+        "030_promote_linewell_top_level_departments",
+        include_str!("../../migrations/030_promote_linewell_top_level_departments.sql"),
+    ),
 ];
 
 /// Run all database migrations
@@ -350,6 +358,67 @@ mod tests {
                 .is_some_and(|default| default.contains("false")),
             "git_tracking_upload_enabled should default to false"
         );
+
+        let seeded_department_summary: (i64, i64, Option<i32>) = sqlx::query_as(
+            r#"WITH RECURSIVE department_tree AS (
+                SELECT d.id, 1 AS depth
+                FROM departments d
+                JOIN organizations o ON o.id = d.org_id
+                WHERE o.slug = 'linewell.com'
+                  AND d.parent_id IS NULL
+                  AND d.code NOT LIKE 'LEGACY-%'
+
+                UNION ALL
+
+                SELECT child.id, parent.depth + 1
+                FROM departments child
+                JOIN department_tree parent ON child.parent_id = parent.id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM departments d
+                 JOIN organizations o ON o.id = d.org_id
+                 WHERE o.slug = 'linewell.com' AND d.code NOT LIKE 'LEGACY-%'),
+                (SELECT COUNT(*) FROM departments d
+                 JOIN organizations o ON o.id = d.org_id
+                 WHERE o.slug = 'linewell.com'
+                   AND d.parent_id IS NULL
+                   AND d.code NOT LIKE 'LEGACY-%'),
+                MAX(depth)
+            FROM department_tree"#,
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert_eq!(seeded_department_summary, (418, 35, Some(6)));
+
+        let corrected_default_departments: (bool, bool, bool) = sqlx::query_as(
+            r#"SELECT
+                NOT EXISTS (
+                    SELECT 1
+                    FROM departments d
+                    JOIN organizations o ON o.id = d.org_id
+                    WHERE o.slug = 'linewell.com' AND d.code = 'F00001'
+                ),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM departments d
+                    JOIN organizations o ON o.id = d.org_id
+                    WHERE o.slug = 'linewell.com' AND d.slug = 'rd-center'
+                ),
+                EXISTS (
+                    SELECT 1
+                    FROM departments child
+                    JOIN departments parent
+                      ON parent.id = child.parent_id
+                     AND parent.org_id = child.org_id
+                    JOIN organizations o ON o.id = child.org_id
+                    WHERE o.slug = 'linewell.com'
+                      AND child.code = 'F01332'
+                      AND parent.code = 'F01330'
+                )"#,
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert_eq!(corrected_default_departments, (true, true, true));
 
         let org_id = Uuid::new_v4();
         let user_id = Uuid::new_v4();

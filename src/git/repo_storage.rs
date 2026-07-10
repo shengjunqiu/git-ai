@@ -424,6 +424,16 @@ impl PersistedWorkingLog {
         self.write_active_agent_edits_unlocked(&edits)
     }
 
+    pub(crate) fn mark_agent_edits_active(
+        &self,
+        files: &[String],
+        agent: &AgentId,
+        started_at: u64,
+    ) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+        self.mark_agent_edits_active_unlocked(files, agent, started_at)
+    }
+
     pub(crate) fn has_active_agent_edits_unlocked(
         &self,
         files: &[String],
@@ -453,6 +463,11 @@ impl PersistedWorkingLog {
             edits.files.remove(&normalize_to_posix(file));
         }
         self.write_active_agent_edits_unlocked(&edits)
+    }
+
+    pub(crate) fn clear_active_agent_edits(&self, files: &[String]) -> Result<(), GitAiError> {
+        let _guard = self.acquire_lock()?;
+        self.clear_active_agent_edits_unlocked(files)
     }
 
     /* blob storage */

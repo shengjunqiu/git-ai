@@ -748,6 +748,8 @@ pub struct ListDepartmentsQuery {
 pub struct CreateDepartmentRequest {
     pub org_id: Uuid,
     pub name: String,
+    pub code: Option<String>,
+    pub parent_id: Option<Uuid>,
 }
 
 /// GET /api/admin/departments — List departments
@@ -769,26 +771,36 @@ pub async fn list_departments(
         Uuid,
         String,
         String,
+        String,
+        Option<Uuid>,
         chrono::DateTime<chrono::Utc>,
         String,
         String,
+        Option<String>,
+        Option<String>,
         i64,
     )> = sqlx::query_as(
         r#"SELECT
             d.id,
             d.org_id,
+            d.code,
             d.name,
             d.slug,
+            d.parent_id,
             d.created_at,
             o.name AS org_name,
             o.slug AS org_slug,
+            parent.code AS parent_code,
+            parent.name AS parent_name,
             COUNT(om.user_id)::bigint AS member_count
         FROM departments d
         JOIN organizations o ON o.id = d.org_id
+        LEFT JOIN departments parent ON parent.id = d.parent_id AND parent.org_id = d.org_id
         LEFT JOIN org_members om ON om.org_id = d.org_id AND om.department_id = d.id
         WHERE ($1::uuid IS NULL OR d.org_id = $1)
           AND ($2::text IS NULL OR (o.name, d.name, d.id) > ($2::text, $3::text, $4::uuid))
-        GROUP BY d.id, d.org_id, d.name, d.slug, d.created_at, o.name, o.slug
+        GROUP BY d.id, d.org_id, d.code, d.name, d.slug, d.parent_id, d.created_at,
+                 o.name, o.slug, parent.code, parent.name
         ORDER BY o.name ASC, d.name ASC, d.id ASC
         LIMIT $5"#,
     )
@@ -804,7 +816,7 @@ pub async fn list_departments(
     let has_more = truncate_to_limit(&mut rows, limit);
     let next_cursor = if has_more {
         rows.last()
-            .map(|(id, _, name, _, _, org_name, _, _)| {
+            .map(|(id, _, _, name, _, _, _, org_name, _, _, _, _)| {
                 encode_department_list_cursor(org_name, name, *id)
             })
             .transpose()?
@@ -815,12 +827,29 @@ pub async fn list_departments(
     let departments: Vec<Value> = rows
         .iter()
         .map(
-            |(id, org_id, name, slug, created_at, org_name, org_slug, member_count)| {
+            |(
+                id,
+                org_id,
+                code,
+                name,
+                slug,
+                parent_id,
+                created_at,
+                org_name,
+                org_slug,
+                parent_code,
+                parent_name,
+                member_count,
+            )| {
                 json!({
                     "id": id.to_string(),
                     "org_id": org_id.to_string(),
+                    "code": code,
                     "name": name,
                     "slug": slug,
+                    "parent_id": parent_id.map(|id| id.to_string()),
+                    "parent_code": parent_code,
+                    "parent_name": parent_name,
                     "org_name": org_name,
                     "org_slug": org_slug,
                     "member_count": member_count,
@@ -849,12 +878,43 @@ pub async fn create_department(
 
     let dept_id = Uuid::new_v4();
     let slug = generate_department_slug(name, dept_id);
+    let code = match req.code.as_deref().map(str::trim) {
+        Some("") => {
+            return Err(AppError::BadRequest(
+                "Department code cannot be empty".into(),
+            ));
+        }
+        Some(code) => code.to_ascii_uppercase(),
+        None => format!("D-{}", dept_id.simple()).to_ascii_uppercase(),
+    };
 
-    sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
+    if let Some(parent_id) = req.parent_id {
+        let parent_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM departments WHERE id = $1 AND org_id = $2)",
+        )
+        .bind(parent_id)
+        .bind(req.org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+
+        if !parent_exists {
+            return Err(AppError::BadRequest(
+                "Parent department must belong to the same organization".into(),
+            ));
+        }
+    }
+
+    sqlx::query(
+        "INSERT INTO departments (id, org_id, code, name, slug, parent_id) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
         .bind(dept_id)
         .bind(req.org_id)
+        .bind(&code)
         .bind(name)
         .bind(&slug)
+        .bind(req.parent_id)
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e))?;
@@ -866,7 +926,12 @@ pub async fn create_department(
         "department.create",
         Some("department"),
         Some(&dept_id.to_string()),
-        Some(json!({"name": name, "slug": slug})),
+        Some(json!({
+            "code": code,
+            "name": name,
+            "slug": slug,
+            "parent_id": req.parent_id,
+        })),
         None,
         None,
     )
@@ -876,8 +941,10 @@ pub async fn create_department(
     Ok(Json(json!({
         "id": dept_id.to_string(),
         "org_id": req.org_id.to_string(),
+        "code": code,
         "name": name,
         "slug": slug,
+        "parent_id": req.parent_id.map(|id| id.to_string()),
     })))
 }
 
@@ -963,6 +1030,19 @@ pub async fn delete_department(
     _auth: AdminGuard,
     Path(dept_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let has_children: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM departments WHERE parent_id = $1)")
+            .bind(dept_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(AppError::Database)?;
+
+    if has_children {
+        return Err(AppError::BadRequest(
+            "Department with child departments cannot be deleted".into(),
+        ));
+    }
+
     let result = sqlx::query("DELETE FROM departments WHERE id = $1")
         .bind(dept_id)
         .execute(&state.db)

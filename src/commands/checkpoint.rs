@@ -105,6 +105,20 @@ struct ResolvedCheckpointExecution {
     dirty_files: HashMap<String, String>,
 }
 
+struct ActiveAgentEditMarkerContext {
+    files: Vec<String>,
+    working_log: PersistedWorkingLog,
+}
+
+impl ActiveAgentEditMarkerContext {
+    fn clear_if_ai(&self, kind: CheckpointKind) -> Result<(), GitAiError> {
+        if kind.is_ai() {
+            self.working_log.clear_active_agent_edits(&self.files)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BaseOverrideResolutionPolicy {
     AllowFallback,
@@ -375,6 +389,13 @@ pub(crate) fn run_with_base_commit_override_with_policy(
 ) -> Result<(usize, usize, usize), GitAiError> {
     let checkpoint_start = Instant::now();
     tracing::debug!("[BENCHMARK] Starting checkpoint run");
+    let marker_context = prepare_active_agent_edit_marker(
+        repo,
+        kind,
+        agent_run_result.as_ref(),
+        base_commit_override,
+    )?;
+
     let resolved = resolve_live_checkpoint_execution(
         repo,
         kind,
@@ -384,6 +405,9 @@ pub(crate) fn run_with_base_commit_override_with_policy(
         base_override_resolution_policy,
     )?;
     let Some(resolved) = resolved else {
+        if let Some(context) = &marker_context {
+            context.clear_if_ai(kind)?;
+        }
         tracing::debug!(
             "[BENCHMARK] Total checkpoint run took {:?}",
             checkpoint_start.elapsed()
@@ -446,6 +470,36 @@ fn filtered_pathspecs_for_agent_run_result(
     } else {
         Some(filtered)
     }
+}
+
+fn prepare_active_agent_edit_marker(
+    repo: &Repository,
+    kind: CheckpointKind,
+    agent_run_result: Option<&AgentRunResult>,
+    base_commit_override: Option<&str>,
+) -> Result<Option<ActiveAgentEditMarkerContext>, GitAiError> {
+    let Some(agent_run) = agent_run_result else {
+        return Ok(None);
+    };
+    if !matches!(agent_run.agent_id.tool.as_str(), "qoder" | "trae") {
+        return Ok(None);
+    }
+
+    let Some(files) = filtered_pathspecs_for_agent_run_result(repo, kind, Some(agent_run)) else {
+        return Ok(None);
+    };
+    let base_commit = resolve_base_commit(repo, base_commit_override);
+    let working_log = repo.storage.working_log_for_base_commit(&base_commit)?;
+
+    if kind == CheckpointKind::Human {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        working_log.mark_agent_edits_active(&files, &agent_run.agent_id, now_secs)?;
+    }
+
+    Ok(Some(ActiveAgentEditMarkerContext { files, working_log }))
 }
 
 fn resolve_base_override_dirty_file_execution(
@@ -805,17 +859,6 @@ fn execute_resolved_checkpoint(
         .unwrap_or_default()
         .as_secs();
 
-    if kind == CheckpointKind::Human
-        && let Some(agent_run) = &agent_run_result
-        && agent_run.will_edit_filepaths.is_some()
-    {
-        working_log.mark_agent_edits_active_unlocked(
-            &resolved.files,
-            &agent_run.agent_id,
-            now_secs,
-        )?;
-    }
-
     if kind == CheckpointKind::KnownHuman
         && working_log.has_active_agent_edits_unlocked(&resolved.files, now_secs)?
     {
@@ -1043,6 +1086,9 @@ pub fn prepare_captured_checkpoint(
         ));
     };
 
+    let marker_context =
+        prepare_active_agent_edit_marker(repo, kind, agent_run_result, base_commit_override)?;
+
     let Some(resolved) = resolve_live_checkpoint_execution(
         repo,
         kind,
@@ -1052,10 +1098,16 @@ pub fn prepare_captured_checkpoint(
         BaseOverrideResolutionPolicy::AllowFallback,
     )?
     else {
+        if let Some(context) = &marker_context {
+            context.clear_if_ai(kind)?;
+        }
         return Ok(None);
     };
 
     if resolved.files.is_empty() {
+        if let Some(context) = &marker_context {
+            context.clear_if_ai(kind)?;
+        }
         return Ok(None);
     }
 
@@ -2440,6 +2492,81 @@ mod tests {
             explicit_capture_target_paths(CheckpointKind::AiAgent, Some(&ai_result)),
             None
         );
+    }
+
+    #[test]
+    fn test_native_agent_marker_covers_clean_captured_pre_tool_use() {
+        for tool in ["qoder", "trae"] {
+            let (repo, mut lines_file, _) = TmpRepo::new_with_base_commit().unwrap();
+            let mut pre_tool =
+                test_agent_run_result(CheckpointKind::Human, None, Some(vec!["lines.md"]), None);
+            pre_tool.agent_id.tool = tool.to_string();
+
+            assert!(
+                prepare_captured_checkpoint(
+                    repo.gitai_repo(),
+                    tool,
+                    CheckpointKind::Human,
+                    Some(&pre_tool),
+                    false,
+                    None,
+                )
+                .unwrap()
+                .is_none()
+            );
+
+            lines_file.append("AI edit\n").unwrap();
+            let known_human = test_agent_run_result(
+                CheckpointKind::KnownHuman,
+                Some(vec!["lines.md"]),
+                None,
+                None,
+            );
+            assert_eq!(
+                run(
+                    repo.gitai_repo(),
+                    tool,
+                    CheckpointKind::KnownHuman,
+                    true,
+                    Some(known_human),
+                    false,
+                )
+                .unwrap(),
+                (0, 0, 0)
+            );
+
+            let mut post_tool =
+                test_agent_run_result(CheckpointKind::AiAgent, Some(vec!["lines.md"]), None, None);
+            post_tool.agent_id.tool = tool.to_string();
+            let (entries, _, _) = run(
+                repo.gitai_repo(),
+                tool,
+                CheckpointKind::AiAgent,
+                true,
+                Some(post_tool),
+                false,
+            )
+            .unwrap();
+            assert!(entries > 0);
+
+            lines_file.append("Manual edit\n").unwrap();
+            let known_human = test_agent_run_result(
+                CheckpointKind::KnownHuman,
+                Some(vec!["lines.md"]),
+                None,
+                None,
+            );
+            let (entries, _, _) = run(
+                repo.gitai_repo(),
+                tool,
+                CheckpointKind::KnownHuman,
+                true,
+                Some(known_human),
+                false,
+            )
+            .unwrap();
+            assert!(entries > 0);
+        }
     }
 
     #[test]

@@ -193,7 +193,7 @@ struct OrganizationAggregateCursor {
 struct DepartmentAggregateCursor {
     v: u8,
     org_name: String,
-    department_name: String,
+    sort_path: Vec<String>,
     department_id: Uuid,
 }
 
@@ -1267,27 +1267,34 @@ pub async fn list_departments(
         Uuid,
         String,
         String,
+        String,
+        Option<Uuid>,
         chrono::DateTime<chrono::Utc>,
         Uuid,
         String,
         String,
+        Option<String>,
         i64,
         Option<i64>,
         Option<i64>,
     )> = sqlx::query_as(
         r#"SELECT
             d.id,
+            d.code,
             d.name,
             d.slug,
+            d.parent_id,
             d.created_at,
             o.id AS org_id,
             o.name AS org_name,
             o.slug AS org_slug,
+            parent.name AS parent_name,
             COUNT(DISTINCT om.user_id)::bigint AS member_count,
             COALESCE(stats.total_lines, 0)::bigint AS total_lines,
             COALESCE(stats.ai_lines, 0)::bigint AS ai_lines
         FROM departments d
         JOIN organizations o ON o.id = d.org_id
+        LEFT JOIN departments parent ON parent.id = d.parent_id AND parent.org_id = d.org_id
         LEFT JOIN org_members om ON om.org_id = d.org_id AND om.department_id = d.id
         LEFT JOIN (
             SELECT
@@ -1305,7 +1312,8 @@ pub async fn list_departments(
         ) stats ON stats.org_id = d.org_id AND stats.department_id = d.id
         WHERE ($1::uuid IS NULL OR d.org_id = $1)
           AND ($2::boolean = FALSE OR d.id = $3::uuid)
-        GROUP BY d.id, d.name, d.slug, d.created_at, o.id, o.name, o.slug, stats.total_lines, stats.ai_lines
+        GROUP BY d.id, d.code, d.name, d.slug, d.parent_id, d.created_at,
+                 o.id, o.name, o.slug, parent.name, stats.total_lines, stats.ai_lines
         ORDER BY o.name ASC, d.name ASC, d.id ASC"#,
     )
     .bind(org_filter)
@@ -1320,12 +1328,15 @@ pub async fn list_departments(
         .map(
             |(
                 id,
+                code,
                 name,
                 slug,
+                parent_id,
                 created_at,
                 org_id,
                 org_name,
                 org_slug,
+                parent_name,
                 member_count,
                 total_lines,
                 ai_lines,
@@ -1334,8 +1345,11 @@ pub async fn list_departments(
                 let ai_lines = ai_lines.unwrap_or(0);
                 json!({
                     "id": id.to_string(),
+                    "code": code,
                     "name": name,
                     "slug": slug,
+                    "parent_id": parent_id.map(|id| id.to_string()),
+                    "parent_name": parent_name,
                     "created_at": created_at,
                     "org_id": org_id.to_string(),
                     "org_name": org_name,
@@ -1374,37 +1388,41 @@ pub async fn aggregate_departments(
     let cursor: Option<DepartmentAggregateCursor> =
         decode_dashboard_cursor(query.cursor.as_deref())?;
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
-    let cursor_department_name = cursor.as_ref().map(|cursor| cursor.department_name.clone());
+    let cursor_sort_path = cursor.as_ref().map(|cursor| cursor.sort_path.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
 
     let metrics_department_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
-                    r.org_id,
-                    om.department_id,
+                    descendants.org_id,
+                    descendants.ancestor_id,
                     COALESCE(SUM(r.commits), 0)::bigint AS commits,
                     COALESCE(SUM(r.total_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(r.ai_lines), 0)::bigint AS ai_lines
-                FROM department_page dp
-                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                FROM department_descendants descendants
+                JOIN org_members om
+                  ON om.org_id = descendants.org_id
+                 AND om.department_id = descendants.descendant_id
                 JOIN metrics_daily_rollups r ON r.user_id = om.user_id
                   AND r.org_id = om.org_id
                   AND r.tool_model = ''
                 WHERE ($1::uuid IS NULL OR r.user_id = $1)
-                GROUP BY r.org_id, om.department_id"#
+                GROUP BY descendants.org_id, descendants.ancestor_id"#
     } else {
         r#"SELECT
-                    m.org_id,
-                    om.department_id,
+                    descendants.org_id,
+                    descendants.ancestor_id,
                     COUNT(m.id)::bigint AS commits,
                     COALESCE(SUM(m.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(m.ai_additions), 0)::bigint AS ai_lines
-                FROM department_page dp
-                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                FROM department_descendants descendants
+                JOIN org_members om
+                  ON om.org_id = descendants.org_id
+                 AND om.department_id = descendants.descendant_id
                 JOIN metrics_events m ON m.user_id = om.user_id
                   AND m.org_id = om.org_id
                   AND m.event_type = 1
                 WHERE ($1::uuid IS NULL OR m.user_id = $1)
-                GROUP BY m.org_id, om.department_id"#
+                GROUP BY descendants.org_id, descendants.ancestor_id"#
     };
 
     let rows: Vec<(
@@ -1412,35 +1430,88 @@ pub async fn aggregate_departments(
         String,
         String,
         String,
+        Option<Uuid>,
+        String,
+        i32,
+        Vec<String>,
+        bool,
         Option<i64>,
         Option<i64>,
         Option<i64>,
     )> = sqlx::query_as(&format!(
-        r#"WITH department_page AS MATERIALIZED (
+        r#"WITH RECURSIVE department_tree AS MATERIALIZED (
             SELECT
                 d.id,
                 d.org_id,
+                d.code,
                 d.name,
                 d.slug,
-                o.name AS org_name
+                d.parent_id,
+                o.name AS org_name,
+                1 AS depth,
+                ARRAY[d.name || ' [' || d.code || '] ' || d.id::text]::text[] AS sort_path
             FROM departments d
             JOIN organizations o ON d.org_id = o.id
             WHERE ($2::text IS NULL OR o.slug = $2)
               AND ($3::uuid IS NULL OR o.id = $3)
-              AND ($4::boolean = FALSE OR d.id = $5::uuid)
+              AND d.parent_id IS NULL
+
+            UNION ALL
+
+            SELECT
+                child.id,
+                child.org_id,
+                child.code,
+                child.name,
+                child.slug,
+                child.parent_id,
+                tree.org_name,
+                tree.depth + 1,
+                tree.sort_path || (child.name || ' [' || child.code || '] ' || child.id::text)
+            FROM department_tree tree
+            JOIN departments child
+              ON child.org_id = tree.org_id
+             AND child.parent_id = tree.id
+        ),
+        department_page AS MATERIALIZED (
+            SELECT tree.*
+            FROM department_tree tree
+            WHERE ($4::boolean = FALSE OR tree.id = $5::uuid)
               AND (
                   $6::text IS NULL
-                  OR o.name > $6::text
-                  OR (o.name = $6::text AND d.name > $7::text)
-                  OR (o.name = $6::text AND d.name = $7::text AND d.id > $8::uuid)
+                  OR tree.org_name > $6::text
+                  OR (tree.org_name = $6::text AND tree.sort_path > $7::text[])
+                  OR (
+                      tree.org_name = $6::text
+                      AND tree.sort_path = $7::text[]
+                      AND tree.id > $8::uuid
+                  )
               )
-            ORDER BY o.name ASC, d.name ASC, d.id ASC
+            ORDER BY tree.org_name ASC, tree.sort_path ASC, tree.id ASC
             LIMIT $9
+        ),
+        department_descendants AS (
+            SELECT
+                page.org_id,
+                page.id AS ancestor_id,
+                page.id AS descendant_id
+            FROM department_page page
+
+            UNION ALL
+
+            SELECT
+                descendants.org_id,
+                descendants.ancestor_id,
+                child.id
+            FROM department_descendants descendants
+            JOIN departments child
+              ON child.org_id = descendants.org_id
+             AND child.parent_id = descendants.descendant_id
         ),
         department_stats AS MATERIALIZED (
             SELECT
                 org_id,
-                department_id,
+                ancestor_id,
                 SUM(commits)::bigint AS commits,
                 SUM(total_lines)::bigint AS total_lines,
                 SUM(ai_lines)::bigint AS ai_lines
@@ -1451,12 +1522,14 @@ pub async fn aggregate_departments(
 
                 SELECT
                     p.org_id,
-                    om.department_id,
+                    descendants.ancestor_id,
                     COUNT(cs.sha)::bigint AS commits,
                     COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
-                FROM department_page dp
-                JOIN org_members om ON om.org_id = dp.org_id AND om.department_id = dp.id
+                FROM department_descendants descendants
+                JOIN org_members om
+                  ON om.org_id = descendants.org_id
+                 AND om.department_id = descendants.descendant_id
                 JOIN projects p ON p.user_id = om.user_id AND p.org_id = om.org_id
                 JOIN commit_stats cs ON cs.project_id = p.id
                 WHERE ($1::uuid IS NULL OR p.user_id = $1)
@@ -1467,20 +1540,33 @@ pub async fn aggregate_departments(
                         AND m.commit_sha = cs.sha
                         AND ($1::uuid IS NULL OR m.user_id = $1)
                   )
-                GROUP BY p.org_id, om.department_id
+                GROUP BY p.org_id, descendants.ancestor_id
             ) combined
-            WHERE org_id IS NOT NULL AND department_id IS NOT NULL
-            GROUP BY org_id, department_id
+            WHERE org_id IS NOT NULL AND ancestor_id IS NOT NULL
+            GROUP BY org_id, ancestor_id
         )
         SELECT
-            d.id, d.name, d.slug, d.org_name,
+            page.id,
+            page.code,
+            page.name,
+            page.slug,
+            page.parent_id,
+            page.org_name,
+            page.depth,
+            page.sort_path,
+            EXISTS(
+                SELECT 1
+                FROM departments child
+                WHERE child.org_id = page.org_id
+                  AND child.parent_id = page.id
+            ) AS has_children,
             COALESCE(stats.commits, 0),
             COALESCE(stats.total_lines, 0),
             COALESCE(stats.ai_lines, 0)
-        FROM department_page d
+        FROM department_page page
         LEFT JOIN department_stats stats
-          ON stats.org_id = d.org_id AND stats.department_id = d.id
-        ORDER BY d.org_name ASC, d.name ASC, d.id ASC"#
+          ON stats.org_id = page.org_id AND stats.ancestor_id = page.id
+        ORDER BY page.org_name ASC, page.sort_path ASC, page.id ASC"#
     ))
     .bind(user_filter)
     .bind(&query.org)
@@ -1488,7 +1574,7 @@ pub async fn aggregate_departments(
     .bind(restrict_department)
     .bind(department_filter)
     .bind(cursor_org_name)
-    .bind(cursor_department_name)
+    .bind(cursor_sort_path)
     .bind(cursor_department_id)
     .bind(fetch_limit(limit))
     .fetch_all(&state.db)
@@ -1499,11 +1585,11 @@ pub async fn aggregate_departments(
     let has_more = truncate_to_limit(&mut rows, limit);
     let next_cursor = if has_more {
         rows.last()
-            .map(|(id, name, _, org_name, _, _, _)| {
+            .map(|(id, _, _, _, _, org_name, _, sort_path, _, _, _, _)| {
                 encode_cursor(&DepartmentAggregateCursor {
                     v: CURSOR_VERSION,
                     org_name: org_name.clone(),
-                    department_name: name.clone(),
+                    sort_path: sort_path.clone(),
                     department_id: *id,
                 })
             })
@@ -1514,20 +1600,41 @@ pub async fn aggregate_departments(
 
     let result: Vec<Value> = rows
         .iter()
-        .map(|(_, name, slug, org_name, commits, total, ai)| {
-            let ai = ai.unwrap_or(0);
-            let total = total.unwrap_or(0);
-            let human = (total - ai).max(0);
-            json!({
-                "department": name,
-                "dept_slug": slug,
-                "organization": org_name,
-                "total_commits": commits.unwrap_or(0),
-                "w_total": total,
-                "w_ai": ai,
-                "w_human": human,
-            })
-        })
+        .map(
+            |(
+                id,
+                code,
+                name,
+                slug,
+                parent_id,
+                org_name,
+                depth,
+                _,
+                has_children,
+                commits,
+                total,
+                ai,
+            )| {
+                let ai = ai.unwrap_or(0);
+                let total = total.unwrap_or(0);
+                let human = (total - ai).max(0);
+                json!({
+                    "id": id.to_string(),
+                    "code": code,
+                    "department": name,
+                    "dept_slug": slug,
+                    "parent_id": parent_id.map(|id| id.to_string()),
+                    "depth": depth,
+                    "has_children": has_children,
+                    "is_leaf": !has_children,
+                    "organization": org_name,
+                    "total_commits": commits.unwrap_or(0),
+                    "w_total": total,
+                    "w_ai": ai,
+                    "w_human": human,
+                })
+            },
+        )
         .collect();
 
     Ok(Json(json!({
@@ -3008,6 +3115,116 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn department_aggregates_roll_up_descendants_in_tree_order() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let state = db.state()?;
+        let (org_id, org_slug) = insert_organization(&db.pool, "Hierarchy Stats Org").await?;
+        let root_id = insert_department(&db.pool, org_id, "Root").await?;
+        let child_id =
+            insert_department_with_parent(&db.pool, org_id, "Child", Some(root_id)).await?;
+        let leaf_id =
+            insert_department_with_parent(&db.pool, org_id, "Leaf", Some(child_id)).await?;
+        let sibling_id =
+            insert_department_with_parent(&db.pool, org_id, "Sibling", Some(root_id)).await?;
+
+        let admin_id = insert_user(&db.pool, org_id, "Admin", "admin", None).await?;
+        let root_user = insert_user(&db.pool, org_id, "Root User", "member", Some(root_id)).await?;
+        let child_user =
+            insert_user(&db.pool, org_id, "Child User", "member", Some(child_id)).await?;
+        let leaf_user = insert_user(&db.pool, org_id, "Leaf User", "member", Some(leaf_id)).await?;
+        let sibling_user =
+            insert_user(&db.pool, org_id, "Sibling User", "member", Some(sibling_id)).await?;
+
+        for (index, user_id, total, ai) in [
+            (1, root_user, 10, 2),
+            (2, child_user, 20, 5),
+            (3, leaf_user, 30, 10),
+            (4, sibling_user, 40, 20),
+        ] {
+            insert_dashboard_metric_row_with_tool(
+                &db.pool,
+                user_id,
+                org_id,
+                1_700_000_000 + index,
+                &format!("https://example.com/hierarchy-{index}.git"),
+                &format!("hierarchy-{index}"),
+                total,
+                ai,
+                "codex::gpt-5",
+                ai,
+                0,
+                0,
+            )
+            .await?;
+        }
+
+        let auth = org_admin_auth(admin_id, org_id, &org_slug);
+        for use_rollups in [false, true] {
+            let mut aggregate_state = state.clone();
+            aggregate_state.config.dashboard_use_rollups = use_rollups;
+            let Json(root_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(aggregate_query(Some(org_slug.clone()), None, Some(1), None)),
+            )
+            .await?;
+            let root = &root_page["departments"][0];
+            assert_eq!(root["department"].as_str(), Some("Root"));
+            assert_eq!(root["total_commits"].as_i64(), Some(4));
+            assert_eq!(root["w_total"].as_i64(), Some(100));
+            assert_eq!(root["w_ai"].as_i64(), Some(37));
+            assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
+
+            let Json(page) = aggregate_departments(
+                State(aggregate_state),
+                auth.clone(),
+                Query(aggregate_query(Some(org_slug.clone()), None, Some(10), None)),
+            )
+            .await?;
+
+            let departments = page["departments"]
+                .as_array()
+                .expect("departments should be an array");
+            assert_eq!(
+                departments
+                    .iter()
+                    .map(|department| department["department"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec!["Root", "Child", "Leaf", "Sibling"]
+            );
+            assert_eq!(
+                departments
+                    .iter()
+                    .map(|department| department["depth"].as_i64().unwrap())
+                    .collect::<Vec<_>>(),
+                vec![1, 2, 3, 2]
+            );
+
+            let expected = [
+                ("Root", 4, 100, 37, false),
+                ("Child", 2, 50, 15, false),
+                ("Leaf", 1, 30, 10, true),
+                ("Sibling", 1, 40, 20, true),
+            ];
+            for (name, commits, total, ai, is_leaf) in expected {
+                let department = departments
+                    .iter()
+                    .find(|department| department["department"] == name)
+                    .expect("expected department should exist");
+                assert_eq!(department["total_commits"].as_i64(), Some(commits));
+                assert_eq!(department["w_total"].as_i64(), Some(total));
+                assert_eq!(department["w_ai"].as_i64(), Some(ai));
+                assert_eq!(department["is_leaf"].as_bool(), Some(is_leaf));
+            }
+        }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dashboard_stat_aggregates_cursor_paginate() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
@@ -3337,6 +3554,15 @@ mod tests {
     }
 
     async fn insert_department(pool: &PgPool, org_id: Uuid, name: &str) -> anyhow::Result<Uuid> {
+        insert_department_with_parent(pool, org_id, name, None).await
+    }
+
+    async fn insert_department_with_parent(
+        pool: &PgPool,
+        org_id: Uuid,
+        name: &str,
+        parent_id: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
         let department_id = Uuid::new_v4();
         let slug = format!(
             "{}-{}",
@@ -3344,13 +3570,17 @@ mod tests {
             department_id.simple()
         );
 
-        sqlx::query("INSERT INTO departments (id, org_id, name, slug) VALUES ($1, $2, $3, $4)")
-            .bind(department_id)
-            .bind(org_id)
-            .bind(name)
-            .bind(slug)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO departments (id, org_id, name, slug, parent_id) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(department_id)
+        .bind(org_id)
+        .bind(name)
+        .bind(slug)
+        .bind(parent_id)
+        .execute(pool)
+        .await?;
 
         Ok(department_id)
     }

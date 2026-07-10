@@ -16,8 +16,10 @@ pub struct RegisterableOrganization {
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterableDepartment {
     pub id: Uuid,
+    pub code: String,
     pub name: String,
     pub slug: String,
+    pub parent_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,11 +71,11 @@ pub async fn list_departments_for_org(
     pool: &PgPool,
     org_id: Uuid,
 ) -> Result<Vec<RegisterableDepartment>, AppError> {
-    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, name, slug \
+    let rows: Vec<(Uuid, String, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, code, name, slug, parent_id \
          FROM departments \
          WHERE org_id = $1 \
-         ORDER BY name",
+         ORDER BY code, name",
     )
     .bind(org_id)
     .fetch_all(pool)
@@ -82,7 +84,13 @@ pub async fn list_departments_for_org(
 
     Ok(rows
         .into_iter()
-        .map(|(id, name, slug)| RegisterableDepartment { id, name, slug })
+        .map(|(id, code, name, slug, parent_id)| RegisterableDepartment {
+            id,
+            code,
+            name,
+            slug,
+            parent_id,
+        })
         .collect())
 }
 

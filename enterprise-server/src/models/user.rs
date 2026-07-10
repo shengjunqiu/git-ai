@@ -37,8 +37,10 @@ pub struct OrganizationDomain {
 pub struct Department {
     pub id: Uuid,
     pub org_id: Uuid,
+    pub code: String,
     pub name: String,
     pub slug: String,
+    pub parent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
