@@ -713,13 +713,13 @@ async function loadTools() {
 
 // --- Users Management ---
 async function loadUsers() {
-    setTableLoading('users-table', 5);
+    setTableLoading('users-table', 6);
     try {
         const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败');
         const users = pageItems(d, 'users');
         if (users.length === 0) {
             document.getElementById('users-table').innerHTML =
-                '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
+                '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
             renderPaginationControls('users');
             return;
         }
@@ -734,12 +734,18 @@ async function loadUsers() {
             const displayName = escapeHtml(u.name || '—');
             const displayEmail = escapeHtml(u.email || '');
             const actionName = jsString(u.name || u.email || '');
+            const uploadEnabled = u.git_tracking_upload_enabled === true;
+            const uploadStatus = uploadEnabled
+                ? '<span class="badge active">已授权</span>'
+                : '<span class="badge revoked">未授权</span>';
             return `<tr>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
+                <td>${uploadStatus}</td>
                 <td>${keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}</td>
                 <td>${created}</td>
                 <td>
+                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" onclick="setGitTrackingUploadAuthorization('${u.id}', ${actionName}, ${!uploadEnabled}, this)">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
                     <button class="btn btn-sm" onclick="showCreateApiKeyForUser('${u.id}', ${actionName})">🔑 创建密钥</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteUser('${u.id}', ${actionName})">删除</button>
                 </td>
@@ -749,8 +755,37 @@ async function loadUsers() {
     } catch(e) {
         console.error(e);
         document.getElementById('users-table').innerHTML =
-            '<tr><td colspan="5" style="color:var(--danger)">加载用户列表失败</td></tr>';
+            '<tr><td colspan="6" style="color:var(--danger)">加载用户列表失败</td></tr>';
         renderPaginationControls('users');
+    }
+}
+
+async function setGitTrackingUploadAuthorization(userId, userName, authorized, button) {
+    const actionLabel = authorized ? '授权' : '撤销授权';
+    const consequence = authorized
+        ? '授权后，该开发者可以向平台上传 Git 追踪信息。'
+        : '撤销后，该开发者新的 Git 追踪信息上传会被立即拒绝。';
+    if (!confirm(`确定要${actionLabel}开发者「${userName}」吗？\n${consequence}`)) return;
+
+    if (button) button.disabled = true;
+    try {
+        const r = await fetch(`/api/admin/users/${userId}/git-tracking-upload`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authorized })
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            showToast(`${actionLabel}失败: ${d.error || '未知错误'}`, 'error');
+            return;
+        }
+
+        showToast(`已${actionLabel}开发者「${userName}」的 Git 追踪上传权限`, 'success');
+        await loadUsers();
+    } catch(e) {
+        showToast(`${actionLabel}时发生错误`, 'error');
+    } finally {
+        if (button && button.isConnected) button.disabled = false;
     }
 }
 

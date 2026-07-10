@@ -4,7 +4,7 @@ use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::auth::middleware::{request_id_middleware, AdminGuard};
+use crate::auth::middleware::request_id_middleware;
 use crate::config::AppConfig;
 use crate::services::cas::CasStore;
 use crate::services::rate_limit::RateLimiter;
@@ -195,6 +195,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/users/{id}/api-keys",
             get(crate::handlers::admin::list_user_api_keys),
+        )
+        .route(
+            "/api/admin/users/{id}/git-tracking-upload",
+            put(crate::handlers::admin::update_git_tracking_upload_authorization),
         )
         // Admin: Organizations
         .route(

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use tokio::task::JoinSet;
 
-use crate::auth::middleware::{AuthExtractor, HeaderExtractor};
+use crate::auth::middleware::{AuthExtractor, GitTrackingUploadGuard, HeaderExtractor};
 use crate::error::AppError;
 use crate::models::cas::{CasObject, CasUploadRequest};
 use crate::models::user::{AuthIdentity, RequestHeaders};
@@ -19,7 +19,7 @@ const CAS_DB_INSERT_CHUNK_SIZE: usize = 100;
 /// POST /worker/cas/upload — Batch upload CAS objects
 pub async fn upload_cas(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: GitTrackingUploadGuard,
     headers: HeaderExtractor,
     Json(req): Json<CasUploadRequest>,
 ) -> Result<Json<Value>, AppError> {
@@ -653,7 +653,7 @@ mod tests {
     ) -> Result<Json<Value>, AppError> {
         upload_cas(
             State(state.clone()),
-            auth_extractor(user_id, org_id),
+            upload_guard(user_id, org_id),
             HeaderExtractor(RequestHeaders::default()),
             Json(CasUploadRequest { objects }),
         )
@@ -752,6 +752,10 @@ mod tests {
             scopes: vec!["cas:write".into(), "cas:read".into()],
             auth_method: AuthMethod::ApiKey,
         })
+    }
+
+    fn upload_guard(user_id: Uuid, org_id: Uuid) -> GitTrackingUploadGuard {
+        GitTrackingUploadGuard(auth_extractor(user_id, org_id).0)
     }
 
     async fn table_count(pool: &PgPool, table: &str) -> anyhow::Result<i64> {

@@ -4,7 +4,7 @@ use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, Transaction};
 use std::collections::{HashMap, HashSet};
 
-use crate::auth::middleware::{AuthExtractor, HeaderExtractor as _HeaderExtractor};
+use crate::auth::middleware::{GitTrackingUploadGuard, HeaderExtractor as _HeaderExtractor};
 use crate::error::AppError;
 use crate::models::report::{
     ProjectSummaryReport, ReportCommit, ReportDocument, ToolModelBreakdown,
@@ -17,7 +17,7 @@ const REPORT_TOOL_MODEL_UPSERT_CHUNK_SIZE: usize = 1000;
 /// POST /api/v1/reports — Upload report data
 pub async fn upload_report(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: GitTrackingUploadGuard,
     _headers: _HeaderExtractor,
     Json(report): Json<ReportDocument>,
 ) -> Result<Json<Value>, AppError> {
@@ -378,9 +378,10 @@ async fn upsert_tool_model_stats_chunk(
     Ok(())
 }
 
-/// POST /api/v1/summaries — Upload summary data (no auth required!)
+/// POST /api/v1/summaries — Upload summary data
 pub async fn upload_summary(
     State(state): State<AppState>,
+    auth: GitTrackingUploadGuard,
     Json(summary): Json<ProjectSummaryReport>,
 ) -> Result<Json<Value>, AppError> {
     tracing::info!(
@@ -396,11 +397,13 @@ pub async fn upload_summary(
 
     sqlx::query(
         r#"INSERT INTO summary_uploads (
-            project_name, git_url, branch, total_commits,
+            user_id, org_id, project_name, git_url, branch, total_commits,
             organization, department, reporter_name, reporter_email,
             report_period, project_ratios, developers
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
     )
+    .bind(auth.0.user_id)
+    .bind(auth.0.org_id)
     .bind(&summary.project_name)
     .bind(&summary.git_url)
     .bind(&summary.branch)
@@ -646,6 +649,49 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_summary_persists_authenticated_user_and_org() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
+
+        let _response = upload_summary(
+            State(db.state.clone()),
+            auth_extractor(user_id, org_id),
+            Json(ProjectSummaryReport {
+                project_name: "summary-identity-test".into(),
+                git_url: Some("https://example.com/repo.git".into()),
+                branch: Some("main".into()),
+                total_commits: 0,
+                developers: vec![],
+                project_ratios: crate::models::report::ProjectRatios {
+                    ai: 0.0,
+                    human: 0.0,
+                },
+                organization: Some("client-controlled-label".into()),
+                department: None,
+                reporter_name: None,
+                reporter_email: None,
+                report_period: None,
+            }),
+        )
+        .await?;
+
+        let stored_identity: (Option<Uuid>, Option<Uuid>, Option<String>) = sqlx::query_as(
+            "SELECT user_id, org_id, organization FROM summary_uploads WHERE project_name = $1",
+        )
+        .bind("summary-identity-test")
+        .fetch_one(&db.state.db)
+        .await?;
+        assert_eq!(stored_identity.0, Some(user_id));
+        assert_eq!(stored_identity.1, Some(org_id));
+        assert_eq!(stored_identity.2.as_deref(), Some("client-controlled-label"));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
     #[test]
     fn parse_commit_author_time_accepts_rfc3339() {
         let parsed = parse_commit_author_time("2026-07-07T00:00:00Z");
@@ -819,8 +865,8 @@ mod tests {
         Ok((user_id, org_id))
     }
 
-    fn auth_extractor(user_id: Uuid, org_id: Uuid) -> AuthExtractor {
-        AuthExtractor(AuthIdentity {
+    fn auth_extractor(user_id: Uuid, org_id: Uuid) -> GitTrackingUploadGuard {
+        GitTrackingUploadGuard(AuthIdentity {
             user_id,
             email: format!("{user_id}@example.com"),
             name: "Report Test User".into(),

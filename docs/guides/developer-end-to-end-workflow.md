@@ -6,17 +6,19 @@
 
 ## 一、核心结论
 
-开发者能否在管理端被正确识别，取决于三件事：
+开发者能否在管理端被正确识别并上传 Git 追踪信息，取决于四件事：
 
 1. `users` 表里有该开发者用户。
 2. `org_members` 表里有该开发者和公司组织的绑定关系。
-3. 开发者本机的 `git-ai` 使用该开发者自己的凭证上传 metrics/report。
+3. 组织管理员已在管理端为该开发者开启“Git 追踪上传”授权。
+4. 开发者本机的 `git-ai` 使用该开发者自己的凭证上传 metrics/report。
 
 推荐的生产流程是：
 
 ```text
 管理员创建开发者用户
 -> 管理员把开发者加入公司组织
+-> 管理员授权该开发者上传 Git 追踪信息
 -> 管理员生成 install nonce
 -> 开发者安装 git-ai 并兑换 nonce
 -> 开发者正常使用 AI 工具和 git
@@ -31,7 +33,7 @@
 | 角色 | 负责事项 |
 | --- | --- |
 | 系统管理员 | 部署 enterprise server、初始化首个 owner、维护组织、创建管理员 API key |
-| 组织管理员 | 创建开发者用户、绑定组织和部门、生成 install nonce、查看 dashboard |
+| 组织管理员 | 创建开发者用户、绑定组织和部门、逐人授权 Git 追踪上传、生成 install nonce、查看 dashboard |
 | 开发者 | 安装客户端、兑换 nonce 登录、正常使用 AI 编码和 git、必要时手动补传数据 |
 | CI/CD | 可选，用 API key 在流水线中上传 report 或补充历史统计 |
 
@@ -91,6 +93,17 @@ curl -s -X POST "$SERVER/api/admin/users" \
 ```
 
 `POST /api/admin/users` 不再创建个人组织；它会把用户加入指定组织和部门，并把该组织设置为默认组织。
+
+新建的组织成员默认**未授权上传**。管理员必须在 dashboard 的“用户管理”中点击“授权上传”，或调用：
+
+```bash
+curl -s -X PUT "$SERVER/api/admin/users/<developer-user-id>/git-tracking-upload" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"authorized": true}'
+```
+
+授权只对管理员当前组织生效。同一开发者加入多个组织时，每个组织都要单独授权。撤销时提交 `{"authorized": false}`，已有 token 和 API key 会立即失去该组织的上传权限。
 
 ### 4. 调整组织角色
 
@@ -433,6 +446,15 @@ curl -s -X POST "$SERVER/api/admin/users" \
 ```
 
 接口会把用户加入指定组织和部门；把返回的 `install_nonce` 给开发者。
+
+在把 nonce 交给开发者前，管理员还需要在“用户管理”中为该用户点击“授权上传”，或者调用：
+
+```bash
+curl -s -X PUT "$SERVER/api/admin/users/<developer-user-id>/git-tracking-upload" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"authorized": true}'
+```
 
 ### 开发者侧
 

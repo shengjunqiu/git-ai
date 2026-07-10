@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::Json;
 use serde_json::Value;
 
-use crate::auth::middleware::{AuthExtractor, HeaderExtractor};
+use crate::auth::middleware::{GitTrackingUploadGuard, HeaderExtractor};
 use crate::error::AppError;
 use crate::models::metrics::MetricsBatch;
 use crate::routes::AppState;
@@ -15,7 +15,7 @@ const MAX_METRICS_BATCH_EVENTS: usize = 500;
 /// Client only retries on 400/401/500, not on partial success.
 pub async fn upload_metrics(
     State(state): State<AppState>,
-    auth: AuthExtractor,
+    auth: GitTrackingUploadGuard,
     headers: HeaderExtractor,
     Json(batch): Json<MetricsBatch>,
 ) -> Result<Json<Value>, AppError> {

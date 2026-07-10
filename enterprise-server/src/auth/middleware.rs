@@ -43,6 +43,68 @@ impl FromRequestParts<AppState> for OptionalAuth {
     }
 }
 
+/// Authenticated developer who has been explicitly authorized by an administrator
+/// to upload Git tracking data.
+///
+/// The authorization is read from the database on every request so revoking a
+/// developer takes effect immediately, including for previously issued bearer
+/// tokens and API keys.
+#[derive(Debug, Clone)]
+pub struct GitTrackingUploadGuard(pub AuthIdentity);
+
+impl FromRequestParts<AppState> for GitTrackingUploadGuard {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthExtractor(identity) = AuthExtractor::from_request_parts(parts, state).await?;
+        require_git_tracking_upload_authorization(
+            &state.db,
+            identity.user_id,
+            identity.org_id,
+        )
+        .await?;
+        Ok(Self(identity))
+    }
+}
+
+pub(crate) async fn require_git_tracking_upload_authorization(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    org_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    let Some(org_id) = org_id else {
+        return Err(AppError::Forbidden(
+            "Developer is not authorized to upload Git tracking data".into(),
+        ));
+    };
+
+    let user: Option<(String, bool)> = sqlx::query_as(
+        "SELECT u.status, COALESCE(om.git_tracking_upload_enabled, false) \
+         FROM users u \
+         LEFT JOIN org_members om ON om.user_id = u.id AND om.org_id = $2 \
+         WHERE u.id = $1",
+    )
+    .bind(user_id)
+    .bind(org_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    match user {
+        None => Err(AppError::Unauthorized("User account not found".into())),
+        Some((status, _)) if status != "active" => {
+            Err(AppError::Unauthorized("User account is not active".into()))
+        }
+        Some((_, true)) => Ok(()),
+        Some((_, false)) => Err(AppError::Forbidden(
+            "Developer is not authorized to upload Git tracking data".into(),
+        )),
+    }
+}
+
 /// Dashboard auth accepts legacy dashboard token/API-key cookies and web sessions.
 #[derive(Debug, Clone)]
 pub struct DashboardAuth(pub AuthIdentity);

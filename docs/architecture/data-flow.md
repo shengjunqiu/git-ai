@@ -320,6 +320,8 @@ enterprise-server 是独立 Rust crate，主要入口：
 - CLI 登录后的 `Authorization: Bearer <token>`。
 - API key：`X-API-Key: gai_...`。
 
+`metrics`、`CAS upload`、`reports` 和 `summaries` 除认证外，还统一经过 `GitTrackingUploadGuard`。它按当前 `(user_id, org_id)` 实时检查 `org_members.git_tracking_upload_enabled`；组织管理员未逐人授权时返回 HTTP 403，撤销后既有 Bearer token/API key 也会立即被拒绝。新建和已有成员在迁移后默认均为未授权。summary 入库时还会把 Guard 中的 `user_id/org_id` 写入 `summary_uploads` 作为真实归属，客户端提交的 organization/reporter 文本只作为展示元数据。
+
 普通成员通常只能看自己的数据；管理员/owner 或带 admin scope 的 API key 可看组织范围数据。
 
 ## Dashboard 聚合数据流
@@ -409,4 +411,3 @@ git-ai report server --addr 127.0.0.1:8787 --db git-ai-report-server.sqlite
 7. **确认 dashboard 认证**
 
    `/me` 页面需要 Bearer token 或 API key。CLI 的 `git-ai login --server ...` 会把 token 存在本机，浏览器页面仍需要通过登录页或输入 token/API key 建立浏览器会话。
-

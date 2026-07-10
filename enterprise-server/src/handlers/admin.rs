@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::jwt;
-use crate::auth::middleware::{AdminGuard, AuthExtractor};
+use crate::auth::middleware::AdminGuard;
 use crate::error::AppError;
 use crate::models::auth::CreateApiKeyRequest;
 use crate::pagination::{
@@ -89,6 +89,12 @@ fn validate_admin_cursor_version(version: u8) -> Result<(), AppError> {
             version
         )))
     }
+}
+
+fn admin_org_id(auth: &AdminGuard) -> Result<Uuid, AppError> {
+    auth.0.org_id.ok_or_else(|| {
+        AppError::Forbidden("An organization-scoped administrator is required".into())
+    })
 }
 
 // ================================================================
@@ -201,6 +207,7 @@ pub async fn create_user(
         "personal_org_id": null,
         "default_org_id": req.org_id.to_string(),
         "department_id": req.department_id.to_string(),
+        "git_tracking_upload_enabled": false,
         "install_nonce": install_nonce,
     })))
 }
@@ -208,9 +215,10 @@ pub async fn create_user(
 /// GET /api/admin/users/{id} — Get user details
 pub async fn get_user(
     State(state): State<AppState>,
-    _auth: AdminGuard,
+    auth: AdminGuard,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let org_id = admin_org_id(&auth)?;
     let row: Option<(
         Uuid,
         String,
@@ -218,26 +226,50 @@ pub async fn get_user(
         Option<Uuid>,
         chrono::DateTime<chrono::Utc>,
         chrono::DateTime<chrono::Utc>,
+        bool,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<Uuid>,
     )> = sqlx::query_as(
-        "SELECT id, email, name, personal_org_id, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT u.id, u.email, u.name, u.personal_org_id, u.created_at, u.updated_at, \
+                om.git_tracking_upload_enabled, om.git_tracking_upload_authorized_at, \
+                om.git_tracking_upload_authorized_by \
+         FROM users u \
+         JOIN org_members om ON om.user_id = u.id \
+         WHERE u.id = $1 AND om.org_id = $2",
     )
     .bind(user_id)
+    .bind(org_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let (id, email, name, personal_org_id, created_at, updated_at) = match row {
+    let (
+        id,
+        email,
+        name,
+        personal_org_id,
+        created_at,
+        updated_at,
+        git_tracking_upload_enabled,
+        git_tracking_upload_authorized_at,
+        git_tracking_upload_authorized_by,
+    ) = match row {
         Some(r) => r,
-        None => return Err(AppError::NotFound("User not found".into())),
+        None => {
+            return Err(AppError::NotFound(
+                "User not found in the administrator's organization".into(),
+            ))
+        }
     };
 
     // Get org memberships
     let org_rows: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT org_id, role FROM org_members WHERE user_id = $1")
-    .bind(user_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+        sqlx::query_as("SELECT org_id, role FROM org_members WHERE user_id = $1 AND org_id = $2")
+            .bind(user_id)
+            .bind(org_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let orgs: Vec<Value> = org_rows
         .iter()
@@ -250,6 +282,9 @@ pub async fn get_user(
         "name": name,
         "personal_org_id": personal_org_id,
         "orgs": orgs,
+        "git_tracking_upload_enabled": git_tracking_upload_enabled,
+        "git_tracking_upload_authorized_at": git_tracking_upload_authorized_at,
+        "git_tracking_upload_authorized_by": git_tracking_upload_authorized_by,
         "created_at": created_at,
         "updated_at": updated_at,
     })))
@@ -289,6 +324,80 @@ pub async fn update_user(
     Ok(Json(json!({ "success": true })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GitTrackingUploadAuthorizationRequest {
+    pub authorized: bool,
+}
+
+/// PUT /api/admin/users/{id}/git-tracking-upload — Grant or revoke a
+/// developer's permission to upload Git tracking data in the admin's org.
+pub async fn update_git_tracking_upload_authorization(
+    State(state): State<AppState>,
+    auth: AdminGuard,
+    Path(user_id): Path<Uuid>,
+    Json(req): Json<GitTrackingUploadAuthorizationRequest>,
+) -> Result<Json<Value>, AppError> {
+    let org_id = admin_org_id(&auth)?;
+    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+
+    let updated: Option<(
+        bool,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<Uuid>,
+    )> = sqlx::query_as(
+        r#"UPDATE org_members
+           SET git_tracking_upload_enabled = $1,
+               git_tracking_upload_authorized_at = CASE WHEN $1 THEN now() ELSE NULL END,
+               git_tracking_upload_authorized_by = CASE WHEN $1 THEN $2 ELSE NULL END
+           WHERE user_id = $3 AND org_id = $4
+           RETURNING git_tracking_upload_enabled,
+                     git_tracking_upload_authorized_at,
+                     git_tracking_upload_authorized_by"#,
+    )
+    .bind(req.authorized)
+    .bind(auth.0.user_id)
+    .bind(user_id)
+    .bind(org_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    let Some((enabled, authorized_at, authorized_by)) = updated else {
+        return Err(AppError::NotFound(
+            "User not found in the administrator's organization".into(),
+        ));
+    };
+
+    let action = if enabled {
+        "developer.git_tracking_upload.grant"
+    } else {
+        "developer.git_tracking_upload.revoke"
+    };
+    sqlx::query(
+        r#"INSERT INTO audit_log
+           (user_id, org_id, action, resource_type, resource_id, details)
+           VALUES ($1, $2, $3, 'user', $4, $5)"#,
+    )
+    .bind(auth.0.user_id)
+    .bind(org_id)
+    .bind(action)
+    .bind(user_id.to_string())
+    .bind(json!({ "authorized": enabled }))
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(Json(json!({
+        "user_id": user_id,
+        "org_id": org_id,
+        "git_tracking_upload_enabled": enabled,
+        "git_tracking_upload_authorized_at": authorized_at,
+        "git_tracking_upload_authorized_by": authorized_by,
+    })))
+}
+
 /// DELETE /api/admin/users/{id} — Delete user
 pub async fn delete_user(
     State(state): State<AppState>,
@@ -325,9 +434,10 @@ pub async fn delete_user(
 /// GET /api/admin/users/list — List all users
 pub async fn list_users(
     State(state): State<AppState>,
-    _auth: AdminGuard,
+    auth: AdminGuard,
     Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Value>, AppError> {
+    let org_id = admin_org_id(&auth)?;
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
     let cursor = decode_optional_time_uuid_cursor(query.cursor.as_deref())?;
     let cursor_timestamp = cursor.as_ref().map(|cursor| cursor.timestamp.clone());
@@ -339,6 +449,9 @@ pub async fn list_users(
         String,
         Option<Uuid>,
         chrono::DateTime<chrono::Utc>,
+        bool,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<Uuid>,
         Value,
     )> = sqlx::query_as(
         r#"SELECT
@@ -347,6 +460,9 @@ pub async fn list_users(
             u.name,
             u.personal_org_id,
             u.created_at,
+            om.git_tracking_upload_enabled,
+            om.git_tracking_upload_authorized_at,
+            om.git_tracking_upload_authorized_by,
             COALESCE(
                 jsonb_agg(
                     jsonb_build_object(
@@ -362,12 +478,18 @@ pub async fn list_users(
                 '[]'::jsonb
             ) AS api_keys
         FROM users u
-        LEFT JOIN api_keys ak ON ak.user_id = u.id AND ak.revoked_at IS NULL
-        WHERE ($1::timestamptz IS NULL OR (u.created_at, u.id) < ($1::timestamptz, $2::uuid))
-        GROUP BY u.id, u.email, u.name, u.personal_org_id, u.created_at
+        JOIN org_members om ON om.user_id = u.id AND om.org_id = $1
+        LEFT JOIN api_keys ak ON ak.user_id = u.id
+            AND ak.revoked_at IS NULL
+            AND (ak.org_id IS NULL OR ak.org_id = om.org_id)
+        WHERE ($2::timestamptz IS NULL OR (u.created_at, u.id) < ($2::timestamptz, $3::uuid))
+        GROUP BY u.id, u.email, u.name, u.personal_org_id, u.created_at,
+                 om.git_tracking_upload_enabled, om.git_tracking_upload_authorized_at,
+                 om.git_tracking_upload_authorized_by
         ORDER BY u.created_at DESC, u.id DESC
-        LIMIT $3"#,
+        LIMIT $4"#,
     )
+    .bind(org_id)
     .bind(cursor_timestamp)
     .bind(cursor_id)
     .bind(fetch_limit(limit))
@@ -378,7 +500,9 @@ pub async fn list_users(
     let has_more = truncate_to_limit(&mut rows, limit);
     let next_cursor = if has_more {
         rows.last()
-            .map(|(id, _, _, _, created_at, _)| encode_time_uuid_cursor(created_at.clone(), *id))
+            .map(|(id, _, _, _, created_at, _, _, _, _)| {
+                encode_time_uuid_cursor(created_at.clone(), *id)
+            })
             .transpose()?
     } else {
         None
@@ -386,13 +510,26 @@ pub async fn list_users(
 
     let users: Vec<Value> = rows
         .iter()
-        .map(|(id, email, name, personal_org_id, created_at, api_keys)| {
+        .map(|(
+            id,
+            email,
+            name,
+            personal_org_id,
+            created_at,
+            git_tracking_upload_enabled,
+            git_tracking_upload_authorized_at,
+            git_tracking_upload_authorized_by,
+            api_keys,
+        )| {
         json!({
             "id": id.to_string(),
             "email": email,
             "name": name,
             "personal_org_id": personal_org_id.map(|u| u.to_string()),
             "created_at": created_at,
+            "git_tracking_upload_enabled": git_tracking_upload_enabled,
+            "git_tracking_upload_authorized_at": git_tracking_upload_authorized_at,
+            "git_tracking_upload_authorized_by": git_tracking_upload_authorized_by,
             "api_keys": api_keys,
         })
         })
@@ -985,6 +1122,8 @@ mod log_pagination_tests {
     use super::*;
     use crate::config::{AppConfig, MetricsRollupWriteMode};
     use crate::models::user::{AuthIdentity, AuthMethod};
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
     use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
 
@@ -1214,6 +1353,248 @@ mod log_pagination_tests {
         let third_ids = object_ids(&third_page, "users");
         assert_eq!(third_ids[0], uuid_tail(1));
         assert_eq!(third_page["pagination"]["has_more"].as_bool(), Some(false));
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_tracking_authorization_grant_revoke_updates_list_audit_and_guard(
+    ) -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let developer_id = uuid_tail(301);
+        insert_user(&db.state.db, developer_id, org_id, fixed_timestamp(2030)).await?;
+
+        let default_authorization: (bool, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>) =
+            sqlx::query_as(
+                "SELECT git_tracking_upload_enabled, git_tracking_upload_authorized_at, \
+                    git_tracking_upload_authorized_by \
+             FROM org_members WHERE user_id = $1 AND org_id = $2",
+            )
+            .bind(developer_id)
+            .bind(org_id)
+            .fetch_one(&db.state.db)
+            .await?;
+        assert_eq!(default_authorization, (false, None, None));
+
+        let Json(default_list) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(100),
+                cursor: None,
+            }),
+        )
+        .await?;
+        let default_developer = listed_user(&default_list, developer_id);
+        assert_eq!(
+            default_developer["git_tracking_upload_enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(default_developer["git_tracking_upload_authorized_at"].is_null());
+        assert!(default_developer["git_tracking_upload_authorized_by"].is_null());
+
+        let unauthorized = crate::auth::middleware::require_git_tracking_upload_authorization(
+            &db.state.db,
+            developer_id,
+            Some(org_id),
+        )
+        .await
+        .expect_err("new organization members must not be authorized to upload");
+        assert_error_status(unauthorized, StatusCode::FORBIDDEN);
+
+        let Json(granted) = update_git_tracking_upload_authorization(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Path(developer_id),
+            Json(GitTrackingUploadAuthorizationRequest { authorized: true }),
+        )
+        .await?;
+        assert_eq!(granted["git_tracking_upload_enabled"].as_bool(), Some(true));
+        assert_eq!(
+            granted["git_tracking_upload_authorized_by"].as_str(),
+            Some(admin_user_id.to_string().as_str())
+        );
+        assert!(granted["git_tracking_upload_authorized_at"].is_string());
+
+        crate::auth::middleware::require_git_tracking_upload_authorization(
+            &db.state.db,
+            developer_id,
+            Some(org_id),
+        )
+        .await?;
+
+        let Json(granted_list) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(100),
+                cursor: None,
+            }),
+        )
+        .await?;
+        let granted_developer = listed_user(&granted_list, developer_id);
+        assert_eq!(
+            granted_developer["git_tracking_upload_enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            granted_developer["git_tracking_upload_authorized_by"].as_str(),
+            Some(admin_user_id.to_string().as_str())
+        );
+        assert!(granted_developer["git_tracking_upload_authorized_at"].is_string());
+
+        let Json(revoked) = update_git_tracking_upload_authorization(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Path(developer_id),
+            Json(GitTrackingUploadAuthorizationRequest { authorized: false }),
+        )
+        .await?;
+        assert_eq!(
+            revoked["git_tracking_upload_enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(revoked["git_tracking_upload_authorized_at"].is_null());
+        assert!(revoked["git_tracking_upload_authorized_by"].is_null());
+
+        let revoked_immediately =
+            crate::auth::middleware::require_git_tracking_upload_authorization(
+                &db.state.db,
+                developer_id,
+                Some(org_id),
+            )
+            .await
+            .expect_err("revocation must take effect without refreshing credentials");
+        assert_error_status(revoked_immediately, StatusCode::FORBIDDEN);
+
+        let Json(revoked_list) = list_users(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(PaginationQuery {
+                limit: Some(100),
+                cursor: None,
+            }),
+        )
+        .await?;
+        let revoked_developer = listed_user(&revoked_list, developer_id);
+        assert_eq!(
+            revoked_developer["git_tracking_upload_enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(revoked_developer["git_tracking_upload_authorized_at"].is_null());
+        assert!(revoked_developer["git_tracking_upload_authorized_by"].is_null());
+
+        let audit_entries: Vec<(
+            String,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<String>,
+            Option<String>,
+            Option<Value>,
+        )> = sqlx::query_as(
+            "SELECT action, user_id, org_id, resource_type, resource_id, details \
+             FROM audit_log WHERE resource_id = $1 ORDER BY id",
+        )
+        .bind(developer_id.to_string())
+        .fetch_all(&db.state.db)
+        .await?;
+        assert_eq!(audit_entries.len(), 2);
+        assert_eq!(
+            audit_entries[0],
+            (
+                "developer.git_tracking_upload.grant".into(),
+                Some(admin_user_id),
+                Some(org_id),
+                Some("user".into()),
+                Some(developer_id.to_string()),
+                Some(json!({ "authorized": true })),
+            )
+        );
+        assert_eq!(
+            audit_entries[1],
+            (
+                "developer.git_tracking_upload.revoke".into(),
+                Some(admin_user_id),
+                Some(org_id),
+                Some("user".into()),
+                Some(developer_id.to_string()),
+                Some(json!({ "authorized": false })),
+            )
+        );
+
+        sqlx::query(
+            "UPDATE org_members SET git_tracking_upload_enabled = true \
+             WHERE user_id = $1 AND org_id = $2",
+        )
+        .bind(developer_id)
+        .bind(org_id)
+        .execute(&db.state.db)
+        .await?;
+        sqlx::query("UPDATE users SET status = 'disabled' WHERE id = $1")
+            .bind(developer_id)
+            .execute(&db.state.db)
+            .await?;
+        let disabled = crate::auth::middleware::require_git_tracking_upload_authorization(
+            &db.state.db,
+            developer_id,
+            Some(org_id),
+        )
+        .await
+        .expect_err("an authorized but disabled account must still be rejected");
+        assert_error_status(disabled, StatusCode::UNAUTHORIZED);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_tracking_authorization_update_returns_not_found_for_cross_org_target(
+    ) -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, admin_org_id) = insert_test_identity(&db.state.db).await?;
+        let other_org_id = uuid_tail(302);
+        let other_user_id = uuid_tail(303);
+        insert_organization(&db.state.db, other_org_id, "Other Authorization Org").await?;
+        insert_user(
+            &db.state.db,
+            other_user_id,
+            other_org_id,
+            fixed_timestamp(2030),
+        )
+        .await?;
+
+        let error = update_git_tracking_upload_authorization(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, admin_org_id),
+            Path(other_user_id),
+            Json(GitTrackingUploadAuthorizationRequest { authorized: true }),
+        )
+        .await
+        .expect_err("an administrator must not authorize a user in another organization");
+        assert_error_status(error, StatusCode::NOT_FOUND);
+
+        let still_disabled: bool = sqlx::query_scalar(
+            "SELECT git_tracking_upload_enabled FROM org_members \
+             WHERE user_id = $1 AND org_id = $2",
+        )
+        .bind(other_user_id)
+        .bind(other_org_id)
+        .fetch_one(&db.state.db)
+        .await?;
+        assert!(!still_disabled);
+
+        let cross_org_audit_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE resource_id = $1")
+                .bind(other_user_id.to_string())
+                .fetch_one(&db.state.db)
+                .await?;
+        assert_eq!(cross_org_audit_count, 0);
 
         db.cleanup().await?;
         Ok(())
@@ -1532,6 +1913,21 @@ mod log_pagination_tests {
                     .expect("entry id should be a UUID")
             })
             .collect()
+    }
+
+    fn listed_user(page: &Value, user_id: Uuid) -> &Value {
+        page["users"]
+            .as_array()
+            .expect("users should be an array")
+            .iter()
+            .find(|user| {
+                user["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) == Some(user_id)
+            })
+            .expect("user should be present in the administrator's organization")
+    }
+
+    fn assert_error_status(error: AppError, expected: StatusCode) {
+        assert_eq!(error.into_response().status(), expected);
     }
 
     fn required_next_cursor(page: &Value) -> String {

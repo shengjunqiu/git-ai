@@ -48,6 +48,10 @@ pub struct OrgMember {
     pub org_id: Uuid,
     pub department_id: Option<Uuid>,
     pub role: String,
+    #[serde(default)]
+    pub git_tracking_upload_enabled: bool,
+    pub git_tracking_upload_authorized_at: Option<DateTime<Utc>>,
+    pub git_tracking_upload_authorized_by: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

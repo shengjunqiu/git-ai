@@ -112,6 +112,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "027_department_aggregate_fallback_index",
         include_str!("../../migrations/027_department_aggregate_fallback_index.sql"),
     ),
+    (
+        "028_git_tracking_upload_authorization",
+        include_str!("../../migrations/028_git_tracking_upload_authorization.sql"),
+    ),
 ];
 
 /// Run all database migrations
@@ -190,6 +194,7 @@ mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_migrations_serializes_concurrent_callers() -> anyhow::Result<()> {
@@ -307,6 +312,76 @@ mod tests {
         .fetch_one(&test_pool)
         .await?;
         assert!(dirty_scope_index_exists);
+
+        let authorization_columns: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT column_name, is_nullable, column_default \
+             FROM information_schema.columns \
+             WHERE table_schema = 'public' \
+               AND table_name = 'org_members' \
+               AND column_name IN ( \
+                   'git_tracking_upload_enabled', \
+                   'git_tracking_upload_authorized_at', \
+                   'git_tracking_upload_authorized_by' \
+               ) \
+             ORDER BY column_name",
+        )
+        .fetch_all(&test_pool)
+        .await?;
+        assert_eq!(authorization_columns.len(), 3);
+        assert_eq!(
+            authorization_columns
+                .iter()
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "git_tracking_upload_authorized_at",
+                "git_tracking_upload_authorized_by",
+                "git_tracking_upload_enabled",
+            ]
+        );
+        let (_, enabled_nullable, enabled_default) = authorization_columns
+            .iter()
+            .find(|(name, _, _)| name == "git_tracking_upload_enabled")
+            .expect("git tracking upload authorization column should exist");
+        assert_eq!(enabled_nullable, "NO");
+        assert!(
+            enabled_default
+                .as_deref()
+                .is_some_and(|default| default.contains("false")),
+            "git_tracking_upload_enabled should default to false"
+        );
+
+        let org_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(org_id)
+            .bind("Migration Authorization Test Org")
+            .bind(format!("migration-authorization-test-{}", org_id.simple()))
+            .execute(&test_pool)
+            .await?;
+        sqlx::query("INSERT INTO users (id, email, name, default_org_id) VALUES ($1, $2, $3, $4)")
+            .bind(user_id)
+            .bind(format!("{user_id}@example.com"))
+            .bind("Migration Authorization Test User")
+            .bind(org_id)
+            .execute(&test_pool)
+            .await?;
+        sqlx::query("INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, 'member')")
+            .bind(user_id)
+            .bind(org_id)
+            .execute(&test_pool)
+            .await?;
+        let default_authorization: (bool, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>) =
+            sqlx::query_as(
+                "SELECT git_tracking_upload_enabled, git_tracking_upload_authorized_at, \
+                    git_tracking_upload_authorized_by \
+             FROM org_members WHERE user_id = $1 AND org_id = $2",
+            )
+            .bind(user_id)
+            .bind(org_id)
+            .fetch_one(&test_pool)
+            .await?;
+        assert_eq!(default_authorization, (false, None, None));
 
         test_pool.close().await;
         drop_database(&admin_pool, &db_name).await?;
