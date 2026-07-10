@@ -39,6 +39,16 @@ impl ApiClient {
                     error_response.error
                 )))
             }
+            401 => Err(GitAiError::Generic("Unauthorized".to_string())),
+            403 => {
+                let error_response: ApiErrorResponse =
+                    serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
+                        error: "Administrator authorization is required for Git tracking uploads"
+                            .to_string(),
+                        details: Some(serde_json::Value::String(body.to_string())),
+                    });
+                Err(GitAiError::UploadForbidden(error_response.error))
+            }
             500 => {
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {

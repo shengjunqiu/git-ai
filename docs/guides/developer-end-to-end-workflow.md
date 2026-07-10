@@ -349,6 +349,14 @@ git-ai search --file path/to/file.ts --lines 10-40 --verbose
 
 当开发者已登录，并且 `api_base_url` 指向企业服务端时，commit 后产生的 metrics 会尝试自动上传。
 
+如果管理员尚未为当前开发者授权，服务端返回 403，CLI 会在本次 `git commit` 结束时明确显示：
+
+```text
+[git-ai] AI tracking saved locally. Upload blocked: an organization administrator must authorize Git tracking uploads for this developer account.
+```
+
+此时 Git commit 本身仍然成功，追踪事件只保存在本地，不会写入平台。管理员授权后，后续 commit 会自动重试本地队列。
+
 如果当时网络不可用或 daemon 没有及时上传，事件会先进入本地队列：
 
 ```text

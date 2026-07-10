@@ -834,12 +834,44 @@ pub fn print_commit_upload_notice() {
     let diag = telemetry_upload_diagnostics();
     let daemon_available = crate::daemon::daemon_process_active()
         || crate::daemon::telemetry_handle::daemon_telemetry_available();
+
+    // The daemon upload is asynchronous, so its response can arrive after the
+    // post-commit hook exits. Probe the same guarded metrics endpoint with an
+    // empty batch to make an authorization denial visible in this commit's
+    // output without creating an extra tracking event.
+    if daemon_available
+        && (diag.is_logged_in || diag.has_api_key)
+        && let Some(message) = commit_upload_authorization_notice()
+    {
+        eprintln!("{}", message);
+        return;
+    }
+
     eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
     if diag.is_logged_in || diag.has_api_key {
         if let Some(message) = retry_stored_metrics_notice() {
             eprintln!("{}", message);
         }
     }
+}
+
+fn commit_upload_authorization_notice() -> Option<String> {
+    let context = ApiContext::new(None).with_timeout(5);
+    let client = ApiClient::new(context);
+    let probe = crate::metrics::MetricsBatch::new(Vec::new());
+
+    upload_authorization_notice_message(&client.upload_metrics(&probe).err()?)
+}
+
+fn upload_authorization_notice_message(error: &crate::error::GitAiError) -> Option<String> {
+    if matches!(error, crate::error::GitAiError::UploadForbidden(_)) {
+        return Some(
+            "[git-ai] AI tracking saved locally. Upload blocked: an organization administrator must authorize Git tracking uploads for this developer account."
+                .to_string(),
+        );
+    }
+
+    None
 }
 
 fn commit_upload_notice_message(
@@ -984,6 +1016,26 @@ mod tests {
             message,
             "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it."
         );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_reports_administrator_authorization_block() {
+        let error = crate::error::GitAiError::UploadForbidden(
+            "Developer is not authorized to upload Git tracking data".to_string(),
+        );
+
+        assert_eq!(
+            upload_authorization_notice_message(&error).as_deref(),
+            Some(
+                "[git-ai] AI tracking saved locally. Upload blocked: an organization administrator must authorize Git tracking uploads for this developer account."
+            )
+        );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_ignores_transient_probe_failure() {
+        let error = crate::error::GitAiError::Generic("network timeout".to_string());
+        assert!(upload_authorization_notice_message(&error).is_none());
     }
 
     #[test]

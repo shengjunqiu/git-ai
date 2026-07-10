@@ -83,6 +83,14 @@ pub fn upload_metrics_with_retry(
                 return Ok(());
             }
             Err(e) => {
+                // Administrator authorization is a durable policy decision, not a
+                // transient transport failure. Return immediately so the daemon can
+                // persist the events locally instead of sleeping for 60 seconds.
+                if matches!(e, GitAiError::UploadForbidden(_)) {
+                    eprintln!("[metrics] Upload blocked by administrator authorization");
+                    return Err(e);
+                }
+
                 // Non-200 - will retry if attempts remain
                 if attempt == RETRY_DELAYS_SECS.len() {
                     eprintln!("[metrics] All retries exhausted, giving up");
@@ -137,6 +145,15 @@ impl ApiClient {
                 )))
             }
             401 => Err(GitAiError::Generic("Unauthorized".to_string())),
+            403 => {
+                let error_response: ApiErrorResponse =
+                    serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
+                        error: "Administrator authorization is required for Git tracking uploads"
+                            .to_string(),
+                        details: Some(serde_json::Value::String(body.to_string())),
+                    });
+                Err(GitAiError::UploadForbidden(error_response.error))
+            }
             500 => {
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
@@ -202,5 +219,15 @@ mod tests {
         };
         let successful = response.successful_indices(2);
         assert!(successful.is_empty());
+    }
+
+    #[test]
+    fn upload_forbidden_error_is_identifiable_without_string_matching() {
+        let error = GitAiError::UploadForbidden(
+            "Developer is not authorized to upload Git tracking data".to_string(),
+        );
+
+        assert!(matches!(error, GitAiError::UploadForbidden(_)));
+        assert!(error.to_string().contains("Upload forbidden"));
     }
 }
