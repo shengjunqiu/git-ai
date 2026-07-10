@@ -1,0 +1,24 @@
+enterprise-server/src/handlers/auth_pages.rs
+  2fc1e112fce30a49 38,479-484,554-561
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "780a202eb23d1039c646e0ee6b30c1b0adc04549",
+  "prompts": {
+    "2fc1e112fce30a49": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49a1-0d07-7241-9fbf-65bb2cb2a72a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 16,
+      "total_deletions": 0,
+      "accepted_lines": 16,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/063c362baceda4758f93a563009a395a0df18a6b1903fbc003bf8a02251738db"
+    }
+  }
+}
