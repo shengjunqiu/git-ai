@@ -1,0 +1,26 @@
+enterprise-server/src/handlers/dashboard.rs
+  9b34970df6197bbc 1452,1470,3131-3139,3204,3211,3581-3585,3588-3589,3593
+enterprise-server/static/dashboard.js
+  9b34970df6197bbc 1049-1055
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "330bee9d54aaf7d0775d573150d24982d2b608c9",
+  "prompts": {
+    "9b34970df6197bbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4b0d-7ffe-71a2-a2cc-0c6f5094a774",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 9,
+      "accepted_lines": 28,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/8afcb6f191600b8cb5350b2787337d26d51c87e189b49d293de46d2b1c5fd326"
+    }
+  }
+}
