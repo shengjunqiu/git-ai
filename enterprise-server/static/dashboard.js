@@ -1046,9 +1046,13 @@ function renderDepartmentBreadcrumb() {
 
 function renderDepartmentLevel() {
     renderDepartmentBreadcrumb();
-    const departments = departmentTreeRows.filter(dept =>
-        (dept.parent_id || null) === activeDepartmentParentId
-    );
+    const departments = departmentTreeRows
+        .filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
+        .sort((left, right) => String(left.code || '').localeCompare(
+            String(right.code || ''),
+            undefined,
+            { numeric: true, sensitivity: 'base' }
+        ));
 
     if (departments.length === 0) {
         document.getElementById('departments-table').innerHTML =

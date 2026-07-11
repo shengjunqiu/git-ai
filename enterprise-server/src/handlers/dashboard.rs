@@ -1449,7 +1449,7 @@ pub async fn aggregate_departments(
                 d.parent_id,
                 o.name AS org_name,
                 1 AS depth,
-                ARRAY[d.name || ' [' || d.code || '] ' || d.id::text]::text[] AS sort_path
+                ARRAY[d.code || ' [' || d.name || '] ' || d.id::text]::text[] AS sort_path
             FROM departments d
             JOIN organizations o ON d.org_id = o.id
             WHERE ($2::text IS NULL OR o.slug = $2)
@@ -1467,7 +1467,7 @@ pub async fn aggregate_departments(
                 child.parent_id,
                 tree.org_name,
                 tree.depth + 1,
-                tree.sort_path || (child.name || ' [' || child.code || '] ' || child.id::text)
+                tree.sort_path || (child.code || ' [' || child.name || '] ' || child.id::text)
             FROM department_tree tree
             JOIN departments child
               ON child.org_id = tree.org_id
@@ -3128,6 +3128,15 @@ mod tests {
             insert_department_with_parent(&db.pool, org_id, "Leaf", Some(child_id)).await?;
         let sibling_id =
             insert_department_with_parent(&db.pool, org_id, "Sibling", Some(root_id)).await?;
+        sqlx::query(
+            "UPDATE departments \
+             SET code = CASE WHEN id = $1 THEN 'F00020' ELSE 'F00010' END \
+             WHERE id IN ($1, $2)",
+        )
+        .bind(child_id)
+        .bind(sibling_id)
+        .execute(&db.pool)
+        .await?;
 
         let admin_id = insert_user(&db.pool, org_id, "Admin", "admin", None).await?;
         let root_user = insert_user(&db.pool, org_id, "Root User", "member", Some(root_id)).await?;
@@ -3192,14 +3201,14 @@ mod tests {
                     .iter()
                     .map(|department| department["department"].as_str().unwrap())
                     .collect::<Vec<_>>(),
-                vec!["Root", "Child", "Leaf", "Sibling"]
+                vec!["Root", "Sibling", "Child", "Leaf"]
             );
             assert_eq!(
                 departments
                     .iter()
                     .map(|department| department["depth"].as_i64().unwrap())
                     .collect::<Vec<_>>(),
-                vec![1, 2, 3, 2]
+                vec![1, 2, 2, 3]
             );
 
             let expected = [
@@ -3569,13 +3578,19 @@ mod tests {
             name.to_ascii_lowercase().replace(' ', "-"),
             department_id.simple()
         );
+        let code = format!(
+            "TEST-{}-{}",
+            name.to_ascii_uppercase().replace(' ', "-"),
+            department_id.simple()
+        );
 
         sqlx::query(
-            "INSERT INTO departments (id, org_id, name, slug, parent_id) \
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO departments (id, org_id, code, name, slug, parent_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(department_id)
         .bind(org_id)
+        .bind(code)
         .bind(name)
         .bind(slug)
         .bind(parent_id)
