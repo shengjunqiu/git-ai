@@ -1,0 +1,28 @@
+docker-compose.yml
+  bb640ba9b24f535c 4-6
+enterprise-server/docker-compose.yml
+  bb640ba9b24f535c 4-6
+enterprise-server/src/handlers/auth_pages.rs
+  bb640ba9b24f535c 73-74,176,181,208-251,254,269,276,286-291,293-295,298,309,361,365,370,668-670
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "08690a3cee25dae8b30325dab5d7cc50519e82e6",
+  "prompts": {
+    "bb640ba9b24f535c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f565b-c18d-7ea2-8f3c-68a579cae528",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 85,
+      "total_deletions": 19,
+      "accepted_lines": 2077,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/1ce4052447ac976e6c58a480adf8d8122d5b9440f2dea991a9c99e6229a66077"
+    }
+  }
+}
