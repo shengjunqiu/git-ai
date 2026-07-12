@@ -148,7 +148,7 @@ docker compose restart
 # 停止并删除容器（数据卷保留）
 docker compose down
 
-# 停止并删除容器和数据卷（危险！数据会丢失）
+# 停止并删除容器；绑定到 DATA_DIR 的 SQLite 数据仍会保留
 docker compose down -v
 
 # 进入容器 shell
@@ -262,6 +262,7 @@ sudo journalctl -u git-ai-report -f
 |------|------|--------|
 | `GIT_AI_REPORT_ADDR` | 服务监听地址 | `0.0.0.0:8787` |
 | `GIT_AI_REPORT_DB` | SQLite 数据库文件路径 | `./data/report.sqlite` |
+| `GIT_AI_ASYNC_MODE` | 容器内禁用 CLI 后台 daemon 依赖 | `false` |
 | `GIT_AI_REPORT_LOG` | 日志文件路径（脚本后台模式） | `./data/server.log` |
 | `GIT_AI_REPORT_PID` | PID 文件路径（脚本后台模式） | `./data/server.pid` |
 | `REPORT_PORT` | Docker Compose 宿主机端口 | `8787` |

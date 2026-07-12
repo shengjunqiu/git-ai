@@ -1,117 +1,23 @@
 services:
-  # Enterprise Server API
-  api:
+  report-server:
     build:
       context: .
-      dockerfile: enterprise-server/Dockerfile
+      dockerfile: Dockerfile
+    image: git-ai-report:latest
+    container_name: git-ai-report-server
     ports:
-      - "8080:8080"
+      - "${REPORT_PORT:-8787}:8787"
     environment:
-      - DATABASE_URL=postgresql://gitai:gitai@postgres:5432/gitai_enterprise
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-use-a-strong-random-string}
-      - S3_ENDPOINT=http://minio:9000
-      - S3_BUCKET=git-ai-cas
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_REGION=us-east-1
-      - BASE_URL=${BASE_URL:-http://localhost:8080}
-      - SENTRY_DSN=${SENTRY_DSN:-}
-      - POSTHOG_HOST=${POSTHOG_HOST:-}
-      - POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
-      - RUST_LOG=git_ai_enterprise_server=info,tower_http=warn
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_started
+      GIT_AI_REPORT_ADDR: 0.0.0.0:8787
+      GIT_AI_REPORT_DB: /data/report.sqlite
+      GIT_AI_ASYNC_MODE: "false"
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - "${DATA_DIR:-./data}:/data"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/api/v1/aggregate/summary"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
+      start_period: 10s
       retries: 3
-
-  # PostgreSQL Database
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: gitai
-      POSTGRES_PASSWORD: gitai
-      POSTGRES_DB: gitai_enterprise
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gitai -d gitai_enterprise"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # MinIO (S3-compatible CAS storage)
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio_data:/data
-    restart: unless-stopped
-
-  # Database initialization - create default admin user and organization
-  db-init:
-    image: postgres:16-alpine
-    depends_on:
-      api:
-        condition: service_started
-    environment:
-      PGHOST: postgres
-      PGUSER: gitai
-      PGPASSWORD: gitai
-      PGDATABASE: gitai_enterprise
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Waiting for API server to initialize database...';
-      sleep 15;
-      echo 'Creating default admin user and linewell.com organization...';
-      psql -c \"INSERT INTO organizations (name, slug) VALUES ('Linewell', 'linewell.com') ON CONFLICT (slug) DO NOTHING;\";
-      psql -c \"INSERT INTO users (email, name, personal_org_id) VALUES ('admin@linewell.com', 'Admin', (SELECT id FROM organizations WHERE slug = 'linewell.com')) ON CONFLICT (email) DO NOTHING;\";
-      psql -c \"UPDATE users SET personal_org_id = (SELECT id FROM organizations WHERE slug = 'linewell.com') WHERE email = 'admin@linewell.com';\";
-      psql -c \"INSERT INTO org_members (user_id, org_id, role) SELECT u.id, o.id, 'owner' FROM users u, organizations o WHERE u.email = 'admin@linewell.com' AND o.slug = 'linewell.com' ON CONFLICT DO NOTHING;\";
-      echo '';
-      echo '========================================';
-      echo '  git-ai Enterprise Server is ready!';
-      echo '========================================';
-      echo '  API:        http://localhost:8080';
-      echo '  Dashboard:  http://localhost:8080/me';
-      echo '  Health:     http://localhost:8080/health';
-      echo '  MinIO:      http://localhost:9001 (minioadmin/minioadmin)';
-      echo '  Admin User: admin@linewell.com';
-      echo '  Org:        Linewell (linewell.com)';
-      echo '========================================';
-      "
-
-volumes:
-  pgdata:
-  minio_data:

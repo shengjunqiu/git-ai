@@ -55,7 +55,7 @@ if ($Docker) {
     try {
         if ($Build) {
             Info "重新构建 Docker 镜像..."
-            docker compose build --no-cache
+            docker compose build
         }
         docker compose up -d
     } finally {

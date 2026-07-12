@@ -38,19 +38,20 @@ EOF
 
 WORKDIR /build
 
-# Copy dependency manifests first for better layer caching
+# Copy manifests and the local path dependency before the application source.
 COPY Cargo.toml Cargo.lock ./
-
-# Pre-fetch dependencies
-RUN mkdir -p src && echo 'fn main(){}' > src/main.rs && \
-    cargo fetch --locked && \
-    rm -rf src
+COPY crates/git-ai-protocol ./crates/git-ai-protocol
 
 # Copy full source
 COPY . .
 
-# Build release binary
-RUN cargo build --release --locked --bin git-ai
+# Persist downloaded crates and compiled dependencies across source changes.
+RUN --mount=type=cache,id=git-ai-report-cn-cargo-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=git-ai-report-cn-cargo-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=git-ai-report-cn-cargo-target,target=/build/target,sharing=locked \
+    mkdir -p /out \
+    && cargo build --release --locked --bin git-ai \
+    && cp target/release/git-ai /out/git-ai
 
 # ============================================================
 # Stage 2: Runtime
@@ -62,12 +63,13 @@ RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -r -u 1001 -g root -s /sbin/nologin gitai
 
-COPY --from=builder /build/target/release/git-ai /usr/local/bin/git-ai
+COPY --from=builder /out/git-ai /usr/local/bin/git-ai
 
 RUN mkdir -p /data && chown gitai /data
 
@@ -76,6 +78,7 @@ WORKDIR /data
 
 ENV GIT_AI_REPORT_ADDR=0.0.0.0:8787
 ENV GIT_AI_REPORT_DB=/data/report.sqlite
+ENV GIT_AI_ASYNC_MODE=false
 
 EXPOSE 8787
 

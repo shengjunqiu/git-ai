@@ -4,6 +4,12 @@
 
 ## 1. 项目运行模型
 
+Docker 入口按服务边界划分：
+
+- 仓库根目录的 `docker-compose.yml`：轻量 Report Server，默认使用 SQLite 并监听 `8787`。
+- `enterprise-server/docker-compose.yml`：Enterprise Server 本地开发环境，包含 PostgreSQL、Redis 和 MinIO，默认监听 `8080`。
+- `enterprise-server/deploy/docker-compose.yml`：Enterprise Server 的线上部署配置，使用预构建镜像。
+
 本仓库不是单一前端项目，而是一个产品型 monorepo：
 
 - 根目录：`git-ai` CLI、Git 代理、daemon、report server。

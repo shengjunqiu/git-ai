@@ -72,7 +72,7 @@ if [[ "$MODE" == "docker" ]]; then
 
     if [[ "$DOCKER_BUILD" == true ]]; then
         info "重新构建 Docker 镜像..."
-        docker compose build --no-cache
+        docker compose build
     fi
 
     docker compose up -d
