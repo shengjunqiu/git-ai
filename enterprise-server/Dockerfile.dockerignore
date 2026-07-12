@@ -1,0 +1,5 @@
+.git/
+**/target/
+**/.DS_Store
+**/*.md
+**/docker-compose.yml

@@ -2,8 +2,8 @@ services:
   # Enterprise Server API
   api:
     build:
-      context: ./enterprise-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: enterprise-server/Dockerfile
     ports:
       - "8080:8080"
     environment:
