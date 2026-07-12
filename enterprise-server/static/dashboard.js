@@ -1009,9 +1009,8 @@ function backDepartmentLevel() {
 
 function renderDepartmentBreadcrumb() {
     const breadcrumb = document.getElementById('departments-breadcrumb');
-    const levelTitle = document.getElementById('departments-level-title');
     const backButton = document.getElementById('departments-back');
-    if (!breadcrumb || !levelTitle || !backButton) return;
+    if (!breadcrumb || !backButton) return;
 
     const byId = new Map(departmentTreeRows.map(dept => [dept.id, dept]));
     const trail = [];
@@ -1037,10 +1036,6 @@ function renderDepartmentBreadcrumb() {
     });
     breadcrumb.innerHTML = parts.join(' ');
 
-    const parent = activeDepartmentParentId ? byId.get(activeDepartmentParentId) : null;
-    levelTitle.textContent = parent
-        ? `当前显示「${parent.department || '—'}」的直属下级部门`
-        : '当前显示顶层部门';
     backButton.style.display = activeDepartmentParentId ? '' : 'none';
 }
 
@@ -1062,13 +1057,10 @@ function renderDepartmentLevel() {
 
     document.getElementById('departments-table').innerHTML = departments.map(dept => {
             const departmentName = escapeHtml(dept.department || '—');
-            const departmentCode = escapeHtml(dept.code || '—');
             const orgName = escapeHtml(dept.organization || '—');
-            const depth = Math.max(1, Number(dept.depth) || 1);
             const nodeIcon = dept.has_children ? '›' : '•';
-            const nodeType = dept.has_children ? '汇总' : '终端';
             const rowAction = dept.has_children
-                ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer" title="点击进入下一级部门"`
+                ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer"`
                 : '';
             const total = dept.w_total || 0;
             const ai = dept.w_ai || 0;
@@ -1076,9 +1068,9 @@ function renderDepartmentLevel() {
             return `<tr${rowAction}>
                 <td><strong>${orgName}</strong></td>
                 <td>
-                    <div style="display:flex;align-items:center;gap:0.45rem" title="第 ${depth} 层 · ${nodeType}节点">
+                    <div style="display:flex;align-items:center;gap:0.45rem">
                         <span style="color:var(--text-muted);width:0.9rem">${nodeIcon}</span>
-                        <span><strong>${departmentName}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${departmentCode} · 第 ${depth} 层 · ${nodeType}${dept.has_children ? ' · 点击进入' : ''}</span></span>
+                        <strong>${departmentName}</strong>
                     </div>
                 </td>
                 <td>${fmt(dept.total_commits || 0)}</td>
