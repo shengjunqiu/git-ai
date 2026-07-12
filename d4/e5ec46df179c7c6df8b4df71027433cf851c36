@@ -1,0 +1,24 @@
+enterprise-server/src/handlers/auth_pages.rs
+  bb640ba9b24f535c 73-76,175-177,198,208,210-215,219,224,226-228,231-232,235-243,246,257,271,295-296,299,309,360,364,367,662-672,675-676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "d4e5ec46df179c7c6df8b4df71027433cf851c36",
+  "prompts": {
+    "bb640ba9b24f535c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f565b-c18d-7ea2-8f3c-68a579cae528",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 64,
+      "total_deletions": 58,
+      "accepted_lines": 2059,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/ab2228c73c3dd2aec3bd99fe82bd2a6b82cea1f26e38ca48b862acf4e2a9235d"
+    }
+  }
+}
