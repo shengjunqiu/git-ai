@@ -1043,11 +1043,15 @@ function renderDepartmentLevel() {
     renderDepartmentBreadcrumb();
     const departments = departmentTreeRows
         .filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
-        .sort((left, right) => String(left.code || '').localeCompare(
-            String(right.code || ''),
-            undefined,
-            { numeric: true, sensitivity: 'base' }
-        ));
+        .sort((left, right) => {
+            const percentageDifference = departmentAiPercentage(right) - departmentAiPercentage(left);
+            if (percentageDifference !== 0) return percentageDifference;
+            return String(left.code || '').localeCompare(
+                String(right.code || ''),
+                undefined,
+                { numeric: true, sensitivity: 'base' }
+            );
+        });
 
     if (departments.length === 0) {
         document.getElementById('departments-table').innerHTML =
@@ -1063,8 +1067,7 @@ function renderDepartmentLevel() {
                 ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer"`
                 : '';
             const total = dept.w_total || 0;
-            const ai = dept.w_ai || 0;
-            const pct = total > 0 ? (ai / total) * 100 : 0;
+            const pct = departmentAiPercentage(dept) * 100;
             return `<tr${rowAction}>
                 <td><strong>${orgName}</strong></td>
                 <td>
@@ -1078,6 +1081,12 @@ function renderDepartmentLevel() {
                 <td>${fmt(total)}</td>
             </tr>`;
     }).join('');
+}
+
+function departmentAiPercentage(department) {
+    const total = Number(department.w_total) || 0;
+    const ai = Number(department.w_ai) || 0;
+    return total > 0 ? ai / total : 0;
 }
 
 async function showCreateDepartmentModal() {

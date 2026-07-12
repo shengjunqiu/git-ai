@@ -20,8 +20,15 @@ COPY crates/git-ai-protocol /build/crates/git-ai-protocol
 COPY enterprise-server/src ./src
 COPY enterprise-server/migrations ./migrations
 
-# Build release binary
-RUN cargo build --release --locked --bin git-ai-enterprise-server
+# Persist downloaded crates and compiled dependencies across source changes.
+# The target directory is a cache mount, so copy the final binary to /out
+# before the mount is detached from this layer.
+RUN --mount=type=cache,id=git-ai-enterprise-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=git-ai-enterprise-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=git-ai-enterprise-cargo-target,target=/build/enterprise-server/target,sharing=locked \
+    mkdir -p /out \
+    && cargo build --release --locked --bin git-ai-enterprise-server \
+    && cp target/release/git-ai-enterprise-server /out/git-ai-enterprise-server
 
 # ============================================================
 # Stage 2: Runtime
@@ -37,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -r -u 1001 -g root -s /sbin/nologin gitai
 
 # Copy binary
-COPY --from=builder /build/enterprise-server/target/release/git-ai-enterprise-server /usr/local/bin/git-ai-enterprise-server
+COPY --from=builder /out/git-ai-enterprise-server /usr/local/bin/git-ai-enterprise-server
 
 # Data directory
 RUN mkdir -p /data && chown gitai /data
