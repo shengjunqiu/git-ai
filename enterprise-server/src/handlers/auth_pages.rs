@@ -70,11 +70,10 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         <option value="">输入邮箱后选择组织</option>
       </select>
 
-      <label for="department_search">部门</label>
-      <input id="department_search" type="search" placeholder="先选择组织" autocomplete="off" disabled />
-      <select id="department_id" name="department_id" required disabled>
-        <option value="">先选择组织</option>
-      </select>
+      <label for="department_picker">部门</label>
+      <input id="department_picker" type="search" list="department_options" placeholder="先选择组织" autocomplete="off" required disabled />
+      <datalist id="department_options"></datalist>
+      <input id="department_id" name="department_id" type="hidden" />
       <div class="form-hint" id="registration-scope-hint">输入邮箱后加载可加入的组织和部门</div>
 "#
         .to_string()
@@ -173,8 +172,9 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
 (() => {
   const emailInput = document.getElementById('email');
   const orgSelect = document.getElementById('org_id');
-  const departmentSearch = document.getElementById('department_search');
-  const departmentSelect = document.getElementById('department_id');
+  const departmentPicker = document.getElementById('department_picker');
+  const departmentList = document.getElementById('department_options');
+  const departmentId = document.getElementById('department_id');
   const hint = document.getElementById('registration-scope-hint');
   const submit = document.querySelector('button[type="submit"]');
   let emailTimer = null;
@@ -195,7 +195,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
   }
 
   function updateSubmitState() {
-    submit.disabled = !(orgSelect.value && departmentSelect.value);
+    submit.disabled = !(orgSelect.value && departmentId.value);
   }
 
   function appendOption(select, value, label) {
@@ -205,41 +205,45 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     select.appendChild(option);
   }
 
-  function resetDepartmentSearch(placeholder = '先选择组织') {
+  function resetDepartmentPicker(placeholder = '先选择组织') {
     departmentOptions = [];
-    departmentSearch.value = '';
-    departmentSearch.placeholder = placeholder;
-    departmentSearch.disabled = true;
+    departmentList.innerHTML = '';
+    departmentPicker.value = '';
+    departmentPicker.placeholder = placeholder;
+    departmentPicker.disabled = true;
+    departmentPicker.setCustomValidity('');
+    departmentId.value = '';
   }
 
   function renderDepartmentOptions() {
-    const keyword = departmentSearch.value.trim().toLocaleLowerCase();
-    const previousValue = departmentSelect.value;
+    const keyword = departmentPicker.value.trim().toLocaleLowerCase();
     const matches = departmentOptions.filter(department =>
       !keyword || department.searchText.includes(keyword)
     );
 
-    departmentSelect.innerHTML = '';
-    appendOption(
-      departmentSelect,
-      '',
-      matches.length ? '请选择部门' : '未找到匹配部门'
-    );
+    departmentList.innerHTML = '';
     matches.forEach(department => {
-      appendOption(departmentSelect, department.id, department.label);
+      const option = document.createElement('option');
+      option.value = department.label;
+      departmentList.appendChild(option);
     });
-    departmentSelect.disabled = matches.length === 0;
 
-    if (matches.some(department => department.id === previousValue)) {
-      departmentSelect.value = previousValue;
-    } else if (!keyword && departmentOptions.length === 1) {
-      departmentSelect.value = departmentOptions[0].id;
+    if (!keyword && departmentOptions.length === 1) {
+      departmentPicker.value = departmentOptions[0].label;
     }
 
-    if (keyword) {
+    const selected = departmentOptions.find(department => department.label === departmentPicker.value);
+    departmentId.value = selected ? selected.id : '';
+    departmentPicker.setCustomValidity(
+      keyword && !selected ? '请从匹配结果中选择部门' : ''
+    );
+
+    if (selected) {
+      setHint(`已选择：${selected.label}`);
+    } else if (keyword) {
       setHint(
         matches.length
-          ? `找到 ${matches.length} 个匹配部门，请选择你所在的部门。`
+          ? `找到 ${matches.length} 个匹配部门，请从列表中选择。`
           : '未找到匹配部门，请尝试其他关键词。',
         matches.length ? '' : 'error'
       );
@@ -250,8 +254,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
   }
 
   async function loadDepartments(orgId) {
-    resetSelect(departmentSelect, '加载部门中...');
-    resetDepartmentSearch('加载部门中...');
+    resetDepartmentPicker('加载部门中...');
     updateSubmitState();
 
     try {
@@ -264,9 +267,8 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
       }
 
       const departments = data.departments || [];
-      resetSelect(departmentSelect, departments.length ? '请选择部门' : '暂无可选部门');
       if (departments.length === 0) {
-        resetDepartmentSearch('暂无可选部门');
+        resetDepartmentPicker('暂无可选部门');
         setHint('该组织还没有可选部门，请联系管理员添加部门。', 'error');
         updateSubmitState();
         return;
@@ -290,12 +292,11 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
           searchText: `${label} ${department.name || ''} ${department.code || ''} ${department.slug || ''}`.toLocaleLowerCase()
         };
       });
-      departmentSearch.disabled = false;
-      departmentSearch.placeholder = '输入部门名称或编码';
+      departmentPicker.disabled = false;
+      departmentPicker.placeholder = '输入部门名称或编码';
       renderDepartmentOptions();
     } catch (error) {
-      resetSelect(departmentSelect, '部门加载失败');
-      resetDepartmentSearch('部门加载失败');
+      resetDepartmentPicker('部门加载失败');
       setHint(error.message || '部门加载失败', 'error');
     }
 
@@ -305,8 +306,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
   async function loadOrganizations() {
     const email = emailInput.value.trim();
     resetSelect(orgSelect, '加载组织中...');
-    resetSelect(departmentSelect, '先选择组织');
-    resetDepartmentSearch();
+    resetDepartmentPicker();
     updateSubmitState();
 
     if (!email.includes('@')) {
@@ -357,17 +357,14 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     if (orgSelect.value) {
       loadDepartments(orgSelect.value);
     } else {
-      resetSelect(departmentSelect, '先选择组织');
-      resetDepartmentSearch();
+      resetDepartmentPicker();
       updateSubmitState();
     }
   });
-  departmentSearch.addEventListener('input', renderDepartmentOptions);
-  departmentSelect.addEventListener('change', updateSubmitState);
+  departmentPicker.addEventListener('input', renderDepartmentOptions);
 
   resetSelect(orgSelect, '输入邮箱后选择组织');
-  resetSelect(departmentSelect, '先选择组织');
-  resetDepartmentSearch();
+  resetDepartmentPicker();
   updateSubmitState();
 })();
 </script>"#;
@@ -662,12 +659,21 @@ mod tests {
         let html = auth_page("注册", "/auth/register", &None, true);
 
         assert!(html.contains(r#"<select id="org_id" name="org_id" required disabled>"#));
-        assert!(html.contains(
-            r#"<select id="department_id" name="department_id" required disabled>"#
-        ));
-        assert!(html.contains(r#"<input id="department_search" type="search""#));
+        assert!(
+            html.contains(
+                r#"<input id="department_picker" type="search" list="department_options""#
+            )
+        );
+        assert!(html.contains(r#"<datalist id="department_options"></datalist>"#));
+        assert!(
+            html.contains(r#"<input id="department_id" name="department_id" type="hidden" />"#)
+        );
+        assert!(!html.contains(r#"id="department_search""#));
+        assert!(!html.contains(r#"<select id="department_id""#));
         assert!(html.contains("输入部门名称或编码"));
         assert!(html.contains("department.searchText.includes(keyword)"));
+        assert!(html.contains("departmentId.value = selected ? selected.id : ''"));
+        assert!(html.contains("请从匹配结果中选择部门"));
         assert!(html.contains("/auth/organizations?email="));
         assert!(html.contains("/departments"));
         assert!(!html.contains(r#"name="org_slug" value="linewell.com""#));
