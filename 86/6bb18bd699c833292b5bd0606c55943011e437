@@ -1,0 +1,98 @@
+enterprise-server/src/models/user.rs
+  bb640ba9b24f535c 3-5
+src/commands/share.rs
+  bb640ba9b24f535c 1,182-184,199-206
+src/daemon/telemetry_worker.rs
+  bb640ba9b24f535c 1415
+enterprise-server/src/models/bundle.rs
+  bb640ba9b24f535c 1
+enterprise-server/src/models/metrics.rs
+  bb640ba9b24f535c 1-5
+crates/git-ai-protocol/src/api.rs
+  bb640ba9b24f535c 1-8
+enterprise-server/src/models/cas.rs
+  bb640ba9b24f535c 1-3
+enterprise-server/src/models/report.rs
+  bb640ba9b24f535c 1,3-7,11-15
+crates/git-ai-protocol/src/client_status.rs
+  bb640ba9b24f535c 1-14
+enterprise-server/src/services/metrics.rs
+  bb640ba9b24f535c 1503-1506,1540-1543,1549-1552
+src/commands/upgrade.rs
+  bb640ba9b24f535c 4-6
+src/auth/types.rs
+  bb640ba9b24f535c 4-7
+enterprise-server/src/handlers/client_status.rs
+  bb640ba9b24f535c 3
+crates/git-ai-protocol/tests/wire_compat.rs
+  bb640ba9b24f535c 1-120
+crates/git-ai-protocol/src/cas.rs
+  bb640ba9b24f535c 1-47
+crates/git-ai-protocol/src/bundle.rs
+  bb640ba9b24f535c 1-32
+src/api/client_status.rs
+  bb640ba9b24f535c 6,27-34,43,54
+docs/guides/local-run-guide.md
+  bb640ba9b24f535c 227
+crates/git-ai-protocol/src/lib.rs
+  bb640ba9b24f535c 1-13
+enterprise-server/src/models/release.rs
+  bb640ba9b24f535c 1
+crates/git-ai-protocol/src/metrics.rs
+  bb640ba9b24f535c 1-93
+crates/git-ai-protocol/src/oauth.rs
+  bb640ba9b24f535c 1-87
+enterprise-server/src/models/auth.rs
+  bb640ba9b24f535c 1-3
+src/report/upload.rs
+  bb640ba9b24f535c 56,94,118-262
+crates/git-ai-protocol/src/release.rs
+  bb640ba9b24f535c 1-36
+docs/enterprise/enterprise-server-deployment.md
+  bb640ba9b24f535c 141,147,221,223,736
+src/metrics/types.rs
+  bb640ba9b24f535c 1,3-5
+docker-compose.yml
+  bb640ba9b24f535c 82
+src/report/model.rs
+  bb640ba9b24f535c 5-7
+enterprise-server/src/services/tokens.rs
+  bb640ba9b24f535c 11-12,66
+crates/git-ai-protocol/src/report.rs
+  bb640ba9b24f535c 1-137
+enterprise-server/deploy/docker-compose.yml
+  bb640ba9b24f535c 113
+src/metrics/mod.rs
+  bb640ba9b24f535c 76
+.gitignore
+  bb640ba9b24f535c 3
+src/api/metrics.rs
+  bb640ba9b24f535c 8-10
+enterprise-server/docker-compose.yml
+  bb640ba9b24f535c 47-48,99
+src/api/types.rs
+  bb640ba9b24f535c 1,6-42
+enterprise-server/src/pos_encoded.rs
+  bb640ba9b24f535c 97,121,165,231,259,278-279,315-320,347-352,372-377,392-397,423-428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "866bb18bd699c833292b5bd0606c55943011e437",
+  "prompts": {
+    "bb640ba9b24f535c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f565b-c18d-7ea2-8f3c-68a579cae528",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 2317,
+      "total_deletions": 2608,
+      "accepted_lines": 3467,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/d36bacfc7a31d62cef199dfc28447f9e9d28ec620146346afa0ef65eca608df6"
+    }
+  }
+}
