@@ -94,7 +94,7 @@ const KNOWN_ATTR_INDICES: &[&str] = &[
 
 /// Decode a PosEncoded metric event into a structured DecodedMetricEvent
 pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError> {
-    let event_type = MetricEventType::try_from(event.e)
+    let event_type = MetricEventType::try_from(event.event_id)
         .map_err(|e| AppError::BadRequest(e))?;
 
     let value_fields = match event_type {
@@ -118,7 +118,7 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
     let mut custom_attributes_json = None;
 
     for (idx, field_name) in ATTR_FIELDS {
-        if let Some(val) = event.a.get(*idx) {
+        if let Some(val) = event.attrs.get(*idx) {
             match *field_name {
                 "git_ai_version" => git_ai_version = val.as_str().map(|s| s.to_string()),
                 "repo_url" => repo_url = val.as_str().map(|s| s.to_string()),
@@ -162,7 +162,7 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
     let mut lines_deleted_sloc = None;
 
     for (idx, field_name) in value_fields {
-        if let Some(val) = event.v.get(*idx) {
+        if let Some(val) = event.values.get(*idx) {
             match *field_name {
                 // Committed fields
                 "human_additions" => human_additions = val.as_i64().map(|v| v as i32),
@@ -228,7 +228,7 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
 
     // Extract custom_attributes from remaining attribute keys
     let custom_attributes: HashMap<String, String> = event
-        .a
+        .attrs
         .iter()
         .filter(|(k, _)| !KNOWN_ATTR_INDICES.contains(&k.as_str()))
         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
@@ -256,7 +256,7 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
 
     Ok(DecodedMetricEvent {
         event_type,
-        timestamp: event.t,
+        timestamp: event.timestamp,
         distinct_id: None, // Not a standard attr position — could be derived from headers
         version: git_ai_version,
         repo_url,
@@ -275,8 +275,8 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
         session_id: None, // AgentUsage doesn't have session_id in values; it's in attrs
         file_path,
         custom_attributes,
-        raw_values: event.v.clone(),
-        raw_attrs: event.a.clone(),
+        raw_values: event.values.clone(),
+        raw_attrs: event.attrs.clone(),
     })
 }
 
@@ -312,7 +312,12 @@ mod tests {
         a.insert("2".into(), serde_json::json!("dev@example.com")); // author
         a.insert("3".into(), serde_json::json!("abc123"));    // commit_sha
 
-        let event = MetricEvent { t: 1700000000, e: 1, v, a };
+        let event = MetricEvent {
+            timestamp: 1700000000,
+            event_id: 1,
+            values: v,
+            attrs: a,
+        };
         let decoded = decode_event(&event).unwrap();
 
         assert_eq!(decoded.event_type, MetricEventType::Committed);
@@ -339,7 +344,12 @@ mod tests {
         let mut a = HashMap::new();
         a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
 
-        let event = MetricEvent { t: 1700000000, e: 3, v, a };
+        let event = MetricEvent {
+            timestamp: 1700000000,
+            event_id: 3,
+            values: v,
+            attrs: a,
+        };
         let decoded = decode_event(&event).unwrap();
 
         assert_eq!(decoded.event_type, MetricEventType::InstallHooks);
@@ -359,7 +369,12 @@ mod tests {
         a.insert("20".into(), serde_json::json!("claude-code"));  // tool
         a.insert("21".into(), serde_json::json!("claude-3"));     // model
 
-        let event = MetricEvent { t: 1700000000, e: 4, v, a };
+        let event = MetricEvent {
+            timestamp: 1700000000,
+            event_id: 4,
+            values: v,
+            attrs: a,
+        };
         let decoded = decode_event(&event).unwrap();
 
         assert_eq!(decoded.event_type, MetricEventType::Checkpoint);
@@ -374,7 +389,12 @@ mod tests {
         a.insert("20".into(), serde_json::json!("copilot"));      // tool
         a.insert("21".into(), serde_json::json!("gpt-4"));        // model
 
-        let event = MetricEvent { t: 1700000000, e: 2, v: HashMap::new(), a };
+        let event = MetricEvent {
+            timestamp: 1700000000,
+            event_id: 2,
+            values: HashMap::new(),
+            attrs: a,
+        };
         let decoded = decode_event(&event).unwrap();
 
         assert_eq!(decoded.event_type, MetricEventType::AgentUsage);
@@ -400,7 +420,12 @@ mod tests {
         let mut a = HashMap::new();
         a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
 
-        let event = MetricEvent { t: 1700000000, e: 1, v, a };
+        let event = MetricEvent {
+            timestamp: 1700000000,
+            event_id: 1,
+            values: v,
+            attrs: a,
+        };
         let decoded = decode_event(&event).unwrap();
 
         assert_eq!(decoded.human_additions, Some(10));

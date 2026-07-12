@@ -5,6 +5,7 @@ edition = "2021"
 default-run = "git-ai-enterprise-server"
 
 [dependencies]
+git-ai-protocol = { path = "../crates/git-ai-protocol" }
 # Web framework
 axum = { version = "0.8", features = ["macros", "ws", "multipart"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }

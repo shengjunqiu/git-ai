@@ -1500,10 +1500,10 @@ mod tests {
         attrs.insert("3".into(), serde_json::json!(format!("abc{seed}")));
 
         MetricEvent {
-            t: 1_700_000_000,
-            e: 1,
-            v: values,
-            a: attrs,
+            timestamp: 1_700_000_000,
+            event_id: 1,
+            values,
+            attrs,
         }
     }
 
@@ -1537,19 +1537,19 @@ mod tests {
         attrs.insert("3".into(), serde_json::json!(format!("abc{seed}")));
 
         MetricEvent {
-            t: 1_700_000_000,
-            e: 1,
-            v: values,
-            a: attrs,
+            timestamp: 1_700_000_000,
+            event_id: 1,
+            values,
+            attrs,
         }
     }
 
     fn invalid_metric_event() -> MetricEvent {
         MetricEvent {
-            t: 1_700_000_000,
-            e: 999,
-            v: HashMap::new(),
-            a: HashMap::new(),
+            timestamp: 1_700_000_000,
+            event_id: 999,
+            values: HashMap::new(),
+            attrs: HashMap::new(),
         }
     }
 

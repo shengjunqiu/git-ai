@@ -53,7 +53,7 @@ impl ReportUploader for HttpUploader {
     fn upload(&self, payload: &ReportDocument) -> Result<UploadResult, GitAiError> {
         let context = ApiContext::new(Some(self.server_url.clone()));
         let endpoint = report_ingest_endpoint(&context.base_url)?;
-        let body = serde_json::to_string(payload)?;
+        let body = serde_json::to_string(&report_wire_payload(payload)?)?;
         let (_agent, request) = ApiContext::http_post(&endpoint, context.timeout_secs);
         let request = apply_auth_headers(request.set("Content-Type", "application/json"), &context);
         let response = crate::http::send_with_body(request, &body).map_err(GitAiError::Generic)?;
@@ -91,7 +91,7 @@ impl SummaryUploader for HttpUploader {
     fn upload_summary(&self, payload: &ProjectSummaryReport) -> Result<UploadResult, GitAiError> {
         let context = ApiContext::new(Some(self.server_url.clone()));
         let endpoint = summary_ingest_endpoint(&context.base_url)?;
-        let body = serde_json::to_string(payload)?;
+        let body = serde_json::to_string(&summary_wire_payload(payload)?)?;
         let (_agent, request) = ApiContext::http_post(&endpoint, context.timeout_secs);
         let request = apply_auth_headers(request.set("Content-Type", "application/json"), &context);
         let response = crate::http::send_with_body(request, &body).map_err(GitAiError::Generic)?;
@@ -113,6 +113,153 @@ impl SummaryUploader for HttpUploader {
             commit_count: payload.total_commits,
         })
     }
+}
+
+fn report_wire_payload(
+    report: &ReportDocument,
+) -> Result<git_ai_protocol::report::ReportDocument, GitAiError> {
+    use git_ai_protocol::report as wire;
+
+    let tool_model_breakdown = report
+        .tool_model_breakdown
+        .iter()
+        .map(|(name, stats)| {
+            Ok((
+                name.clone(),
+                wire::ToolModelBreakdown {
+                    ai_additions: Some(i64::from(stats.ai_additions)),
+                    human_additions: None,
+                    mixed_additions: Some(i64::from(stats.mixed_additions)),
+                    total_ai_additions: Some(i64::from(stats.total_ai_additions)),
+                    total_ai_deletions: Some(i64::from(stats.total_ai_deletions)),
+                    ai_accepted: Some(i64::from(stats.ai_accepted)),
+                    time_waiting_for_ai: Some(wire_i64(stats.time_waiting_for_ai)?),
+                },
+            ))
+        })
+        .collect::<Result<_, GitAiError>>()?;
+
+    let commits = report
+        .commits
+        .iter()
+        .map(|commit| {
+            let stats = &commit.stats;
+            Ok(wire::ReportCommit {
+                sha: commit.sha.clone(),
+                author: commit.author.clone(),
+                author_time: commit.author_time.clone(),
+                subject: commit.subject.clone(),
+                has_authorship_note: commit.has_authorship_note,
+                stats: wire::ReportCommitStats {
+                    git_diff_added_lines: Some(i64::from(stats.git_diff_added_lines)),
+                    git_diff_deleted_lines: Some(i64::from(stats.git_diff_deleted_lines)),
+                    ai_additions: Some(i64::from(stats.ai_additions)),
+                    human_additions: Some(i64::from(stats.human_additions)),
+                    mixed_additions: Some(i64::from(stats.mixed_additions)),
+                    unknown_additions: Some(i64::from(stats.unknown_additions)),
+                    ai_accepted: Some(i64::from(stats.ai_accepted)),
+                    total_ai_additions: Some(i64::from(stats.total_ai_additions)),
+                    total_ai_deletions: Some(i64::from(stats.total_ai_deletions)),
+                    time_waiting_for_ai: Some(wire_i64(stats.time_waiting_for_ai)?),
+                },
+            })
+        })
+        .collect::<Result<_, GitAiError>>()?;
+
+    let summary = &report.summary;
+    Ok(wire::ReportDocument {
+        schema_version: report.schema_version.clone(),
+        generated_at: report.generated_at.clone(),
+        tool_version: report.tool_version.clone(),
+        repo: Some(wire::ReportRepo {
+            workdir: report.repo.workdir.clone(),
+            remote_url_hash: report.repo.remote_url_hash.clone(),
+            branch: report.repo.branch.clone(),
+            head_commit: report.repo.head_commit.clone(),
+        }),
+        range: Some(wire::ReportRange {
+            mode: Some(
+                match report.range.mode {
+                    crate::report::model::ReportRangeMode::Head => "head",
+                    crate::report::model::ReportRangeMode::Range => "range",
+                    crate::report::model::ReportRangeMode::Branch => "branch",
+                    crate::report::model::ReportRangeMode::Date => "date",
+                }
+                .to_string(),
+            ),
+            from: report.range.from.clone(),
+            to: report.range.to.clone(),
+            since: report.range.since.clone(),
+            until: report.range.until.clone(),
+            commit_count: Some(wire_i64(report.range.commit_count)?),
+            commits_with_authorship: Some(wire_i64(report.range.commits_with_authorship)?),
+            commits_without_authorship: Some(wire_i64(report.range.commits_without_authorship)?),
+        }),
+        summary: Some(wire::ReportSummary {
+            git_diff_added_lines: Some(i64::from(summary.git_diff_added_lines)),
+            git_diff_deleted_lines: Some(i64::from(summary.git_diff_deleted_lines)),
+            ai_additions: Some(i64::from(summary.ai_additions)),
+            human_additions: Some(i64::from(summary.human_additions)),
+            mixed_additions: Some(i64::from(summary.mixed_additions)),
+            unknown_additions: Some(i64::from(summary.unknown_additions)),
+            ai_accepted: Some(i64::from(summary.ai_accepted)),
+            total_ai_additions: Some(i64::from(summary.total_ai_additions)),
+            total_ai_deletions: Some(i64::from(summary.total_ai_deletions)),
+            time_waiting_for_ai: Some(wire_i64(summary.time_waiting_for_ai)?),
+        }),
+        ratios: Some(wire::ReportRatios {
+            ai: Some(report.ratios.ai),
+            human: Some(report.ratios.human),
+            mixed: Some(report.ratios.mixed),
+            unknown: Some(report.ratios.unknown),
+        }),
+        tool_model_breakdown: Some(tool_model_breakdown),
+        commits,
+    })
+}
+
+fn summary_wire_payload(
+    summary: &ProjectSummaryReport,
+) -> Result<git_ai_protocol::report::ProjectSummaryReport, GitAiError> {
+    use git_ai_protocol::report as wire;
+
+    Ok(wire::ProjectSummaryReport {
+        project_name: summary.project_name.clone(),
+        git_url: summary.git_url.clone(),
+        branch: summary.branch.clone(),
+        total_commits: wire_i64(summary.total_commits)?,
+        developers: summary
+            .developers
+            .iter()
+            .map(|developer| {
+                Ok(wire::DeveloperStats {
+                    name: developer.name.clone(),
+                    email: developer.email.clone(),
+                    commits: wire_i64(developer.commits)?,
+                    added_lines: i64::from(developer.added_lines),
+                    ai_additions: i64::from(developer.ai_additions),
+                    human_additions: i64::from(developer.human_additions),
+                    ai_ratio: developer.ai_ratio,
+                    human_ratio: developer.human_ratio,
+                })
+            })
+            .collect::<Result<_, GitAiError>>()?,
+        project_ratios: wire::ProjectRatios {
+            ai: summary.project_ratios.ai,
+            human: summary.project_ratios.human,
+        },
+        organization: summary.organization.clone(),
+        department: summary.department.clone(),
+        reporter_name: summary.reporter_name.clone(),
+        reporter_email: summary.reporter_email.clone(),
+        report_period: summary.report_period.clone(),
+    })
+}
+
+fn wire_i64(value: impl TryInto<i64>) -> Result<i64, GitAiError> {
+    value
+        .try_into()
+        .map_err(|_| GitAiError::Generic("Report numeric value exceeds wire range".to_string()))
 }
 
 fn apply_auth_headers(mut request: ureq::Request, context: &ApiContext) -> ureq::Request {

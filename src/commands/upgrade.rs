@@ -1,6 +1,9 @@
 use crate::api::client::ApiContext;
 use crate::config::{self, UpdateChannel};
 use crate::observability::log_message;
+#[cfg(test)]
+use git_ai_protocol::release::ChannelInfo;
+use git_ai_protocol::release::ReleasesResponse;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -107,17 +110,6 @@ impl UpdateCache {
     fn matches_channel(&self, channel: UpdateChannel) -> bool {
         self.channel == channel.as_str()
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ChannelInfo {
-    version: String,
-    checksum: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReleasesResponse {
-    channels: HashMap<String, ChannelInfo>,
 }
 
 fn get_update_check_cache_path() -> Option<PathBuf> {

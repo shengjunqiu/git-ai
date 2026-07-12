@@ -73,7 +73,7 @@ mod tests {
 
         // Create the event manually to verify structure
         let event = MetricEvent::new(&values, attrs.to_sparse());
-        assert_eq!(event.event_id, MetricEventId::Committed as u16);
+        assert_eq!(event.event_id, MetricEventId::Committed as i32);
         assert!(event.timestamp > 0);
     }
 

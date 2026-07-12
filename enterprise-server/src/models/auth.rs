@@ -1,30 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// POST /worker/oauth/device/code request body
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceCodeRequest {
-    // Client sends empty JSON `{}`
-}
-
-/// POST /worker/oauth/token request body (4 grant types)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenRequest {
-    pub grant_type: String,
-    #[serde(default)]
-    pub device_code: Option<String>,
-    #[serde(default)]
-    pub refresh_token: Option<String>,
-    #[serde(default)]
-    pub install_nonce: Option<String>,
-    #[serde(default)]
-    pub client_id: Option<String>,
-    #[serde(default)]
-    pub code: Option<String>,
-    #[serde(default)]
-    pub code_verifier: Option<String>,
-    #[serde(default)]
-    pub redirect_uri: Option<String>,
-}
+pub use git_ai_protocol::oauth::TokenRequest;
 
 /// Request to create an API key
 #[derive(Debug, Clone, Serialize, Deserialize)]

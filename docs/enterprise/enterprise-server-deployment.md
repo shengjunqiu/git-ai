@@ -138,17 +138,13 @@ curl http://127.0.0.1:8080/health
 
 ### 4. 确认 MinIO bucket 已创建
 
-当前源码 compose 中有 `minio-init`，会创建默认 bucket：
+启动 API 前，需要在 MinIO 或外部 S3 中预先创建默认 bucket：
 
 ```text
 git-ai-cas
 ```
 
-如果后续 CAS 上传报 `NoSuchBucket`，手动跑一次：
-
-```bash
-docker compose run --rm minio-init
-```
+如果后续 CAS 上传报 `NoSuchBucket`，请通过 MinIO Console 或对象存储管理工具创建该 bucket。
 
 ## 三、部署包方式
 
@@ -222,13 +218,12 @@ DATABASE_MAX_CONNECTIONS =
 docker load -i images/git-ai-enterprise-server-api.tar
 ```
 
-### 5. 启动依赖并初始化 MinIO bucket
+### 5. 启动服务
 
-部署包里的 `minio-init` 默认放在 `init` profile 中，不会被普通 `docker compose up -d` 自动启动。建议按顺序执行：
+确保配置的 S3 bucket 已预先创建，然后启动服务：
 
 ```bash
 docker compose up -d postgres redis minio
-docker compose --profile init run --rm minio-init
 docker compose up -d api
 ```
 
@@ -738,16 +733,7 @@ docker compose logs -f api
 
 说明 MinIO bucket 没初始化：
 
-```bash
-docker compose --profile init run --rm minio-init
-docker compose restart api
-```
-
-源码 compose 可直接：
-
-```bash
-docker compose run --rm minio-init
-```
+请通过 MinIO Console 或对象存储管理工具创建配置的 bucket，然后重启 API。
 
 ### 6. 登录后浏览器仍显示登录页
 

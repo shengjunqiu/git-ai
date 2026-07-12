@@ -1412,7 +1412,7 @@ mod tests {
         use crate::metrics::types::MetricEventId;
 
         MetricEvent {
-            event_id: MetricEventId::Committed as u16,
+            event_id: MetricEventId::Committed as i32,
             timestamp: 1700000000,
             values: std::collections::HashMap::new(),
             attrs: std::collections::HashMap::new(),

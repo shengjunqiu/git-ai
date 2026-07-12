@@ -2,6 +2,9 @@ use crate::authorship::stats::{CommitStats, ToolModelHeadlineStats};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+// These are report-generation domain models. HTTP upload converts them into
+// git_ai_protocol::report wire types in report::upload.
+
 pub const REPORT_SCHEMA_VERSION: &str = "git-ai-report/1.0.0";
 pub const DEVELOPER_SUMMARY_SCHEMA_VERSION: &str = "git-ai-summary/1.0.0";
 pub type ReportToolModelStats = ToolModelHeadlineStats;

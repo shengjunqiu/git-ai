@@ -3,7 +3,7 @@
 use crate::api::client::{ApiClient, ApiContext};
 use crate::api::types::ApiErrorResponse;
 use crate::error::GitAiError;
-use serde::{Deserialize, Serialize};
+pub use git_ai_protocol::client_status::ClientStatusRequest;
 
 // test
 
@@ -24,27 +24,14 @@ impl ClientStatusKind {
     }
 }
 
-/// Client state and environment metadata sent with a status update.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientStatusRequest {
-    pub status: String,
-    pub cli_version: String,
-    pub os: String,
-    pub arch: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname: Option<String>,
-}
-
-impl ClientStatusRequest {
-    /// Builds a status report using metadata from the current process.
-    pub fn new(status: ClientStatusKind) -> Self {
-        Self {
-            status: status.as_str().to_string(),
-            cli_version: env!("CARGO_PKG_VERSION").to_string(),
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            hostname: collect_hostname(),
-        }
+/// Builds a status report using metadata from the current process.
+fn client_status_request(status: ClientStatusKind) -> ClientStatusRequest {
+    ClientStatusRequest {
+        status: status.as_str().to_string(),
+        cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        os: Some(std::env::consts::OS.to_string()),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        hostname: collect_hostname(),
     }
 }
 
@@ -53,7 +40,7 @@ pub fn upload_current_client_status(status: ClientStatusKind) -> Result<(), GitA
     // Status reporting should not hold up login or logout for long.
     let context = ApiContext::new(None).with_timeout(5);
     let client = ApiClient::new(context);
-    client.upload_client_status(&ClientStatusRequest::new(status))
+    client.upload_client_status(&client_status_request(status))
 }
 
 /// Uploads a status update with credentials obtained by the current login flow.
@@ -64,7 +51,7 @@ pub fn upload_client_status_with_token(
 ) -> Result<(), GitAiError> {
     let context = ApiContext::with_auth(Some(base_url), access_token).with_timeout(5);
     let client = ApiClient::new(context);
-    client.upload_client_status(&ClientStatusRequest::new(status))
+    client.upload_client_status(&client_status_request(status))
 }
 
 impl ApiClient {

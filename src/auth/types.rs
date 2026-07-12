@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub use git_ai_protocol::oauth::{
+    DeviceCodeResponse as DeviceAuthResponse, OAuthError, TokenResponse,
+};
+
 /// Stored credentials for OAuth tokens
 /// NOTE: Debug intentionally redacts tokens to prevent accidental exposure in logs
 #[derive(Clone, Serialize, Deserialize)]
@@ -39,35 +43,6 @@ impl StoredCredentials {
         let now = chrono::Utc::now().timestamp();
         self.refresh_token_expires_at <= now
     }
-}
-
-/// Response from device authorization endpoint
-#[derive(Debug, Deserialize)]
-pub struct DeviceAuthResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_uri: String,
-    pub verification_uri_complete: Option<String>,
-    pub expires_in: u32,
-    pub interval: u32,
-}
-
-/// Response from token endpoint
-#[derive(Debug, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-    #[allow(dead_code)]
-    pub token_type: String,
-    pub expires_in: u64,
-    pub refresh_token: String,
-    pub refresh_expires_in: u64,
-}
-
-/// OAuth error response
-#[derive(Debug, Deserialize)]
-pub struct OAuthError {
-    pub error: String,
-    pub error_description: Option<String>,
 }
 
 #[cfg(test)]

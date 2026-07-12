@@ -8,8 +8,8 @@ use crate::error::AppError;
 use crate::models::user::{JwtOrg, TokenResponse};
 use crate::routes::AppState;
 
-const ACCESS_TOKEN_TTL_SECONDS: i64 = 3600;
-const REFRESH_TOKEN_TTL_SECONDS: i64 = 7776000;
+const ACCESS_TOKEN_TTL_SECONDS: u64 = 3600;
+const REFRESH_TOKEN_TTL_SECONDS: u64 = 7776000;
 
 /// Build the standard OAuth token response for a user and persist a new refresh token.
 pub async fn generate_token_response(
@@ -63,7 +63,7 @@ pub async fn generate_token_response(
 
     let refresh_token = jwt::generate_refresh_token();
     let refresh_token_hash = jwt::hash_token(&refresh_token);
-    let refresh_expires_at = Utc::now() + Duration::seconds(REFRESH_TOKEN_TTL_SECONDS);
+    let refresh_expires_at = Utc::now() + Duration::seconds(REFRESH_TOKEN_TTL_SECONDS as i64);
 
     sqlx::query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)")
         .bind(user_id)

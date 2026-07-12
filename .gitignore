@@ -1,5 +1,6 @@
 # Rust / Cargo
 target/
+/crates/*/Cargo.lock
 *.profraw
 lcov.info
 coverage/

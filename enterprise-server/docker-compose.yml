@@ -44,8 +44,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      minio:
+        condition: service_started
     restart: unless-stopped
 
   # PostgreSQL Database
@@ -96,18 +96,6 @@ services:
       - minio_data:/data
     restart: unless-stopped
 
-  # MinIO initialization - create bucket
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 5;
-      mc alias set myminio http://minio:9000 minioadmin minioadmin;
-      mc mb myminio/git-ai-cas --ignore-existing;
-      echo 'Bucket created';
-      "
 volumes:
   pgdata:
   minio_data:

@@ -224,7 +224,7 @@ cp .env.example .env
 只启动依赖服务：
 
 ```bash
-docker compose up -d postgres redis minio minio-init
+docker compose up -d postgres redis minio
 ```
 
 如果用 `cargo run` 从宿主机启动 API，`.env` 需要写宿主机可访问地址：
@@ -463,7 +463,6 @@ git-ai report summary . --server http://127.0.0.1:8787
 postgres:16-alpine
 redis:7-alpine
 minio/minio:latest
-minio/mc:latest
 ```
 
 ### 清理本地生成物

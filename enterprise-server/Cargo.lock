@@ -873,6 +873,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "envy",
+ "git-ai-protocol",
  "hex",
  "jsonwebtoken",
  "object_store",
@@ -894,6 +895,14 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "git-ai-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

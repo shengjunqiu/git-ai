@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use git_ai_protocol::oauth::{DeviceCodeResponse, OAuthError, TokenResponse};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
@@ -144,77 +146,6 @@ pub struct JwtOrg {
     pub org_name: String,
     pub org_slug: String,
     pub role: String,
-}
-
-/// Token response matching git-ai client expectations
-/// Client expects: expires_in: u64, refresh_expires_in: u64
-/// Server uses i64 for DB compatibility but must serialize as positive numbers
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-    pub token_type: String,         // always "Bearer"
-    pub expires_in: i64,            // seconds (3600) — client deserializes as u64, compatible with JSON numbers
-    pub refresh_token: String,
-    pub refresh_expires_in: i64,    // seconds (7776000 ≈ 90 days) — client deserializes as u64
-}
-
-/// Device code response matching git-ai client expectations
-/// Client expects: expires_in: u32, interval: u32
-/// Server uses i64 for DB compatibility but must serialize as positive numbers
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceCodeResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification_uri_complete: Option<String>,
-    pub expires_in: i64,            // seconds (900) — client deserializes as u32, compatible for values < 2^32
-    pub interval: i64,              // seconds (5) — client deserializes as u32, compatible for values < 2^32
-}
-
-/// OAuth error response (RFC 8628)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthError {
-    pub error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_description: Option<String>,
-}
-
-impl OAuthError {
-    pub fn authorization_pending() -> Self {
-        Self {
-            error: "authorization_pending".into(),
-            error_description: None,
-        }
-    }
-
-    pub fn slow_down() -> Self {
-        Self {
-            error: "slow_down".into(),
-            error_description: None,
-        }
-    }
-
-    pub fn access_denied() -> Self {
-        Self {
-            error: "access_denied".into(),
-            error_description: None,
-        }
-    }
-
-    pub fn expired_token() -> Self {
-        Self {
-            error: "expired_token".into(),
-            error_description: None,
-        }
-    }
-
-    pub fn invalid_grant(description: &str) -> Self {
-        Self {
-            error: "invalid_grant".into(),
-            error_description: Some(description.into()),
-        }
-    }
 }
 
 /// Identity extracted from auth middleware

@@ -1,30 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Metrics batch upload request matching client's MetricsBatch
-///
-/// Client sends `{"v":1,"events":[...]}` — the version is a numeric `v` field.
-/// The `api_version` field is kept for backward compatibility but is optional.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsBatch {
-    /// Client sends version as `v: u8` (e.g. 1). Deserialized from JSON number.
-    #[serde(rename = "v")]
-    pub version: u8,
-    pub events: Vec<MetricEvent>,
-}
-
-/// Single metric event in PosEncoded format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricEvent {
-    #[serde(rename = "t")]
-    pub t: i64,                        // Unix timestamp
-    #[serde(rename = "e")]
-    pub e: i32,                        // Event type ID (1-4)
-    #[serde(rename = "v")]
-    pub v: HashMap<String, serde_json::Value>,  // PosEncoded values
-    #[serde(rename = "a", default)]
-    pub a: HashMap<String, serde_json::Value>,  // PosEncoded attributes (SparseArray — values can be String, Number, Null, Array)
-}
+pub use git_ai_protocol::metrics::{
+    MetricEvent, MetricUploadError, MetricsBatch, MetricsUploadResponse,
+};
 
 /// Metric event types matching client MetricEventId enum
 /// Client uses: Committed=1, AgentUsage=2, InstallHooks=3, Checkpoint=4
@@ -48,18 +26,6 @@ impl TryFrom<i32> for MetricEventType {
             _ => Err(format!("Unknown metric event type: {}", value)),
         }
     }
-}
-
-/// Metrics upload response matching client's MetricsUploadResponse
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsUploadResponse {
-    pub errors: Vec<MetricUploadError>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricUploadError {
-    pub index: usize,
-    pub error: String,
 }
 
 /// Decoded metric event (after PosEncoded decoding)

@@ -5,38 +5,12 @@ use crate::api::types::ApiErrorResponse;
 use crate::error::GitAiError;
 use crate::metrics::MetricsBatch;
 use crate::observability::log_error;
-use serde::{Deserialize, Serialize};
+pub use git_ai_protocol::metrics::{
+    MetricUploadError as MetricsUploadError, MetricsUploadResponse,
+};
 
 /// Retry delay in seconds: single retry after 60s
 const RETRY_DELAYS_SECS: [u64; 1] = [60];
-
-/// Error for a single event in the batch
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsUploadError {
-    /// Index of the failed event in the request
-    pub index: usize,
-    /// Error message
-    pub error: String,
-}
-
-/// Response from metrics upload endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsUploadResponse {
-    /// List of errors (only failed events, empty = all success)
-    pub errors: Vec<MetricsUploadError>,
-}
-
-impl MetricsUploadResponse {
-    /// Get indices of successfully uploaded events
-    #[allow(dead_code)]
-    pub fn successful_indices(&self, batch_size: usize) -> Vec<usize> {
-        let error_indices: std::collections::HashSet<_> =
-            self.errors.iter().map(|e| e.index).collect();
-        (0..batch_size)
-            .filter(|i| !error_indices.contains(i))
-            .collect()
-    }
-}
 
 /// Upload metrics batch with retry logic.
 ///

@@ -1,3 +1,4 @@
+use crate::api::types::api_file_record_from_diff;
 use crate::api::{ApiClient, ApiContext, ApiFileRecord};
 use crate::api::{BundleData, CreateBundleRequest};
 use crate::authorship::prompt_utils::find_prompt_with_db_fallback;
@@ -178,7 +179,9 @@ pub fn create_bundle(
                         diff_json
                             .files
                             .iter()
-                            .map(|(path, file_diff)| (path.clone(), ApiFileRecord::from(file_diff)))
+                            .map(|(path, file_diff)| {
+                                (path.clone(), api_file_record_from_diff(file_diff))
+                            })
                             .collect()
                     }
                     Err(_) => HashMap::new(), // Diff failed, proceed without files
@@ -192,6 +195,15 @@ pub fn create_bundle(
     } else {
         HashMap::new()
     };
+
+    let prompts = prompts
+        .into_iter()
+        .map(|(hash, prompt)| {
+            serde_json::to_value(prompt)
+                .map(|value| (hash, value))
+                .map_err(crate::error::GitAiError::JsonError)
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
 
     // Create bundle with prompts and optional files
     let bundle_request = CreateBundleRequest {

@@ -1,21 +1,12 @@
 use axum::extract::State;
 use axum::response::Json;
-use serde::Deserialize;
+use git_ai_protocol::client_status::ClientStatusRequest;
 use serde_json::{json, Value};
 
 use crate::auth::middleware::{AuthExtractor, DashboardAuth, HeaderExtractor};
 use crate::error::AppError;
 use crate::routes::AppState;
 use crate::services::client_status::{ClientStatus, ClientStatusMetadata};
-
-#[derive(Debug, Deserialize)]
-pub struct ClientStatusRequest {
-    pub status: String,
-    pub cli_version: Option<String>,
-    pub os: Option<String>,
-    pub arch: Option<String>,
-    pub hostname: Option<String>,
-}
 
 /// POST /worker/client/status — CLI login/logout status upload.
 pub async fn update_client_status(

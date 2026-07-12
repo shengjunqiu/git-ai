@@ -79,19 +79,6 @@ services:
       - minio_data:/data
     restart: unless-stopped
 
-  # MinIO initialization - create bucket
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 5;
-      mc alias set myminio http://minio:9000 minioadmin minioadmin;
-      mc mb myminio/git-ai-cas --ignore-existing;
-      echo 'Bucket git-ai-cas created successfully';
-      "
-
   # Database initialization - create default admin user and organization
   db-init:
     image: postgres:16-alpine
