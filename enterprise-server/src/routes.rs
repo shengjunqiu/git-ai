@@ -200,6 +200,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/users/{id}/git-tracking-upload",
             put(crate::handlers::admin::update_git_tracking_upload_authorization),
         )
+        .route(
+            "/api/admin/users/git-tracking-upload/authorize",
+            post(crate::handlers::admin::bulk_authorize_git_tracking_upload),
+        )
         // Admin: Organizations
         .route(
             "/api/admin/organizations",

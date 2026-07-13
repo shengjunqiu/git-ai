@@ -718,17 +718,26 @@ async function loadTools() {
 }
 
 // --- Users Management ---
+const selectedGitTrackingUserIds = new Set();
+let visibleGitTrackingUserIds = [];
+
 async function loadUsers() {
-    setTableLoading('users-table', 6);
+    selectedGitTrackingUserIds.clear();
+    visibleGitTrackingUserIds = [];
+    updateGitTrackingBulkSelection();
+    setTableLoading('users-table', 7);
     try {
         const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败');
         const users = pageItems(d, 'users');
         if (users.length === 0) {
             document.getElementById('users-table').innerHTML =
-                '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
+                '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
             renderPaginationControls('users');
             return;
         }
+        visibleGitTrackingUserIds = users
+            .filter(user => user.git_tracking_upload_enabled !== true)
+            .map(user => user.id);
         document.getElementById('users-table').innerHTML = users.map(u => {
             const apiKeys = u.api_keys || [];
             const keyCount = apiKeys.length;
@@ -745,6 +754,7 @@ async function loadUsers() {
                 ? '<span class="badge active">已授权</span>'
                 : '<span class="badge revoked">未授权</span>';
             return `<tr>
+                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${u.id}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser('${u.id}', this.checked)" ${uploadEnabled ? 'disabled' : ''} /></td>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
                 <td>${uploadStatus}</td>
@@ -757,12 +767,71 @@ async function loadUsers() {
                 </td>
             </tr>`;
         }).join('');
+        updateGitTrackingBulkSelection();
         renderPaginationControls('users');
     } catch(e) {
         console.error(e);
         document.getElementById('users-table').innerHTML =
-            '<tr><td colspan="6" style="color:var(--danger)">加载用户列表失败</td></tr>';
+            '<tr><td colspan="7" style="color:var(--danger)">加载用户列表失败</td></tr>';
         renderPaginationControls('users');
+    }
+}
+
+function toggleGitTrackingUser(userId, selected) {
+    if (selected) selectedGitTrackingUserIds.add(userId);
+    else selectedGitTrackingUserIds.delete(userId);
+    updateGitTrackingBulkSelection();
+}
+
+function toggleAllGitTrackingUsers(selected) {
+    visibleGitTrackingUserIds.forEach(userId => {
+        if (selected) selectedGitTrackingUserIds.add(userId);
+        else selectedGitTrackingUserIds.delete(userId);
+    });
+    document.querySelectorAll('.git-tracking-user-checkbox:not(:disabled)').forEach(checkbox => {
+        checkbox.checked = selected;
+    });
+    updateGitTrackingBulkSelection();
+}
+
+function updateGitTrackingBulkSelection() {
+    const count = selectedGitTrackingUserIds.size;
+    const label = document.getElementById('users-bulk-selection');
+    const button = document.getElementById('users-bulk-authorize');
+    const selectAll = document.getElementById('users-select-all');
+    if (label) label.textContent = count > 0 ? `已选择 ${count} 位未授权用户` : '选择未授权用户后可批量授权';
+    if (button) button.disabled = count === 0;
+    if (selectAll) {
+        const selectedVisibleCount = visibleGitTrackingUserIds.filter(id => selectedGitTrackingUserIds.has(id)).length;
+        selectAll.disabled = visibleGitTrackingUserIds.length === 0;
+        selectAll.checked = visibleGitTrackingUserIds.length > 0 && selectedVisibleCount === visibleGitTrackingUserIds.length;
+        selectAll.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleGitTrackingUserIds.length;
+    }
+}
+
+async function bulkAuthorizeGitTrackingUpload(button) {
+    const userIds = Array.from(selectedGitTrackingUserIds);
+    if (userIds.length === 0) return;
+    if (!confirm(`确定为选中的 ${userIds.length} 位用户授权 Git 追踪上传吗？\n授权后，这些用户可以向平台上传 Git 追踪信息。`)) return;
+
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch('/api/admin/users/git-tracking-upload/authorize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_ids: userIds })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            showToast(`批量授权失败: ${result.error || '未知错误'}`, 'error');
+            return;
+        }
+        showToast(`已为 ${result.authorized_count || userIds.length} 位用户授权 Git 追踪上传`, 'success');
+        await loadUsers();
+    } catch(e) {
+        showToast('批量授权时发生错误', 'error');
+    } finally {
+        if (button && button.isConnected) button.disabled = selectedGitTrackingUserIds.size === 0;
     }
 }
 

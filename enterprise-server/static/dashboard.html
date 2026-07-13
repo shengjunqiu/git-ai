@@ -234,9 +234,13 @@
                     <button class="btn btn-primary" onclick="showCreateUserModal()">+ 创建用户</button>
                 </div>
                 <div class="table-card">
+                    <div class="table-header">
+                        <div id="users-bulk-selection" class="refresh-info">选择未授权用户后可批量授权</div>
+                        <button id="users-bulk-authorize" class="btn btn-primary btn-sm" onclick="bulkAuthorizeGitTrackingUpload(this)" disabled>一键授权 Git 追踪上传</button>
+                    </div>
                     <table>
-                        <thead><tr><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
-                        <tbody id="users-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                        <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" onchange="toggleAllGitTrackingUsers(this.checked)" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+                        <tbody id="users-table"><tr><td colspan="7">加载中...</td></tr></tbody>
                     </table>
                     <div id="users-pagination" class="table-pagination"></div>
                 </div>

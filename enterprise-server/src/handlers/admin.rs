@@ -327,6 +327,13 @@ pub struct GitTrackingUploadAuthorizationRequest {
     pub authorized: bool,
 }
 
+const MAX_BULK_GIT_TRACKING_UPLOAD_USERS: usize = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct BulkGitTrackingUploadAuthorizationRequest {
+    pub user_ids: Vec<Uuid>,
+}
+
 /// PUT /api/admin/users/{id}/git-tracking-upload — Grant or revoke a
 /// developer's permission to upload Git tracking data in the admin's org.
 pub async fn update_git_tracking_upload_authorization(
@@ -390,6 +397,84 @@ pub async fn update_git_tracking_upload_authorization(
         "git_tracking_upload_enabled": enabled,
         "git_tracking_upload_authorized_at": authorized_at,
         "git_tracking_upload_authorized_by": authorized_by,
+    })))
+}
+
+/// POST /api/admin/users/git-tracking-upload/authorize — Grant Git tracking
+/// upload permission to multiple users in the administrator's organization.
+pub async fn bulk_authorize_git_tracking_upload(
+    State(state): State<AppState>,
+    auth: AdminGuard,
+    Json(req): Json<BulkGitTrackingUploadAuthorizationRequest>,
+) -> Result<Json<Value>, AppError> {
+    if req.user_ids.is_empty() {
+        return Err(AppError::BadRequest(
+            "At least one user must be selected".into(),
+        ));
+    }
+    if req.user_ids.len() > MAX_BULK_GIT_TRACKING_UPLOAD_USERS {
+        return Err(AppError::BadRequest(format!(
+            "No more than {MAX_BULK_GIT_TRACKING_UPLOAD_USERS} users can be authorized at once"
+        )));
+    }
+
+    let mut user_ids = req.user_ids;
+    user_ids.sort_unstable();
+    user_ids.dedup();
+
+    let org_id = admin_org_id(&auth)?;
+    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+    let matched_user_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM org_members WHERE org_id = $1 AND user_id = ANY($2::uuid[])",
+    )
+    .bind(org_id)
+    .bind(&user_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    if matched_user_ids.len() != user_ids.len() {
+        return Err(AppError::NotFound(
+            "One or more users were not found in the administrator's organization".into(),
+        ));
+    }
+
+    let authorized_user_ids: Vec<Uuid> = sqlx::query_scalar(
+        r#"UPDATE org_members
+           SET git_tracking_upload_enabled = true,
+               git_tracking_upload_authorized_at = now(),
+               git_tracking_upload_authorized_by = $1
+           WHERE org_id = $2 AND user_id = ANY($3::uuid[])
+           RETURNING user_id"#,
+    )
+    .bind(auth.0.user_id)
+    .bind(org_id)
+    .bind(&user_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    sqlx::query(
+        r#"INSERT INTO audit_log
+           (user_id, org_id, action, resource_type, resource_id, details)
+           SELECT $1, $2, 'developer.git_tracking_upload.grant', 'user',
+                  selected.user_id::text,
+                  jsonb_build_object('authorized', true, 'bulk', true)
+           FROM UNNEST($3::uuid[]) AS selected(user_id)"#,
+    )
+    .bind(auth.0.user_id)
+    .bind(org_id)
+    .bind(&user_ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(Json(json!({
+        "authorized_count": authorized_user_ids.len(),
+        "user_ids": authorized_user_ids,
+        "org_id": org_id,
     })))
 }
 
@@ -1680,6 +1765,100 @@ mod log_pagination_tests {
                 .fetch_one(&db.state.db)
                 .await?;
         assert_eq!(cross_org_audit_count, 0);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bulk_git_tracking_authorization_is_atomic_and_audited() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
+        let first_user_id = uuid_tail(304);
+        let second_user_id = uuid_tail(305);
+        insert_user(&db.state.db, first_user_id, org_id, fixed_timestamp(2030)).await?;
+        insert_user(&db.state.db, second_user_id, org_id, fixed_timestamp(2031)).await?;
+
+        let Json(granted) = bulk_authorize_git_tracking_upload(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Json(BulkGitTrackingUploadAuthorizationRequest {
+                user_ids: vec![second_user_id, first_user_id, first_user_id],
+            }),
+        )
+        .await?;
+        assert_eq!(granted["authorized_count"].as_u64(), Some(2));
+
+        let authorizations: Vec<(Uuid, bool, Option<Uuid>)> = sqlx::query_as(
+            "SELECT user_id, git_tracking_upload_enabled, git_tracking_upload_authorized_by \
+             FROM org_members WHERE org_id = $1 AND user_id = ANY($2::uuid[]) ORDER BY user_id",
+        )
+        .bind(org_id)
+        .bind(vec![first_user_id, second_user_id])
+        .fetch_all(&db.state.db)
+        .await?;
+        assert_eq!(
+            authorizations,
+            vec![
+                (first_user_id, true, Some(admin_user_id)),
+                (second_user_id, true, Some(admin_user_id)),
+            ]
+        );
+
+        let audit_entries: Vec<(String, Option<Value>)> = sqlx::query_as(
+            "SELECT resource_id, details FROM audit_log \
+             WHERE action = 'developer.git_tracking_upload.grant' \
+               AND resource_id = ANY($1::text[]) ORDER BY resource_id",
+        )
+        .bind(vec![first_user_id.to_string(), second_user_id.to_string()])
+        .fetch_all(&db.state.db)
+        .await?;
+        assert_eq!(audit_entries.len(), 2);
+        assert!(audit_entries.iter().all(|(_, details)| {
+            details.as_ref() == Some(&json!({ "authorized": true, "bulk": true }))
+        }));
+
+        let other_org_id = uuid_tail(306);
+        let other_user_id = uuid_tail(307);
+        let untouched_user_id = uuid_tail(308);
+        insert_organization(&db.state.db, other_org_id, "Other Bulk Authorization Org").await?;
+        insert_user(
+            &db.state.db,
+            other_user_id,
+            other_org_id,
+            fixed_timestamp(2032),
+        )
+        .await?;
+        insert_user(
+            &db.state.db,
+            untouched_user_id,
+            org_id,
+            fixed_timestamp(2033),
+        )
+        .await?;
+
+        let error = bulk_authorize_git_tracking_upload(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Json(BulkGitTrackingUploadAuthorizationRequest {
+                user_ids: vec![untouched_user_id, other_user_id],
+            }),
+        )
+        .await
+        .expect_err("a cross-organization user must reject the whole batch");
+        assert_error_status(error, StatusCode::NOT_FOUND);
+
+        let untouched_authorized: bool = sqlx::query_scalar(
+            "SELECT git_tracking_upload_enabled FROM org_members \
+             WHERE org_id = $1 AND user_id = $2",
+        )
+        .bind(org_id)
+        .bind(untouched_user_id)
+        .fetch_one(&db.state.db)
+        .await?;
+        assert!(!untouched_authorized);
 
         db.cleanup().await?;
         Ok(())
