@@ -13,6 +13,7 @@ pub enum AuthState {
 pub struct AuthStatus {
     pub backend: String,
     pub state: AuthState,
+    pub server_url: Option<String>,
     pub access_token_expires_at: Option<i64>,
     pub refresh_token_expires_at: Option<i64>,
     pub user_id: Option<String>,
@@ -30,6 +31,7 @@ pub fn collect_auth_status() -> AuthStatus {
         Ok(None) => AuthStatus {
             backend,
             state: AuthState::LoggedOut,
+            server_url: None,
             access_token_expires_at: None,
             refresh_token_expires_at: None,
             user_id: None,
@@ -49,6 +51,7 @@ pub fn collect_auth_status() -> AuthStatus {
             AuthStatus {
                 backend,
                 state,
+                server_url: creds.server_url,
                 access_token_expires_at: Some(creds.access_token_expires_at),
                 refresh_token_expires_at: Some(creds.refresh_token_expires_at),
                 user_id: identity.user_id,
@@ -61,6 +64,7 @@ pub fn collect_auth_status() -> AuthStatus {
         Err(err) => AuthStatus {
             backend,
             state: AuthState::Error(err),
+            server_url: None,
             access_token_expires_at: None,
             refresh_token_expires_at: None,
             user_id: None,

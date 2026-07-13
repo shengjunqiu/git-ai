@@ -9,6 +9,12 @@ pub use git_ai_protocol::oauth::{
 /// NOTE: Debug intentionally redacts tokens to prevent accidental exposure in logs
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredCredentials {
+    /// Server that issued these credentials.
+    ///
+    /// Optional for backward compatibility with credentials written before
+    /// server binding was introduced.
+    #[serde(default)]
+    pub server_url: Option<String>,
     /// The access token (short-lived, 1 hour)
     pub access_token: String,
     /// The refresh token (long-lived, 90 days)
@@ -23,6 +29,7 @@ pub struct StoredCredentials {
 impl fmt::Debug for StoredCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StoredCredentials")
+            .field("server_url", &self.server_url)
             .field("access_token", &"[REDACTED]")
             .field("refresh_token", &"[REDACTED]")
             .field("access_token_expires_at", &self.access_token_expires_at)
@@ -51,6 +58,7 @@ mod tests {
 
     fn make_credentials(access_expires_at: i64, refresh_expires_at: i64) -> StoredCredentials {
         StoredCredentials {
+            server_url: Some("https://example.com".to_string()),
             access_token: "test_access_token".to_string(),
             refresh_token: "test_refresh_token".to_string(),
             access_token_expires_at: access_expires_at,

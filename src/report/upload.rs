@@ -445,10 +445,15 @@ mod tests {
 
     #[test]
     fn http_uploader_sends_stored_bearer_token() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let addr = listener.local_addr().expect("mock server addr");
+        let server_url = format!("http://{}", addr);
+
         let store = CredentialStore::new();
         let _ = store.clear();
         store
             .store(&StoredCredentials {
+                server_url: Some(server_url.clone()),
                 access_token: "test_report_token".to_string(),
                 refresh_token: "test_refresh_token".to_string(),
                 access_token_expires_at: chrono::Utc::now().timestamp() + 3600,
@@ -456,8 +461,6 @@ mod tests {
             })
             .expect("test credentials should be stored");
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
-        let addr = listener.local_addr().expect("mock server addr");
         let (request_tx, request_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("mock server should accept");
@@ -478,11 +481,9 @@ mod tests {
                 .expect("mock server should respond");
         });
 
-        HttpUploader {
-            server_url: format!("http://{}", addr),
-        }
-        .upload(&to_upload_payload(&sample_report()))
-        .expect("http upload should succeed");
+        HttpUploader { server_url }
+            .upload(&to_upload_payload(&sample_report()))
+            .expect("http upload should succeed");
 
         let request = request_rx
             .recv()

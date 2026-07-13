@@ -170,13 +170,11 @@ bash install.sh
 2. 配置 `git` wrapper，让普通 `git` 命令经过 `git-ai`。
 3. 调用 `git-ai exchange-nonce` 兑换登录凭证。
 4. 调用 `git-ai install-hooks` 安装已支持 AI 工具的 hooks。
-5. 尝试把 `API_BASE` 写入 `~/.git-ai/config.json`。
+5. 把凭据绑定到 `API_BASE`，并自动写入 `~/.git-ai/config.json`。
 
 如果是从 release 包安装，先按 [developer-install-guide.md](./developer-install-guide.md) 完成安装，再手动执行：
 
 ```bash
-git-ai config set api_base_url http://117.147.213.234:38080
-
 INSTALL_NONCE="<管理员给你的 nonce>" \
 API_BASE="http://117.147.213.234:38080" \
 git-ai exchange-nonce
@@ -199,7 +197,6 @@ $env:API_BASE = "http://117.147.213.234:38080"
 如果需要手动兑换 nonce：
 
 ```powershell
-git-ai config set api_base_url http://117.147.213.234:38080
 $env:INSTALL_NONCE = "<管理员给你的 nonce>"
 $env:API_BASE = "http://117.147.213.234:38080"
 git-ai exchange-nonce
@@ -512,7 +509,6 @@ http://117.147.213.234:38080/me
 
 ```bash
 git-ai logout
-git-ai config set api_base_url http://117.147.213.234:38080
 
 INSTALL_NONCE="<你的 nonce>" \
 API_BASE="http://117.147.213.234:38080" \

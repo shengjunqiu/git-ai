@@ -98,6 +98,7 @@ impl OAuthClient {
 
         let now = chrono::Utc::now().timestamp();
         Ok(StoredCredentials {
+            server_url: Some(self.base_url.clone()),
             access_token: token_response.access_token,
             refresh_token: token_response.refresh_token,
             access_token_expires_at: now + token_response.expires_in as i64,
@@ -169,6 +170,7 @@ impl OAuthClient {
 
                 let now = chrono::Utc::now().timestamp();
                 return Ok(StoredCredentials {
+                    server_url: Some(self.base_url.clone()),
                     access_token: token_response.access_token,
                     refresh_token: token_response.refresh_token,
                     access_token_expires_at: now + token_response.expires_in as i64,
@@ -484,6 +486,7 @@ mod tests {
         let refresh_expires_in: u64 = 7776000;
 
         let creds = StoredCredentials {
+            server_url: Some("https://example.com".to_string()),
             access_token: "test".to_string(),
             refresh_token: "test".to_string(),
             access_token_expires_at: now + expires_in as i64,

@@ -37,7 +37,13 @@ cargo run
 
 ## 客户端配置
 
-安装 git-ai 客户端后，指向企业服务端：
+使用浏览器 OAuth 登录时，`--server` 会自动保存服务地址并将凭据绑定到该服务器：
+
+```bash
+git-ai login --server https://your-enterprise-server.com
+```
+
+使用 API key 或自动化环境时，也可以显式配置服务地址：
 
 ```bash
 # 方法 1: 环境变量

@@ -46,12 +46,16 @@ fn exchange_nonce(nonce: &str, api_base: &str) -> Result<(), String> {
     // Exchange the nonce for credentials
     let credentials = client.exchange_install_nonce(nonce)?;
 
+    // Persist the issuing server so subsequent refreshes and uploads use the
+    // same endpoint without requiring a separate config command.
+    crate::config::save_api_base_url(client.base_url())?;
+
     // Store credentials
     let store = CredentialStore::new();
     store.store(&credentials)?;
 
     let _ = upload_client_status_with_token(
-        api_base.to_string(),
+        client.base_url().to_string(),
         credentials.access_token.clone(),
         ClientStatusKind::LoggedIn,
     );

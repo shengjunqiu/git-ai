@@ -276,9 +276,11 @@ http://localhost:8080/me
 主 `git-ai` 客户端可以指向本地 enterprise server：
 
 ```bash
-git-ai config set api_base_url http://localhost:8080
 git-ai login --server http://localhost:8080
 ```
+
+浏览器授权成功后，CLI 会自动保存该服务地址，不需要再单独执行
+`git-ai config set api_base_url`。
 
 登录后可以访问：
 

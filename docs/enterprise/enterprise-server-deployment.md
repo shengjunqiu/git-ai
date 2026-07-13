@@ -328,9 +328,10 @@ BASE_URL=http://117.147.213.234:38080
 客户端也使用同一个外部地址：
 
 ```bash
-git-ai config set api_base_url http://117.147.213.234:38080
 git-ai login --server http://117.147.213.234:38080
 ```
+
+登录成功后客户端会自动保存服务地址，不需要额外执行 `git-ai config set`。
 
 没有域名也可以做 HTTPS，但有两个限制：
 
@@ -401,19 +402,16 @@ command -v git
 git-ai --version
 ```
 
-配置企业服务地址：
-
-```bash
-git-ai config set api_base_url https://git-ai.example.com
-```
-
-登录：
+登录并选择企业服务地址：
 
 ```bash
 git-ai login --server https://git-ai.example.com
 ```
 
-终端会显示 `/verify` 地址和设备码。浏览器打开后输入设备码完成授权。
+浏览器授权成功后，CLI 会自动保存该地址并将凭据绑定到该服务器。
+
+终端会显示授权和注册地址。用户在浏览器中注册或登录后确认授权，
+浏览器再通过本地 callback 将 authorization code 交给 CLI。
 
 检查身份：
 

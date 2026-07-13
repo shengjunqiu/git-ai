@@ -34,14 +34,21 @@ pub fn handle_login(args: &[String]) {
 
     let effective_url = client.base_url();
 
-    // Only reuse credentials for the configured server, and verify that they
-    // can actually provide an access token. This also refreshes an expired
-    // access token instead of treating a locally unexpired refresh token as
-    // proof that authentication is usable.
-    let configured_url = config::normalize_api_base_url(config::Config::fresh().api_base_url());
-    let login_target_matches_config =
-        options.server_url.is_none() || effective_url == configured_url;
-    if login_target_matches_config && ApiContext::new(None).auth_token.is_some() {
+    // Reuse credentials only when they are bound to this login target, and
+    // verify that they can actually provide an access token. This also
+    // refreshes an expired access token instead of treating a locally
+    // unexpired refresh token as proof that authentication is usable.
+    if ApiContext::new(Some(effective_url.to_string()))
+        .auth_token
+        .is_some()
+    {
+        // An explicit --server is also a request to make this the configured
+        // server. Persist it even when no new browser authorization is needed.
+        if options.server_url.is_some()
+            && let Err(error) = config::save_api_base_url(effective_url)
+        {
+            eprintln!("Warning: Failed to save server URL to config: {}", error);
+        }
         eprintln!("Already logged in. Use 'git-ai logout' to log out first.");
         std::process::exit(0);
     }
@@ -156,7 +163,7 @@ pub fn handle_login(args: &[String]) {
 
             // Save the server URL to config if --server was provided
             if options.server_url.is_some() {
-                if let Err(e) = save_server_to_config(effective_url) {
+                if let Err(e) = config::save_api_base_url(effective_url) {
                     eprintln!("\nWarning: Failed to save server URL to config: {}", e);
                     eprintln!(
                         "You may need to set GIT_AI_API_BASE_URL={} in your environment.",
@@ -322,42 +329,6 @@ fn print_help() {
     eprintln!("Options:");
     eprintln!("  --server <url>   Git AI server URL");
     eprintln!("  --no-browser     Print the authorization URL without opening a browser");
-}
-
-/// Save the server URL to the git-ai config file so subsequent commands use it
-fn save_server_to_config(url: &str) -> Result<(), String> {
-    use std::io::Write;
-
-    let config_dir = dirs::home_dir()
-        .ok_or_else(|| "Cannot determine home directory".to_string())?
-        .join(".git-ai");
-
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
-    let config_path = config_dir.join("config.json");
-
-    // Read existing config or create new one
-    let mut config_json: serde_json::Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read config: {}", e))?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    // Set the api_base_url
-    config_json["api_base_url"] = serde_json::Value::String(config::normalize_api_base_url(url));
-
-    // Write back
-    let mut file = std::fs::File::create(&config_path)
-        .map_err(|e| format!("Failed to create config file: {}", e))?;
-    let formatted = serde_json::to_string_pretty(&config_json)
-        .map_err(|e| format!("Failed to format config: {}", e))?;
-    file.write_all(formatted.as_bytes())
-        .map_err(|e| format!("Failed to write config: {}", e))?;
-
-    Ok(())
 }
 
 #[cfg(test)]

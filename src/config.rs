@@ -898,6 +898,31 @@ pub fn save_file_config(config: &FileConfig) -> Result<(), String> {
     fs::write(&path, json).map_err(|e| format!("Failed to write config file: {}", e))
 }
 
+/// Persist the API base URL while preserving unrelated and unknown config keys.
+pub fn save_api_base_url(url: &str) -> Result<(), String> {
+    let path =
+        config_file_path().ok_or_else(|| "Could not determine config file path".to_string())?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let mut config_json: serde_json::Value = if path.exists() {
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read config file: {}", e))?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    config_json["api_base_url"] = serde_json::Value::String(normalize_api_base_url(url));
+    let json = serde_json::to_string_pretty(&config_json)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    fs::write(&path, json).map_err(|e| format!("Failed to write config file: {}", e))
+}
+
 /// Apply test config patch from environment variable (test-only)
 /// Reads GIT_AI_TEST_CONFIG_PATCH env var containing JSON and applies patches to config
 #[cfg(any(test, feature = "test-support"))]

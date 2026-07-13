@@ -1,3 +1,4 @@
+use crate::auth::types::StoredCredentials;
 use crate::auth::{CredentialStore, OAuthClient};
 use crate::config;
 use crate::error::GitAiError;
@@ -9,19 +10,50 @@ use url::Url;
 
 /// Global mutex to prevent multiple threads from refreshing simultaneously.
 /// This provides in-process synchronization to avoid thundering herd issues.
-/// Note: Cross-process races are acceptable - both processes get valid tokens.
+/// Cross-process synchronization is handled by re-reading the credential store
+/// before refreshing and on the next API context construction.
 static REFRESH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+fn credentials_server_matches(
+    credentials: &StoredCredentials,
+    target_base_url: &str,
+    configured_base_url: &str,
+) -> bool {
+    let target_base_url = config::normalize_api_base_url(target_base_url);
+    match credentials.server_url.as_deref() {
+        Some(server_url) => config::normalize_api_base_url(server_url) == target_base_url,
+        // Legacy credentials predate server binding. Only trust them for the
+        // currently configured server, which matches the old global behavior.
+        None => config::normalize_api_base_url(configured_base_url) == target_base_url,
+    }
+}
+
+fn load_credentials_for_server(
+    store: &CredentialStore,
+    target_base_url: &str,
+) -> Option<StoredCredentials> {
+    let mut credentials = store.load().ok()??;
+    let configured_base_url = config::Config::fresh().api_base_url().to_string();
+    if !credentials_server_matches(&credentials, target_base_url, &configured_base_url) {
+        return None;
+    }
+
+    // Bind legacy credentials to the configured server on first use. Failure
+    // to persist the migration should not discard an otherwise usable token.
+    if credentials.server_url.is_none() {
+        credentials.server_url = Some(config::normalize_api_base_url(target_base_url));
+        let _ = store.store(&credentials);
+    }
+
+    Some(credentials)
+}
 
 /// Attempt to load stored credentials and refresh if needed.
 /// Returns None on any failure (not logged in, expired, refresh failed).
 /// Uses in-process Mutex for thread safety during token refresh.
-fn try_load_auth_token() -> Option<String> {
+fn try_load_auth_token(base_url: &str) -> Option<String> {
     let store = CredentialStore::new();
-
-    let creds = match store.load() {
-        Ok(Some(c)) => c,
-        _ => return None,
-    };
+    let creds = load_credentials_for_server(&store, base_url)?;
 
     // If refresh token expired, can't authenticate
     if creds.is_refresh_token_expired() {
@@ -38,10 +70,11 @@ fn try_load_auth_token() -> Option<String> {
     let _guard = REFRESH_LOCK.lock().ok()?;
 
     // Re-check credentials after acquiring lock - another thread may have refreshed
-    let creds = match store.load() {
-        Ok(Some(c)) => c,
-        _ => return None,
-    };
+    let creds = load_credentials_for_server(&store, base_url)?;
+
+    if creds.is_refresh_token_expired() {
+        return None;
+    }
 
     // Check again if access token is now valid (another thread may have refreshed)
     if !creds.is_access_token_expired(300) {
@@ -49,7 +82,7 @@ fn try_load_auth_token() -> Option<String> {
     }
 
     // Still expired - we need to refresh
-    let client = OAuthClient::new();
+    let client = OAuthClient::with_base_url(base_url).ok()?;
     match client.refresh_access_token(&creds.refresh_token) {
         Ok(new_creds) => {
             // Store refreshed credentials (ignore errors - we still have the token)
@@ -160,9 +193,12 @@ impl ApiContext {
         } else {
             None
         };
+        let base_url =
+            config::normalize_api_base_url(&base_url.unwrap_or_else(Self::default_base_url));
+        let auth_token = try_load_auth_token(&base_url);
         Self {
-            base_url: base_url.unwrap_or_else(Self::default_base_url),
-            auth_token: try_load_auth_token(),
+            base_url,
+            auth_token,
             api_key,
             author_identity,
             timeout_secs: Some(30),
@@ -182,7 +218,9 @@ impl ApiContext {
             None
         };
         Self {
-            base_url: base_url.unwrap_or_else(Self::default_base_url),
+            base_url: config::normalize_api_base_url(
+                &base_url.unwrap_or_else(Self::default_base_url),
+            ),
             auth_token: None,
             api_key,
             author_identity,
@@ -203,7 +241,9 @@ impl ApiContext {
             None
         };
         Self {
-            base_url: base_url.unwrap_or_else(Self::default_base_url),
+            base_url: config::normalize_api_base_url(
+                &base_url.unwrap_or_else(Self::default_base_url),
+            ),
             auth_token: Some(auth_token),
             api_key,
             author_identity,
@@ -313,7 +353,49 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    fn test_credentials(server_url: Option<&str>) -> StoredCredentials {
+        StoredCredentials {
+            server_url: server_url.map(str::to_string),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            access_token_expires_at: i64::MAX,
+            refresh_token_expires_at: i64::MAX,
+        }
+    }
+
     // ============= ApiContext Tests =============
+
+    #[test]
+    fn test_credentials_only_match_their_issuing_server() {
+        let credentials = test_credentials(Some("https://server-a.example.com/"));
+
+        assert!(credentials_server_matches(
+            &credentials,
+            "https://server-a.example.com",
+            "https://server-b.example.com"
+        ));
+        assert!(!credentials_server_matches(
+            &credentials,
+            "https://server-b.example.com",
+            "https://server-b.example.com"
+        ));
+    }
+
+    #[test]
+    fn test_legacy_credentials_only_match_configured_server() {
+        let credentials = test_credentials(None);
+
+        assert!(credentials_server_matches(
+            &credentials,
+            "https://configured.example.com/",
+            "https://configured.example.com"
+        ));
+        assert!(!credentials_server_matches(
+            &credentials,
+            "https://other.example.com",
+            "https://configured.example.com"
+        ));
+    }
 
     #[test]
     fn test_api_context_without_auth() {

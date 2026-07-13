@@ -24,6 +24,9 @@ pub fn handle_whoami(args: &[String]) {
 
     println!("API Base URL: {}", api_base_url);
     println!("Credential backend: {}", auth.backend);
+    if let Some(server_url) = &auth.server_url {
+        println!("Credential server: {}", server_url);
+    }
 
     if let Some(api_key) = &api_ctx.api_key {
         let masked = mask_api_key(api_key);

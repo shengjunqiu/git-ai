@@ -156,6 +156,7 @@ mod tests {
 
     fn make_test_credentials() -> StoredCredentials {
         StoredCredentials {
+            server_url: Some("https://example.com".to_string()),
             access_token: "test_access_token_12345".to_string(),
             refresh_token: "test_refresh_token_67890".to_string(),
             access_token_expires_at: chrono::Utc::now().timestamp() + 3600,
@@ -181,6 +182,7 @@ mod tests {
 
         // Load and verify
         let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.server_url, creds.server_url);
         assert_eq!(loaded.access_token, creds.access_token);
         assert_eq!(loaded.refresh_token, creds.refresh_token);
         assert_eq!(
@@ -289,6 +291,7 @@ mod tests {
         let loaded: StoredCredentials = serde_json::from_str(&json).unwrap();
 
         // Verify fields match
+        assert_eq!(creds.server_url, loaded.server_url);
         assert_eq!(creds.access_token, loaded.access_token);
         assert_eq!(creds.refresh_token, loaded.refresh_token);
         assert_eq!(
@@ -305,6 +308,20 @@ mod tests {
     fn test_empty_credentials_file_fails_parse() {
         let result: Result<StoredCredentials, _> = serde_json::from_str("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_legacy_credentials_without_server_url_still_parse() {
+        let json = r#"{
+            "access_token": "legacy-access",
+            "refresh_token": "legacy-refresh",
+            "access_token_expires_at": 4102444800,
+            "refresh_token_expires_at": 4102444800
+        }"#;
+
+        let credentials: StoredCredentials = serde_json::from_str(json).unwrap();
+        assert_eq!(credentials.server_url, None);
+        assert_eq!(credentials.access_token, "legacy-access");
     }
 
     // ============= File Backend Integration Tests =============

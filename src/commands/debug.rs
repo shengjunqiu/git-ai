@@ -202,6 +202,9 @@ fn build_debug_report() -> String {
 
     let _ = writeln!(out, "== Git AI Login ==");
     let _ = writeln!(out, "Credential backend: {}", auth_info.backend);
+    if let Some(server_url) = &auth_info.server_url {
+        let _ = writeln!(out, "Credential server: {}", server_url);
+    }
     match &auth_info.state {
         AuthState::LoggedOut => {
             let _ = writeln!(out, "Status: logged out");
