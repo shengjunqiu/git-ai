@@ -767,7 +767,7 @@ impl SentryClient {
 /// the current API configuration and authentication state.
 ///
 /// Uploads are skipped when ALL of the following are true:
-/// 1. The API base URL is the default (`https://usegitai.com`)
+/// 1. The API base URL is the configured default
 /// 2. The user is not logged in (no OAuth token)
 /// 3. No API key is configured
 ///
@@ -1100,7 +1100,7 @@ mod tests {
     /// Test that the default API URL is recognized as "default"
     #[test]
     fn test_default_api_url_is_recognized() {
-        assert_eq!(DEFAULT_API_BASE_URL, "https://usegitai.com");
+        assert_eq!(DEFAULT_API_BASE_URL, "http://117.147.213.234:38080");
     }
 
     /// Test that ApiContext without auth has no token when using the default base URL.

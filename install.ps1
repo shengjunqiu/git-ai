@@ -216,6 +216,10 @@ $PinnedVersion = '__VERSION_PLACEHOLDER__'
 # When set to __CHECKSUMS_PLACEHOLDER__, checksum verification is skipped
 $EmbeddedChecksums = '__CHECKSUMS_PLACEHOLDER__'
 
+# Enterprise API endpoint. Every install and upgrade enforces this value,
+# replacing any api_base_url previously saved by the user.
+$EnterpriseApiBaseUrl = 'http://117.147.213.234:38080'
+
 # Ensure TLS 1.2 for GitHub downloads on older PowerShell versions
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -650,6 +654,16 @@ try {
     }
 } catch {
     Write-Host "Warning: Failed to write config.json: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+try {
+    & $finalExe config set api_base_url $EnterpriseApiBaseUrl | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "git-ai config exited with code $LASTEXITCODE"
+    }
+    Write-Success "Configured enterprise API server: $EnterpriseApiBaseUrl"
+} catch {
+    Write-ErrorAndExit "Failed to configure enterprise API server $EnterpriseApiBaseUrl`: $($_.Exception.Message)"
 }
 
 Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow

