@@ -64,6 +64,11 @@ PINNED_VERSION="__VERSION_PLACEHOLDER__"
 # When set to __CHECKSUMS_PLACEHOLDER__, checksum verification is skipped
 EMBEDDED_CHECKSUMS="__CHECKSUMS_PLACEHOLDER__"
 
+# Enterprise release source placeholders. Enterprise release generation replaces
+# both values; public GitHub release generation leaves them untouched.
+ENTERPRISE_RELEASE_BASE_URL="__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__"
+ENTERPRISE_RELEASE_CHANNEL="__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__"
+
 # Enterprise API endpoint. Every install and upgrade enforces this value,
 # replacing any api_base_url previously saved by the user.
 ENTERPRISE_API_BASE_URL="http://117.147.213.234:38080"
@@ -259,7 +264,8 @@ esac
 BINARY_NAME="git-ai-${OS}-${ARCH}"
 
 # Determine release tag
-# Priority: 1. Local binary override (env var), 2. Bundled binary (same directory), 3. Pinned version (for release builds), 4. Environment variable, 5. "latest"
+# Priority: 1. Local binary override, 2. Bundled binary, 3. Enterprise release
+# source, 4. Pinned GitHub version, 5. Environment override, 6. GitHub latest.
 
 # Check for bundled binary in the same directory as the install script
 _BUNDLED_BINARY=""
@@ -278,6 +284,9 @@ elif [ -n "$_BUNDLED_BINARY" ]; then
     RELEASE_TAG="local"
     GIT_AI_LOCAL_BINARY="$_BUNDLED_BINARY"
     DOWNLOAD_URL=""
+elif [ "$ENTERPRISE_RELEASE_BASE_URL" != "__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__" ]; then
+    RELEASE_TAG="${PINNED_VERSION:-$ENTERPRISE_RELEASE_CHANNEL}"
+    DOWNLOAD_URL="${ENTERPRISE_RELEASE_BASE_URL%/}/worker/releases/${ENTERPRISE_RELEASE_CHANNEL}/download/${BINARY_NAME}"
 elif [ "$PINNED_VERSION" != "__VERSION_PLACEHOLDER__" ]; then
     # Version-pinned install script from a release
     RELEASE_TAG="$PINNED_VERSION"

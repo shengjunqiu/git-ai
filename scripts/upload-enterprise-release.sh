@@ -2,14 +2,19 @@
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER="${GIT_AI_RELEASE_SERVER:-http://117.147.213.234:38080}"
-VERSION="${GIT_AI_RELEASE_VERSION:-1.3.2}"
+SERVER="${SERVER%/}"
+VERSION="${GIT_AI_RELEASE_VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' "$ROOT_DIR/Cargo.toml")}"
 CHANNEL="${GIT_AI_RELEASE_CHANNEL:-latest}"
+VERSION_CHANNEL="${GIT_AI_RELEASE_VERSION_CHANNEL:-$VERSION}"
 ASSET_DIR="${GIT_AI_RELEASE_ASSET_DIR:-$HOME/Downloads/git-ai release}"
+OUTPUT_DIR="${GIT_AI_RELEASE_OUTPUT_DIR:-$ASSET_DIR/enterprise-$VERSION}"
 ADMIN_KEY_FILE="${GIT_AI_ADMIN_KEY_FILE:-/tmp/git-ai-admin-key}"
 CREDENTIAL_FILE="${GIT_AI_CREDENTIAL_FILE:-$HOME/.git-ai/internal/credentials}"
+PREPARE_ONLY="${GIT_AI_RELEASE_PREPARE_ONLY:-0}"
 
-FILES=(
+BINARY_FILES=(
   git-ai-linux-x64
   git-ai-linux-arm64
   git-ai-windows-x64.exe
@@ -17,6 +22,111 @@ FILES=(
   git-ai-macos-x64
   git-ai-macos-arm64
 )
+
+GENERATED_FILES=(
+  install.sh
+  install.ps1
+)
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Required command not found: $1" >&2
+    exit 2
+  fi
+}
+
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+asset_path() {
+  case "$1" in
+    install.sh|install.ps1|SHA256SUMS)
+      printf '%s/%s' "$OUTPUT_DIR" "$1"
+      ;;
+    *)
+      printf '%s/%s' "$ASSET_DIR" "$1"
+      ;;
+  esac
+}
+
+require_command awk
+require_command curl
+require_command jq
+
+if [[ -z "$VERSION" || ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "Invalid release version: $VERSION" >&2
+  exit 2
+fi
+
+for filename in "${BINARY_FILES[@]}"; do
+  if [[ ! -f "$ASSET_DIR/$filename" ]]; then
+    echo "Missing release asset: $ASSET_DIR/$filename" >&2
+    exit 2
+  fi
+done
+
+mkdir -p "$OUTPUT_DIR"
+binary_manifest="$OUTPUT_DIR/SHA256SUMS.binaries"
+manifest="$OUTPUT_DIR/SHA256SUMS"
+: > "$binary_manifest"
+
+for filename in "${BINARY_FILES[@]}"; do
+  hash="$(sha256_file "$ASSET_DIR/$filename")"
+  printf '%s  %s\n' "$hash" "$filename" >> "$binary_manifest"
+done
+
+embedded_checksums="$(awk 'BEGIN { first = 1 } { if (!first) printf "|"; printf "%s", $0; first = 0 } END { print "" }' "$binary_manifest")"
+
+awk \
+  -v version="$VERSION" \
+  -v checksums="$embedded_checksums" \
+  -v release_base="$SERVER" \
+  -v release_channel="$VERSION_CHANNEL" '
+    /^PINNED_VERSION="__VERSION_PLACEHOLDER__"/ { sub(/__VERSION_PLACEHOLDER__/, version) }
+    /^EMBEDDED_CHECKSUMS="__CHECKSUMS_PLACEHOLDER__"/ { sub(/__CHECKSUMS_PLACEHOLDER__/, checksums) }
+    /^ENTERPRISE_RELEASE_BASE_URL="__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__"/ { sub(/__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__/, release_base) }
+    /^ENTERPRISE_RELEASE_CHANNEL="__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__"/ { sub(/__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__/, release_channel) }
+    { print }
+  ' "$ROOT_DIR/install.sh" > "$OUTPUT_DIR/install.sh"
+chmod +x "$OUTPUT_DIR/install.sh"
+
+awk \
+  -v version="$VERSION" \
+  -v checksums="$embedded_checksums" \
+  -v release_base="$SERVER" \
+  -v release_channel="$VERSION_CHANNEL" '
+    /^[$]PinnedVersion = .__VERSION_PLACEHOLDER__/ { sub(/__VERSION_PLACEHOLDER__/, version) }
+    /^[$]EmbeddedChecksums = .__CHECKSUMS_PLACEHOLDER__/ { sub(/__CHECKSUMS_PLACEHOLDER__/, checksums) }
+    /^[$]EnterpriseReleaseBaseUrl = .__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__/ { sub(/__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__/, release_base) }
+    /^[$]EnterpriseReleaseChannel = .__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__/ { sub(/__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__/, release_channel) }
+    { print }
+  ' "$ROOT_DIR/install.ps1" > "$OUTPUT_DIR/install.ps1"
+
+: > "$manifest"
+for filename in "${BINARY_FILES[@]}" "${GENERATED_FILES[@]}"; do
+  path="$(asset_path "$filename")"
+  hash="$(sha256_file "$path")"
+  printf '%s  %s\n' "$hash" "$filename" >> "$manifest"
+done
+
+manifest_hash="$(sha256_file "$manifest")"
+
+echo "Prepared enterprise release $VERSION"
+echo "  Binary directory: $ASSET_DIR"
+echo "  Generated files:  $OUTPUT_DIR"
+echo "  Version channel:  $VERSION_CHANNEL"
+echo "  Publish channel:  $CHANNEL"
+echo "  Manifest SHA256:  $manifest_hash"
+
+if [[ "$PREPARE_ONLY" == "1" ]]; then
+  echo "Prepare-only mode enabled; nothing was uploaded."
+  exit 0
+fi
 
 if [[ -f "$CREDENTIAL_FILE" ]]; then
   access_token="$(jq -r '.access_token // empty' "$CREDENTIAL_FILE")"
@@ -34,22 +144,6 @@ if [[ "$auth_header" == *": " ]]; then
   echo "Authentication credential is empty" >&2
   exit 2
 fi
-
-for filename in "${FILES[@]}"; do
-  if [[ ! -f "$ASSET_DIR/$filename" ]]; then
-    echo "Missing release asset: $ASSET_DIR/$filename" >&2
-    exit 2
-  fi
-done
-
-work_dir="$(mktemp -d)"
-trap 'rm -rf "$work_dir"' EXIT
-manifest="$work_dir/SHA256SUMS"
-
-for filename in "${FILES[@]}"; do
-  hash="$(shasum -a 256 "$ASSET_DIR/$filename" | awk '{print $1}')"
-  printf '%s  %s\n' "$hash" "$filename" >> "$manifest"
-done
 
 echo "Checking admin access at $SERVER"
 auth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
@@ -91,8 +185,12 @@ if [[ "$auth_status" != "200" ]]; then
   exit 1
 fi
 
-for filename in "${FILES[@]}"; do
-  hash="$(shasum -a 256 "$ASSET_DIR/$filename" | awk '{print $1}')"
+upload_asset() {
+  local filename="$1"
+  local path="$2"
+  local hash
+  hash="$(sha256_file "$path")"
+
   echo "Uploading $filename"
   curl --fail-with-body --silent --show-error \
     -H "$auth_header" \
@@ -100,32 +198,57 @@ for filename in "${FILES[@]}"; do
     -F "version=$VERSION" \
     -F "filename=$filename" \
     -F "sha256=$hash" \
-    -F "file=@$ASSET_DIR/$filename" \
+    -F "file=@$path" \
     "$SERVER/api/admin/releases/upload"
   echo
+}
+
+for filename in "${BINARY_FILES[@]}" "${GENERATED_FILES[@]}"; do
+  upload_asset "$filename" "$(asset_path "$filename")"
 done
+upload_asset "SHA256SUMS" "$manifest"
 
-manifest_hash="$(shasum -a 256 "$manifest" | awk '{print $1}')"
-echo "Uploading SHA256SUMS"
-curl --fail-with-body --silent --show-error \
-  -H "$auth_header" \
-  -F "channel=$CHANNEL" \
-  -F "version=$VERSION" \
-  -F "filename=SHA256SUMS" \
-  -F "sha256=$manifest_hash" \
-  -F "file=@$manifest" \
-  "$SERVER/api/admin/releases/upload"
-echo
+publish_channel() {
+  local channel="$1"
+  echo "Publishing $channel -> $VERSION"
+  jq -n \
+    --arg channel "$channel" \
+    --arg version "$VERSION" \
+    --arg checksum "$manifest_hash" \
+    '{channel:$channel,version:$version,checksum:$checksum}' | \
+    curl --fail-with-body --silent --show-error \
+      -X POST \
+      -H "$auth_header" \
+      -H "Content-Type: application/json" \
+      --data-binary @- \
+      "$SERVER/api/admin/releases/channel"
+  echo
+}
 
-echo "Publishing $CHANNEL -> $VERSION"
-curl --fail-with-body --silent --show-error \
-  -X POST \
-  -H "$auth_header" \
-  -H "Content-Type: application/json" \
-  --data "{\"channel\":\"$CHANNEL\",\"version\":\"$VERSION\",\"checksum\":\"$manifest_hash\"}" \
-  "$SERVER/api/admin/releases/channel"
-echo
+publish_channel "$VERSION_CHANNEL"
+if [[ "$CHANNEL" != "$VERSION_CHANNEL" ]]; then
+  publish_channel "$CHANNEL"
+fi
 
 echo "Verifying public release metadata"
-curl --fail-with-body --silent --show-error "$SERVER/worker/releases"
-echo
+release_metadata="$(curl --fail-with-body --silent --show-error "$SERVER/worker/releases")"
+echo "$release_metadata"
+
+published_version="$(jq -r --arg channel "$CHANNEL" '.channels[$channel].version // empty' <<<"$release_metadata")"
+if [[ "$published_version" != "$VERSION" ]]; then
+  echo "Published channel $CHANNEL points to $published_version, expected $VERSION" >&2
+  exit 1
+fi
+
+downloaded_manifest="$(mktemp)"
+trap 'rm -f "$downloaded_manifest"' EXIT
+curl --fail-with-body --silent --show-error \
+  -o "$downloaded_manifest" \
+  "$SERVER/worker/releases/$CHANNEL/download/SHA256SUMS"
+downloaded_manifest_hash="$(sha256_file "$downloaded_manifest")"
+if [[ "$downloaded_manifest_hash" != "$manifest_hash" ]]; then
+  echo "Downloaded SHA256SUMS hash mismatch" >&2
+  exit 1
+fi
+
+echo "Enterprise release $VERSION published successfully."

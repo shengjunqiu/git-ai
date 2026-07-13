@@ -216,6 +216,11 @@ $PinnedVersion = '__VERSION_PLACEHOLDER__'
 # When set to __CHECKSUMS_PLACEHOLDER__, checksum verification is skipped
 $EmbeddedChecksums = '__CHECKSUMS_PLACEHOLDER__'
 
+# Enterprise release source placeholders. Enterprise release generation replaces
+# both values; public GitHub release generation leaves them untouched.
+$EnterpriseReleaseBaseUrl = '__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__'
+$EnterpriseReleaseChannel = '__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__'
+
 # Enterprise API endpoint. Every install and upgrade enforces this value,
 # replacing any api_base_url previously saved by the user.
 $EnterpriseApiBaseUrl = 'http://117.147.213.234:38080'
@@ -391,7 +396,8 @@ $os = 'windows'
 $binaryName = "git-ai-$os-$arch"
 
 # Determine release tag
-# Priority: 1. Local binary override (env var), 2. Bundled binary (same directory), 3. Pinned version (for release builds), 4. Environment variable, 5. "latest"
+# Priority: 1. Local binary override, 2. Bundled binary, 3. Enterprise release
+# source, 4. Pinned GitHub version, 5. Environment override, 6. GitHub latest.
 $BundledBinary = $null
 $InstallScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 if (-not [string]::IsNullOrWhiteSpace($InstallScriptDir)) {
@@ -409,6 +415,11 @@ if (-not [string]::IsNullOrWhiteSpace($env:GIT_AI_LOCAL_BINARY)) {
 } elseif ($BundledBinary) {
     $releaseTag = 'local'
     $env:GIT_AI_LOCAL_BINARY = $BundledBinary
+} elseif ($EnterpriseReleaseBaseUrl -ne '__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__') {
+    $releaseTag = if ($PinnedVersion -ne '__VERSION_PLACEHOLDER__') { $PinnedVersion } else { $EnterpriseReleaseChannel }
+    $enterpriseDownloadBase = "$($EnterpriseReleaseBaseUrl.TrimEnd('/'))/worker/releases/$EnterpriseReleaseChannel/download"
+    $downloadUrlExe = "$enterpriseDownloadBase/$binaryName.exe"
+    $downloadUrlNoExt = "$enterpriseDownloadBase/$binaryName"
 } elseif ($PinnedVersion -ne '__VERSION_PLACEHOLDER__') {
     # Version-pinned install script from a release
     $releaseTag = $PinnedVersion
