@@ -178,52 +178,97 @@ detect_all_shells() {
     printf '%b' "$shells" | sed '/^$/d'
 }
 
+resolve_std_git_candidate() {
+    local candidate="${1:-}"
+    local target=""
+    local candidate_dir=""
+    local link_count=0
+
+    [ -n "$candidate" ] || return 1
+
+    # Resolve symlinks portably. macOS readlink does not support -f, and the
+    # existing git-og link must resolve to the real Git before we recreate it.
+    while [ -L "$candidate" ] && [ "$link_count" -lt 20 ]; do
+        target=$(readlink "$candidate" 2>/dev/null) || return 1
+        case "$target" in
+            /*) candidate="$target" ;;
+            *)
+                candidate_dir=$(cd -P "$(dirname "$candidate")" 2>/dev/null && pwd) || return 1
+                candidate="$candidate_dir/$target"
+                ;;
+        esac
+        link_count=$((link_count + 1))
+    done
+
+    [ "$link_count" -lt 20 ] || return 1
+    [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+
+    candidate_dir=$(cd -P "$(dirname "$candidate")" 2>/dev/null && pwd) || return 1
+    candidate="$candidate_dir/$(basename "$candidate")"
+
+    # Never select git-ai itself as the underlying Git implementation.
+    case "$(basename "$candidate")" in
+        git-ai|git-ai.exe) return 1 ;;
+    esac
+    case "$candidate" in
+        "$HOME/.git-ai/bin/git") return 1 ;;
+    esac
+
+    "$candidate" --version >/dev/null 2>&1 || return 1
+    printf '%s\n' "$candidate"
+}
+
 detect_std_git() {
     local git_path=""
+    local candidate=""
+    local path_entry=""
+    local saved_ifs="$IFS"
+    local cfg_json="$HOME/.git-ai/config.json"
+    local cfg_git_path=""
 
-    # Prefer the actual executable path, ignoring aliases and functions
-    if git_path=$(type -P git 2>/dev/null); then
-        :
-    else
-        git_path=$(command -v git 2>/dev/null || true)
+    # A previous installation already recorded the real Git behind our shim.
+    if git_path=$(resolve_std_git_candidate "$HOME/.git-ai/bin/git-og"); then
+        printf '%s\n' "$git_path"
+        return 0
     fi
 
-    # Last resort
-    if [ -z "$git_path" ]; then
-        git_path=$(which git 2>/dev/null || true)
-    fi
-
-	# Ensure we never return a path for git that contains git-ai (recursive)
-	if [ -n "$git_path" ] && [[ "$git_path" == *"git-ai"* ]]; then
-		git_path=""
-	fi
-
-    # If detection failed or was our own shim, try to recover from saved config
-    if [ -z "$git_path" ]; then
-        local cfg_json="$HOME/.git-ai/config.json"
-        if [ -f "$cfg_json" ]; then
-            # Extract git_path value without jq
-            local cfg_git_path
-            cfg_git_path=$(sed -n 's/.*"git_path"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$cfg_json" | head -n1 || true)
-            if [ -n "$cfg_git_path" ] && [[ "$cfg_git_path" != *"git-ai"* ]]; then
-                if "$cfg_git_path" --version >/dev/null 2>&1; then
-                    git_path="$cfg_git_path"
-                fi
-            fi
+    # Recover from the persisted config before searching PATH.
+    if [ -f "$cfg_json" ]; then
+        # Extract git_path without requiring jq during bootstrap.
+        cfg_git_path=$(sed -n 's/.*"git_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$cfg_json" | head -n1 || true)
+        if git_path=$(resolve_std_git_candidate "$cfg_git_path"); then
+            printf '%s\n' "$git_path"
+            return 0
         fi
     fi
 
-    # Fail if we couldn't find a standard git
-    if [ -z "$git_path" ]; then
-        error "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
-    fi
+    # Search every PATH entry instead of stopping when the first `git` is our
+    # own shim. This is the normal reinstall/update case.
+    IFS=":"
+    for path_entry in $PATH; do
+        [ -n "$path_entry" ] || path_entry="."
+        candidate="$path_entry/git"
+        if git_path=$(resolve_std_git_candidate "$candidate"); then
+            IFS="$saved_ifs"
+            printf '%s\n' "$git_path"
+            return 0
+        fi
+    done
+    IFS="$saved_ifs"
 
-    # Verify detected git is usable
-    if ! "$git_path" --version >/dev/null 2>&1; then
-        error "Detected git at $git_path is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
-    fi
+    # PATH may be minimal under MDM/root installs, so check common locations.
+    for candidate in \
+        /usr/bin/git \
+        /usr/local/bin/git \
+        /opt/homebrew/bin/git \
+        /opt/local/bin/git; do
+        if git_path=$(resolve_std_git_candidate "$candidate"); then
+            printf '%s\n' "$git_path"
+            return 0
+        fi
+    done
 
-    echo "$git_path"
+    error "Could not detect a standard git binary on PATH or in standard locations. Please ensure you have Git installed. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
 }
 
 # Detect standard git path (needed early for install)
