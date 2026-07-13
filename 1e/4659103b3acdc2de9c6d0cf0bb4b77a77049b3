@@ -1,0 +1,32 @@
+src/auth/client.rs
+  f308faad6062ef54 48,62,348-353
+src/config.rs
+  f308faad6062ef54 27-34,618,963-970
+src/api/client.rs
+  f308faad6062ef54 59-62
+src/commands/login.rs
+  f308faad6062ef54 1,37-50,158-159,163,166,350
+src/daemon/telemetry_worker.rs
+  f308faad6062ef54 851-854,881-882,888,896,987,1001-1013
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.3",
+  "base_commit_sha": "1e4659103b3acdc2de9c6d0cf0bb4b77a77049b3",
+  "prompts": {
+    "f308faad6062ef54": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5ab0-57da-7c60-83f7-d1fa4a4dd9b0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 76,
+      "total_deletions": 40,
+      "accepted_lines": 73,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/d3d7589219f810fecad2ff7d16e338e2edf14dfba4b1848436317af3803ac443"
+    }
+  }
+}
