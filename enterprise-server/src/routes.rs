@@ -1,6 +1,7 @@
+use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, post, put};
-use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -249,7 +250,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/admin/releases/upload",
-            post(crate::handlers::release::upload_release_asset),
+            post(crate::handlers::release::upload_release_asset)
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route(
             "/api/admin/releases/assets",
