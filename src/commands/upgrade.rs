@@ -154,7 +154,7 @@ fn exit_if_invoked_via_git_extension() {
         std::env::var(ENV_BACKGROUND_UPGRADE_WORKER).as_deref() == Ok("1"),
     ) {
         eprintln!(
-            "error: `git ai upgrade` is not supported on Windows. Run `git-ai upgrade` instead."
+            "error: `git ai update` is not supported on Windows. Run `git-ai update` instead."
         );
         std::process::exit(1);
     }
@@ -643,7 +643,7 @@ pub fn run_with_args(args: &[String]) {
             "--background" => background = true, // Undocumented flag for internal use when spawning background process
             _ => {
                 eprintln!("Unknown argument: {}", arg);
-                eprintln!("Usage: git-ai upgrade [--force]");
+                eprintln!("Usage: git-ai update [--force]");
                 std::process::exit(1);
             }
         }
@@ -706,7 +706,7 @@ fn run_impl_with_url(
             println!("You are already on the latest version!");
             println!();
             println!("To reinstall anyway, run:");
-            println!("  \x1b[1;36mgit-ai upgrade --force\x1b[0m");
+            println!("  \x1b[1;36mgit-ai update --force\x1b[0m");
             return action;
         }
         UpgradeAction::RunningNewerVersion => {
@@ -714,7 +714,7 @@ fn run_impl_with_url(
             println!("(This usually means you're running a development build)");
             println!();
             println!("To reinstall the selected release anyway, run:");
-            println!("  \x1b[1;36mgit-ai upgrade --force\x1b[0m");
+            println!("  \x1b[1;36mgit-ai update --force\x1b[0m");
             return action;
         }
         UpgradeAction::ForceReinstall => {
@@ -822,7 +822,7 @@ fn print_cached_notice(cache: &UpdateCache) {
         current_version, available_version
     );
     eprintln!(
-        "\x1b[1;33mRun \x1b[1;36mgit-ai upgrade\x1b[0m \x1b[1;33mto upgrade to the latest version.\x1b[0m"
+        "\x1b[1;33mRun \x1b[1;36mgit-ai update\x1b[0m \x1b[1;33mto install the latest version.\x1b[0m"
     );
     eprintln!();
 }

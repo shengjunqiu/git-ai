@@ -43,7 +43,7 @@ pub fn handle_git_ai(args: &[String]) {
     // of being written to per-PID log files.
     //
     // Skip for commands that must work without a running background service
-    // (help, version, config, d management, debug, upgrade) so users can
+    // (help, version, config, d management, debug, update/upgrade) so users can
     // always diagnose and recover from a broken state.
     if config::Config::get().feature_flags().async_mode {
         let needs_daemon = !matches!(
@@ -59,6 +59,7 @@ pub fn handle_git_ai(args: &[String]) {
                 | "d"
                 | "daemon"
                 | "debug"
+                | "update"
                 | "upgrade"
                 | "install-hooks"
                 | "install"
@@ -185,7 +186,7 @@ pub fn handle_git_ai(args: &[String]) {
         "ci" => {
             commands::ci_handlers::handle_ci(&args[1..]);
         }
-        "upgrade" => {
+        "update" | "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
         }
         "flush-cas" => {
@@ -322,8 +323,9 @@ fn print_help() {
     );
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("  git-path           Print the path to the underlying git executable");
-    eprintln!("  upgrade            Check for updates and install if available");
+    eprintln!("  update             Check for updates and install if available");
     eprintln!("    --force               Reinstall latest version even if already up to date");
+    eprintln!("  upgrade            Alias for 'update'");
     eprintln!("  prompts            Create local SQLite database for prompt analysis");
     eprintln!("    --since <time>        Only include prompts after this time (default: 30d)");
     eprintln!("    --author <name>       Filter by human author (default: current git user)");

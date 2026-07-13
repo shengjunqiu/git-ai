@@ -417,12 +417,12 @@ fn windows_git_extension_upgrade_requires_direct_git_ai_binary() {
         result.stderr
     );
     assert!(
-        combined.contains("`git ai upgrade` is not supported on Windows"),
+        combined.contains("`git ai update` is not supported on Windows"),
         "expected Windows upgrade guard message, got:\n{}",
         combined
     );
     assert!(
-        combined.contains("git-ai upgrade"),
+        combined.contains("git-ai update"),
         "expected direct command hint, got:\n{}",
         combined
     );

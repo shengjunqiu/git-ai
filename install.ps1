@@ -662,6 +662,17 @@ try {
         throw "git-ai config exited with code $LASTEXITCODE"
     }
     Write-Success "Configured enterprise API server: $EnterpriseApiBaseUrl"
+
+    & $finalExe config set disable_version_checks false | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "git-ai config exited with code $LASTEXITCODE"
+    }
+
+    & $finalExe config set disable_auto_updates true | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "git-ai config exited with code $LASTEXITCODE"
+    }
+    Write-Success 'Configured automatic update checks with manual installation'
 } catch {
     Write-ErrorAndExit "Failed to configure enterprise API server $EnterpriseApiBaseUrl`: $($_.Exception.Message)"
 }

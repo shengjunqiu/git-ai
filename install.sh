@@ -391,6 +391,15 @@ if ! "${INSTALL_DIR}/git-ai" config set api_base_url "$ENTERPRISE_API_BASE_URL";
 fi
 success "Configured enterprise API server: $ENTERPRISE_API_BASE_URL"
 
+if ! "${INSTALL_DIR}/git-ai" config set disable_version_checks false; then
+    error "Failed to enable automatic update checks"
+fi
+
+if ! "${INSTALL_DIR}/git-ai" config set disable_auto_updates true; then
+    error "Failed to configure manual update installation"
+fi
+success "Configured automatic update checks with manual installation"
+
 # Add to PATH in all detected shell configurations
 SHELLS_CONFIGURED=""
 SHELLS_ALREADY_CONFIGURED=""

@@ -578,18 +578,18 @@ fn build_config() -> Config {
         .and_then(|c| c.telemetry_enterprise_dsn.clone())
         .filter(|s| !s.is_empty());
 
-    // Default to disabled (true) unless this is an OSS build
-    // OSS builds set OSS_BUILD env var at compile time to "1", which enables auto-updates by default
-    let auto_update_flags_default_disabled = option_env!("OSS_BUILD") != Some("1");
+    // Release builds check for new versions by default, but installation is
+    // user-initiated via `git-ai update`.
+    let version_checks_default_disabled = option_env!("OSS_BUILD") != Some("1");
 
     let disable_version_checks = file_cfg
         .as_ref()
         .and_then(|c| c.disable_version_checks)
-        .unwrap_or(auto_update_flags_default_disabled);
+        .unwrap_or(version_checks_default_disabled);
     let disable_auto_updates = file_cfg
         .as_ref()
         .and_then(|c| c.disable_auto_updates)
-        .unwrap_or(auto_update_flags_default_disabled);
+        .unwrap_or(true);
     let update_channel = file_cfg
         .as_ref()
         .and_then(|c| c.update_channel.as_deref())
