@@ -1,0 +1,50 @@
+src/report/upload.rs
+  f308faad6062ef54 448-451,456,484-486
+src/commands/debug.rs
+  f308faad6062ef54 205-207
+src/auth/client.rs
+  f308faad6062ef54 101,173,489
+docs/guides/local-run-guide.md
+  f308faad6062ef54 282-283
+src/auth/state.rs
+  f308faad6062ef54 16,34,54,67
+docs/guides/developer-end-to-end-workflow.md
+  f308faad6062ef54 173
+src/commands/login.rs
+  f308faad6062ef54 37-51,166
+src/commands/whoami.rs
+  f308faad6062ef54 27-29
+src/auth/credentials.rs
+  f308faad6062ef54 159,185,294,313-324
+src/api/client.rs
+  f308faad6062ef54 1,13-14,17-50,54,56,73-77,85,196-198,200-201,221-223,244-246,356-365,368-398
+src/commands/exchange_nonce.rs
+  f308faad6062ef54 49-52,58
+src/config.rs
+  f308faad6062ef54 901-925
+docs/enterprise/enterprise-server-deployment.md
+  f308faad6062ef54 334-335,405,411-414
+src/auth/types.rs
+  f308faad6062ef54 12-17,32,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.3",
+  "base_commit_sha": "b449a586b3050598d17a1cbcad15fdef55675995",
+  "prompts": {
+    "f308faad6062ef54": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5ab0-57da-7c60-83f7-d1fa4a4dd9b0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 298,
+      "total_deletions": 94,
+      "accepted_lines": 291,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/852c4fadee4aaf7550007bfd41a049f5e447d2c17538c821ae91ac9e7fa1fac5"
+    }
+  }
+}
