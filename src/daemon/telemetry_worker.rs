@@ -848,10 +848,10 @@ pub fn print_commit_upload_notice() {
     }
 
     eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
-    if diag.is_logged_in || diag.has_api_key {
-        if let Some(message) = retry_stored_metrics_notice() {
-            eprintln!("{}", message);
-        }
+    if (diag.is_logged_in || diag.has_api_key)
+        && let Some(message) = retry_stored_metrics_notice()
+    {
+        eprintln!("{}", message);
     }
 }
 
@@ -878,17 +878,14 @@ fn commit_upload_notice_message(
     diag: &TelemetryUploadDiagnostics,
     daemon_available: bool,
 ) -> String {
+    let api_base_url = crate::config::normalize_api_base_url(&diag.api_base_url);
+
     // The enterprise metrics endpoint is authenticated; a custom server URL alone is
     // not enough to give the user a meaningful "queued for upload" confirmation.
     if !diag.is_logged_in && !diag.has_api_key {
-        let login_target = if diag.using_default_api {
-            "<enterprise-server-url>"
-        } else {
-            diag.api_base_url.as_str()
-        };
         return format!(
             "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server {}` or set GIT_AI_API_KEY.",
-            login_target
+            api_base_url
         );
     }
 
@@ -896,10 +893,7 @@ fn commit_upload_notice_message(
         return "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it.".to_string();
     }
 
-    format!(
-        "[git-ai] AI tracking upload queued to {}.",
-        diag.api_base_url
-    )
+    format!("[git-ai] AI tracking upload queued to {}.", api_base_url)
 }
 
 fn retry_stored_metrics_notice() -> Option<String> {
@@ -990,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_commit_upload_notice_requests_login_for_enterprise_url() {
-        let diag = test_diag("https://enterprise.example.com", false, false, false);
+        let diag = test_diag("https://enterprise.example.com/", false, false, false);
         let message = commit_upload_notice_message(&diag, true);
         assert_eq!(
             message,
@@ -1004,7 +998,19 @@ mod tests {
         let message = commit_upload_notice_message(&diag, true);
         assert_eq!(
             message,
-            "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server <enterprise-server-url>` or set GIT_AI_API_KEY."
+            format!(
+                "[git-ai] AI tracking saved locally. Upload not enabled: run `git-ai login --server {DEFAULT_API_BASE_URL}` or set GIT_AI_API_KEY."
+            )
+        );
+    }
+
+    #[test]
+    fn test_commit_upload_notice_removes_trailing_slash_from_queued_url() {
+        let diag = test_diag("https://enterprise.example.com/", false, true, false);
+        let message = commit_upload_notice_message(&diag, true);
+        assert_eq!(
+            message,
+            "[git-ai] AI tracking upload queued to https://enterprise.example.com."
         );
     }
 

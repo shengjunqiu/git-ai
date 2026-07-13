@@ -45,7 +45,7 @@ impl OAuthClient {
     /// Uses Config::fresh() to support runtime config updates (daemon mode)
     pub fn new() -> Self {
         let config = config::Config::fresh();
-        let base_url = config.api_base_url().to_string();
+        let base_url = config::normalize_api_base_url(config.api_base_url());
 
         // Validate HTTPS in release mode (panics on invalid URL - fail-safe)
         if let Err(e) = validate_https_url(&base_url) {
@@ -59,7 +59,7 @@ impl OAuthClient {
     pub fn with_base_url(base_url: &str) -> Result<Self, String> {
         validate_https_url(base_url)?;
         Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: config::normalize_api_base_url(base_url),
         })
     }
 
@@ -343,6 +343,12 @@ mod tests {
     fn test_validate_https_url_empty() {
         let result = validate_https_url("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_with_base_url_removes_trailing_slashes() {
+        let client = OAuthClient::with_base_url("https://example.com///").unwrap();
+        assert_eq!(client.base_url(), "https://example.com");
     }
 
     // ============= Token Response Parsing Tests =============

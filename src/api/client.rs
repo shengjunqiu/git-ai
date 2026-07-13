@@ -56,7 +56,10 @@ fn try_load_auth_token() -> Option<String> {
             let _ = store.store(&new_creds);
             Some(new_creds.access_token)
         }
-        Err(_) => None,
+        Err(error) => {
+            tracing::warn!(%error, "OAuth access token refresh failed");
+            None
+        }
     }
     // Mutex guard is automatically released when _guard is dropped
 }

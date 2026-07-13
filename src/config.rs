@@ -24,6 +24,14 @@ use std::sync::RwLock;
 /// Default API base URL for comparison
 pub const DEFAULT_API_BASE_URL: &str = "http://117.147.213.234:38080";
 
+/// Normalize an API base URL before storing or using it to build endpoint URLs.
+///
+/// Endpoint builders append paths with a leading slash, so retaining trailing
+/// slashes here can produce URLs such as `//worker/oauth/token`.
+pub fn normalize_api_base_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
+}
+
 /// Prompt storage mode enum for type-safe handling
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptStorageMode {
@@ -607,6 +615,7 @@ fn build_config() -> Config {
         .and_then(|c| c.api_base_url.clone())
         .or_else(|| env::var("GIT_AI_API_BASE_URL").ok())
         .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string());
+    let api_base_url = normalize_api_base_url(&api_base_url);
 
     // Get prompt_storage setting (defaults to "default")
     // Valid values: "default", "notes", "local"
@@ -950,6 +959,14 @@ fn apply_test_config_patch(config: &mut Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_api_base_url_removes_whitespace_and_trailing_slashes() {
+        assert_eq!(
+            normalize_api_base_url("  http://117.147.213.234:38080///  "),
+            DEFAULT_API_BASE_URL
+        );
+    }
 
     fn create_test_config(
         allow_repositories: Vec<String>,

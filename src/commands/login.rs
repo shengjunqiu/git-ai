@@ -1,4 +1,4 @@
-use crate::api::{ClientStatusKind, upload_client_status_with_token};
+use crate::api::{ApiContext, ClientStatusKind, upload_client_status_with_token};
 use crate::auth::{CallbackListener, CallbackResponse, CredentialStore, OAuthClient, pkce};
 use crate::config;
 use std::time::Duration;
@@ -20,16 +20,6 @@ pub fn handle_login(args: &[String]) {
         std::process::exit(0);
     }
 
-    let store = CredentialStore::new();
-
-    // Check if already logged in
-    if let Ok(Some(creds)) = store.load()
-        && !creds.is_refresh_token_expired()
-    {
-        eprintln!("Already logged in. Use 'git-ai logout' to log out first.");
-        std::process::exit(0);
-    }
-
     let client = if let Some(ref url) = options.server_url {
         match OAuthClient::with_base_url(url) {
             Ok(c) => c,
@@ -43,6 +33,20 @@ pub fn handle_login(args: &[String]) {
     };
 
     let effective_url = client.base_url();
+
+    // Only reuse credentials for the configured server, and verify that they
+    // can actually provide an access token. This also refreshes an expired
+    // access token instead of treating a locally unexpired refresh token as
+    // proof that authentication is usable.
+    let configured_url = config::normalize_api_base_url(config::Config::fresh().api_base_url());
+    let login_target_matches_config =
+        options.server_url.is_none() || effective_url == configured_url;
+    if login_target_matches_config && ApiContext::new(None).auth_token.is_some() {
+        eprintln!("Already logged in. Use 'git-ai logout' to log out first.");
+        std::process::exit(0);
+    }
+
+    let store = CredentialStore::new();
 
     // Show which server we're connecting to if it's not the default
     let default_url = config::DEFAULT_API_BASE_URL;
@@ -151,15 +155,15 @@ pub fn handle_login(args: &[String]) {
             }
 
             // Save the server URL to config if --server was provided
-            if let Some(ref url) = options.server_url {
-                if let Err(e) = save_server_to_config(url) {
+            if options.server_url.is_some() {
+                if let Err(e) = save_server_to_config(effective_url) {
                     eprintln!("\nWarning: Failed to save server URL to config: {}", e);
                     eprintln!(
                         "You may need to set GIT_AI_API_BASE_URL={} in your environment.",
-                        url
+                        effective_url
                     );
                 } else {
-                    eprintln!("\nServer URL saved to config: {}", url);
+                    eprintln!("\nServer URL saved to config: {}", effective_url);
                 }
             }
 
@@ -343,7 +347,7 @@ fn save_server_to_config(url: &str) -> Result<(), String> {
     };
 
     // Set the api_base_url
-    config_json["api_base_url"] = serde_json::Value::String(url.to_string());
+    config_json["api_base_url"] = serde_json::Value::String(config::normalize_api_base_url(url));
 
     // Write back
     let mut file = std::fs::File::create(&config_path)
