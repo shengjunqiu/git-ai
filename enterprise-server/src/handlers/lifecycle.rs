@@ -77,7 +77,23 @@ pub async fn aggregate_pull_requests(
     let cursor_merged_at = cursor.as_ref().and_then(|cursor| cursor.merged_at);
     let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
 
-    let mut rows: Vec<(Uuid, Option<Uuid>, String, String, Option<String>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, i32, i32, i32, f32, Option<Vec<String>>, i32, i32)> = sqlx::query_as(
+    let mut rows: Vec<(
+        Uuid,
+        Option<Uuid>,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        i32,
+        i32,
+        i32,
+        f32,
+        Option<Vec<String>>,
+        i32,
+        i32,
+    )> = sqlx::query_as(
         r#"SELECT id, org_id, repo_url, pr_id, pr_url, title, author_email, merged_at,
                   total_lines, ai_lines, human_lines, pct_ai, tools_used, files_changed, ai_files
         FROM pull_requests
@@ -103,7 +119,7 @@ pub async fn aggregate_pull_requests(
               )
           )
         ORDER BY merged_at DESC NULLS LAST, id DESC
-        LIMIT $8"#
+        LIMIT $8"#,
     )
     .bind(&query.repo)
     .bind(&query.org)
@@ -128,25 +144,46 @@ pub async fn aggregate_pull_requests(
         None
     };
 
-    let prs: Vec<Value> = rows.iter().map(|(id, org_id, repo_url, pr_id, pr_url, title, author, merged, total, ai, human, pct, tools, files, ai_files)| {
-        json!({
-            "id": id.to_string(),
-            "org_id": org_id.map(|u| u.to_string()),
-            "repo_url": repo_url,
-            "pr_id": pr_id,
-            "pr_url": pr_url,
-            "title": title,
-            "author": author,
-            "merged_at": merged,
-            "total_lines": total,
-            "ai_lines": ai,
-            "human_lines": human,
-            "pct_ai": pct,
-            "tools_used": tools,
-            "files_changed": files,
-            "ai_files": ai_files,
-        })
-    }).collect();
+    let prs: Vec<Value> = rows
+        .iter()
+        .map(
+            |(
+                id,
+                org_id,
+                repo_url,
+                pr_id,
+                pr_url,
+                title,
+                author,
+                merged,
+                total,
+                ai,
+                human,
+                pct,
+                tools,
+                files,
+                ai_files,
+            )| {
+                json!({
+                    "id": id.to_string(),
+                    "org_id": org_id.map(|u| u.to_string()),
+                    "repo_url": repo_url,
+                    "pr_id": pr_id,
+                    "pr_url": pr_url,
+                    "title": title,
+                    "author": author,
+                    "merged_at": merged,
+                    "total_lines": total,
+                    "ai_lines": ai,
+                    "human_lines": human,
+                    "pct_ai": pct,
+                    "tools_used": tools,
+                    "files_changed": files,
+                    "ai_files": ai_files,
+                })
+            },
+        )
+        .collect();
 
     let summary: (i64, Option<f64>, i64, i64, i64) = sqlx::query_as(
         r#"SELECT
@@ -212,7 +249,11 @@ pub async fn create_pull_request(
     let total_lines = req.total_lines.unwrap_or(0);
     let ai_lines = req.ai_lines.unwrap_or(0);
     let human_lines = req.human_lines.unwrap_or(0);
-    let pct_ai = if total_lines > 0 { (ai_lines as f32 / total_lines as f32) * 100.0 } else { 0.0 };
+    let pct_ai = if total_lines > 0 {
+        (ai_lines as f32 / total_lines as f32) * 100.0
+    } else {
+        0.0
+    };
 
     let id = Uuid::new_v4();
 
@@ -302,8 +343,8 @@ fn bounded_persistence_dates(
     since: Option<&str>,
     until: Option<&str>,
 ) -> Result<(chrono::NaiveDate, chrono::NaiveDate), AppError> {
-    let until_date =
-        parse_persistence_date_param("until", until)?.unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let until_date = parse_persistence_date_param("until", until)?
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
     let since_date = parse_persistence_date_param("since", since)?
         .unwrap_or_else(|| until_date - chrono::Duration::days(PERSISTENCE_DEFAULT_DAYS));
 
@@ -365,7 +406,18 @@ pub async fn get_ai_code_persistence(
     .map_err(|e| AppError::Database(e))?;
 
     let snapshot_data = match snapshot {
-        Some((_, org_id, repo_url, snap_date, total, present, modified, deleted, rate, by_tool)) => {
+        Some((
+            _,
+            org_id,
+            repo_url,
+            snap_date,
+            total,
+            present,
+            modified,
+            deleted,
+            rate,
+            by_tool,
+        )) => {
             json!({
                 "org_id": org_id.map(|u| u.to_string()),
                 "repo_url": repo_url,
@@ -390,7 +442,7 @@ pub async fn get_ai_code_persistence(
           AND ($3::uuid IS NULL OR org_id = $3)
           AND snapshot_date >= $4::date
           AND snapshot_date <= $5::date
-        ORDER BY snapshot_date"#
+        ORDER BY snapshot_date"#,
     )
     .bind(&query.repo)
     .bind(&query.org)
@@ -401,9 +453,10 @@ pub async fn get_ai_code_persistence(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let trend: Vec<Value> = trend_rows.iter().map(|(date, rate)| {
-        json!({ "week": date.to_string(), "survival_rate": rate })
-    }).collect();
+    let trend: Vec<Value> = trend_rows
+        .iter()
+        .map(|(date, rate)| json!({ "week": date.to_string(), "survival_rate": rate }))
+        .collect();
 
     // If no persistence snapshot data exists yet, compute from metrics_events as fallback
     if snapshot_data.is_null() {
@@ -413,7 +466,7 @@ pub async fn get_ai_code_persistence(
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
               AND timestamp >= $3::bigint
-              AND timestamp <= $4::bigint"#
+              AND timestamp <= $4::bigint"#,
         )
         .bind(user_filter)
         .bind(org_filter)
@@ -489,7 +542,7 @@ pub async fn get_agent_readiness(
             WHERE ($1::uuid IS NULL OR p.user_id = $1)
               AND ($2::uuid IS NULL OR p.org_id = $2)
             GROUP BY tms.tool_model
-            ORDER BY SUM(tms.ai_additions) DESC"#
+            ORDER BY SUM(tms.ai_additions) DESC"#,
         )
         .bind(user_filter)
         .bind(org_filter)
@@ -497,34 +550,45 @@ pub async fn get_agent_readiness(
         .await
         .map_err(|e| AppError::Database(e))?;
 
-        tool_rows.iter().map(|(tool_model, ai_add, _mixed, accepted)| {
-            let ai_add = ai_add.unwrap_or(0);
-            let accepted = accepted.unwrap_or(0);
-            let score = if ai_add > 0 { ((accepted as f64 / ai_add as f64) * 100.0).min(100.0) as i32 } else { 0 };
-            let parts: Vec<&str> = tool_model.split("::").collect();
-            let tool = parts.get(0).unwrap_or(&"unknown");
-            let model = parts.get(1).unwrap_or(&"");
-            json!({
-                "tool": tool,
-                "model": model,
-                "overall_score": score,
-                "trend": "stable",
-                "config_changes": [],
-                "source": "derived_from_stats",
+        tool_rows
+            .iter()
+            .map(|(tool_model, ai_add, _mixed, accepted)| {
+                let ai_add = ai_add.unwrap_or(0);
+                let accepted = accepted.unwrap_or(0);
+                let score = if ai_add > 0 {
+                    ((accepted as f64 / ai_add as f64) * 100.0).min(100.0) as i32
+                } else {
+                    0
+                };
+                let parts: Vec<&str> = tool_model.split("::").collect();
+                let tool = parts.get(0).unwrap_or(&"unknown");
+                let model = parts.get(1).unwrap_or(&"");
+                json!({
+                    "tool": tool,
+                    "model": model,
+                    "overall_score": score,
+                    "trend": "stable",
+                    "config_changes": [],
+                    "source": "derived_from_stats",
+                })
             })
-        }).collect()
+            .collect()
     } else {
-        rows.iter().map(|(_, org_id, tool, model, score, trend, config_changes, start, end)| {
-            json!({
-                "org_id": org_id.map(|u| u.to_string()),
-                "tool": tool,
-                "model": model,
-                "overall_score": score,
-                "trend": trend,
-                "config_changes": config_changes,
-                "eval_period": { "start": start.to_string(), "end": end.to_string() },
-            })
-        }).collect()
+        rows.iter()
+            .map(
+                |(_, org_id, tool, model, score, trend, config_changes, start, end)| {
+                    json!({
+                        "org_id": org_id.map(|u| u.to_string()),
+                        "tool": tool,
+                        "model": model,
+                        "overall_score": score,
+                        "trend": trend,
+                        "config_changes": config_changes,
+                        "eval_period": { "start": start.to_string(), "end": end.to_string() },
+                    })
+                },
+            )
+            .collect()
     };
 
     Ok(Json(json!({ "agents": agents })))
@@ -560,7 +624,7 @@ pub async fn get_ai_code_lifecycle(
         WHERE commit_sha = $1 AND event_type = 1
           AND ($2::uuid IS NULL OR user_id = $2)
           AND ($3::uuid IS NULL OR org_id = $3)
-        LIMIT 1"#
+        LIMIT 1"#,
     )
     .bind(commit_sha)
     .bind(user_filter)
@@ -571,7 +635,12 @@ pub async fn get_ai_code_lifecycle(
 
     let (author, ai_lines, human_lines) = match commit_data {
         Some(d) => d,
-        None => return Err(AppError::NotFound(format!("No data found for commit {}", commit_sha))),
+        None => {
+            return Err(AppError::NotFound(format!(
+                "No data found for commit {}",
+                commit_sha
+            )))
+        }
     };
 
     // Build lifecycle stages
@@ -581,7 +650,7 @@ pub async fn get_ai_code_lifecycle(
     let tool_rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
         r#"SELECT tool, model FROM metrics_events WHERE commit_sha = $1 AND event_type = 1
           AND ($2::uuid IS NULL OR user_id = $2)
-          AND ($3::uuid IS NULL OR org_id = $3)"#
+          AND ($3::uuid IS NULL OR org_id = $3)"#,
     )
     .bind(commit_sha)
     .bind(user_filter)
@@ -590,13 +659,12 @@ pub async fn get_ai_code_lifecycle(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let tool_desc: String = tool_rows.iter()
-        .filter_map(|(t, m)| {
-            match (t.as_deref(), m.as_deref()) {
-                (Some(tool), Some(model)) if !model.is_empty() => Some(format!("{}::{}", tool, model)),
-                (Some(tool), _) => Some(tool.to_string()),
-                _ => None,
-            }
+    let tool_desc: String = tool_rows
+        .iter()
+        .filter_map(|(t, m)| match (t.as_deref(), m.as_deref()) {
+            (Some(tool), Some(model)) if !model.is_empty() => Some(format!("{}::{}", tool, model)),
+            (Some(tool), _) => Some(tool.to_string()),
+            _ => None,
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -604,7 +672,7 @@ pub async fn get_ai_code_lifecycle(
     let written_ts: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
         r#"SELECT MIN(created_at) FROM metrics_events WHERE commit_sha = $1
           AND ($2::uuid IS NULL OR user_id = $2)
-          AND ($3::uuid IS NULL OR org_id = $3)"#
+          AND ($3::uuid IS NULL OR org_id = $3)"#,
     )
     .bind(commit_sha)
     .bind(user_filter)
@@ -642,12 +710,17 @@ pub async fn get_ai_code_lifecycle(
     }
 
     // Stage 3: CI events
-    let ci_rows: Vec<(String, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<String>)> = sqlx::query_as(
+    let ci_rows: Vec<(
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
         r#"SELECT event_type, timestamp, deployment_env, status
         FROM ci_events WHERE commit_sha = $1
           AND ($2::uuid IS NULL OR org_id = $2)
         ORDER BY timestamp
-        LIMIT $3"#
+        LIMIT $3"#,
     )
     .bind(commit_sha)
     .bind(org_filter)
@@ -705,12 +778,17 @@ pub async fn get_ai_code_lifecycle(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    let alert_rows: Vec<(String, Option<chrono::DateTime<chrono::Utc>>, String, Option<String>)> = sqlx::query_as(
+    let alert_rows: Vec<(
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        String,
+        Option<String>,
+    )> = sqlx::query_as(
         r#"SELECT alert_source, timestamp, severity, description
         FROM alert_events WHERE commit_sha = $1
           AND ($2::uuid IS NULL OR org_id = $2)
         ORDER BY timestamp
-        LIMIT $3"#
+        LIMIT $3"#,
     )
     .bind(commit_sha)
     .bind(org_filter)
@@ -983,7 +1061,10 @@ mod tests {
             }),
         )
         .await?;
-        assert_eq!(object_ids(&second_page, "pull_requests"), vec![uuid_tail(2)]);
+        assert_eq!(
+            object_ids(&second_page, "pull_requests"),
+            vec![uuid_tail(2)]
+        );
         assert_eq!(second_page["pagination"]["has_more"].as_bool(), Some(false));
 
         db.cleanup().await?;
@@ -1044,9 +1125,14 @@ mod tests {
             response["ai_code_snapshot"]["snapshot_date"].as_str(),
             Some(expected_snapshot_date.as_str())
         );
-        let trend = response["trend"].as_array().expect("trend should be an array");
+        let trend = response["trend"]
+            .as_array()
+            .expect("trend should be an array");
         assert_eq!(trend.len(), 1);
-        assert_eq!(trend[0]["week"].as_str(), Some(expected_snapshot_date.as_str()));
+        assert_eq!(
+            trend[0]["week"].as_str(),
+            Some(expected_snapshot_date.as_str())
+        );
 
         db.cleanup().await?;
         Ok(())
@@ -1339,9 +1425,18 @@ mod tests {
     fn assert_full_summary(page: &Value) {
         assert_eq!(page["summary"]["total_prs"].as_i64(), Some(5));
         assert_eq!(page["summary"]["avg_pct_ai"].as_f64(), Some(30.0));
-        assert_eq!(page["summary"]["pr_size_distribution"]["small"].as_i64(), Some(2));
-        assert_eq!(page["summary"]["pr_size_distribution"]["medium"].as_i64(), Some(1));
-        assert_eq!(page["summary"]["pr_size_distribution"]["large"].as_i64(), Some(2));
+        assert_eq!(
+            page["summary"]["pr_size_distribution"]["small"].as_i64(),
+            Some(2)
+        );
+        assert_eq!(
+            page["summary"]["pr_size_distribution"]["medium"].as_i64(),
+            Some(1)
+        );
+        assert_eq!(
+            page["summary"]["pr_size_distribution"]["large"].as_i64(),
+            Some(2)
+        );
     }
 
     fn fixed_timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {

@@ -79,7 +79,7 @@ pub async fn upsert_retention_policy(
             ci_events_retention_days = EXCLUDED.ci_events_retention_days,
             alerts_retention_days = EXCLUDED.alerts_retention_days,
             auto_purge = EXCLUDED.auto_purge,
-            updated_at = now()"#
+            updated_at = now()"#,
     )
     .bind(org_id)
     .bind(metrics_days.unwrap_or(365))
@@ -102,7 +102,7 @@ pub async fn purge_expired_data(pool: &PgPool) -> Result<serde_json::Value, AppE
     let orgs: Vec<(Uuid, i32, i32, i32, i32, i32)> = sqlx::query_as(
         r#"SELECT org_id, metrics_retention_days, cas_retention_days,
                   audit_retention_days, ci_events_retention_days, alerts_retention_days
-        FROM data_retention_policies WHERE auto_purge = true"#
+        FROM data_retention_policies WHERE auto_purge = true"#,
     )
     .fetch_all(pool)
     .await
@@ -125,7 +125,9 @@ pub async fn purge_expired_data(pool: &PgPool) -> Result<serde_json::Value, AppE
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e))?;
-        purged["metrics_events"] = serde_json::json!(purged["metrics_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64);
+        purged["metrics_events"] = serde_json::json!(
+            purged["metrics_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64
+        );
 
         // Purge old CI events
         let result = sqlx::query(
@@ -136,7 +138,9 @@ pub async fn purge_expired_data(pool: &PgPool) -> Result<serde_json::Value, AppE
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e))?;
-        purged["ci_events"] = serde_json::json!(purged["ci_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64);
+        purged["ci_events"] = serde_json::json!(
+            purged["ci_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64
+        );
 
         // Purge old alert events
         let result = sqlx::query(
@@ -147,7 +151,9 @@ pub async fn purge_expired_data(pool: &PgPool) -> Result<serde_json::Value, AppE
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e))?;
-        purged["alert_events"] = serde_json::json!(purged["alert_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64);
+        purged["alert_events"] = serde_json::json!(
+            purged["alert_events"].as_i64().unwrap_or(0) + result.rows_affected() as i64
+        );
 
         // Purge old CAS access log entries
         let result = sqlx::query(
@@ -158,7 +164,9 @@ pub async fn purge_expired_data(pool: &PgPool) -> Result<serde_json::Value, AppE
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e))?;
-        purged["cas_access_log"] = serde_json::json!(purged["cas_access_log"].as_i64().unwrap_or(0) + result.rows_affected() as i64);
+        purged["cas_access_log"] = serde_json::json!(
+            purged["cas_access_log"].as_i64().unwrap_or(0) + result.rows_affected() as i64
+        );
     }
 
     Ok(purged)
@@ -175,13 +183,17 @@ pub async fn log_cas_access(
     org_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     cas_hash: &str,
-    access_method: &str,  // "api", "dashboard", "ide_plugin"
+    access_method: &str, // "api", "dashboard", "ide_plugin"
     purpose: Option<&str>,
     ip_address: Option<&str>,
     user_agent: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let valid_methods = ["api", "dashboard", "ide_plugin"];
-    let method = if valid_methods.contains(&access_method) { access_method } else { "api" };
+    let method = if valid_methods.contains(&access_method) {
+        access_method
+    } else {
+        "api"
+    };
 
     sqlx::query(
         r#"INSERT INTO cas_access_log (user_id, org_id, api_key_id, cas_hash, access_method, purpose, ip_address, user_agent)

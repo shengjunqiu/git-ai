@@ -49,11 +49,17 @@ impl IntoResponse for AppError {
             AppError::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::Database(e) => {
                 tracing::error!("Database error: {:?}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal database error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal database error".into(),
+                )
             }
             AppError::Redis(e) => {
                 tracing::error!("Redis error: {:?}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal cache error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal cache error".into(),
+                )
             }
             AppError::Json(e) => {
                 tracing::error!("JSON error: {:?}", e);

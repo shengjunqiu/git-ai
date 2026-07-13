@@ -1,9 +1,9 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Component, PathBuf};
 use url::Url;
@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::auth::middleware::{DashboardAuth, OptionalAuth};
 use crate::error::AppError;
 use crate::pagination::{
-    CURSOR_VERSION, DASHBOARD_MAX_LIMIT, DEFAULT_LIMIT, clamp_limit, decode_cursor, encode_cursor,
-    fetch_limit, pagination_meta, truncate_to_limit,
+    clamp_limit, decode_cursor, encode_cursor, fetch_limit, pagination_meta, truncate_to_limit,
+    CURSOR_VERSION, DASHBOARD_MAX_LIMIT, DEFAULT_LIMIT,
 };
 use crate::routes::AppState;
 
@@ -1393,36 +1393,32 @@ pub async fn aggregate_departments(
 
     let metrics_department_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
-                    descendants.org_id,
-                    descendants.ancestor_id,
+                    om.org_id,
+                    om.department_id,
                     COALESCE(SUM(r.commits), 0)::bigint AS commits,
                     COALESCE(SUM(r.total_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(r.ai_lines), 0)::bigint AS ai_lines
-                FROM department_descendants descendants
-                JOIN org_members om
-                  ON om.org_id = descendants.org_id
-                 AND om.department_id = descendants.descendant_id
+                FROM org_members om
                 JOIN metrics_daily_rollups r ON r.user_id = om.user_id
                   AND r.org_id = om.org_id
                   AND r.tool_model = ''
-                WHERE ($1::uuid IS NULL OR r.user_id = $1)
-                GROUP BY descendants.org_id, descendants.ancestor_id"#
+                WHERE om.department_id IS NOT NULL
+                  AND ($1::uuid IS NULL OR r.user_id = $1)
+                GROUP BY om.org_id, om.department_id"#
     } else {
         r#"SELECT
-                    descendants.org_id,
-                    descendants.ancestor_id,
+                    om.org_id,
+                    om.department_id,
                     COUNT(m.id)::bigint AS commits,
                     COALESCE(SUM(m.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(m.ai_additions), 0)::bigint AS ai_lines
-                FROM department_descendants descendants
-                JOIN org_members om
-                  ON om.org_id = descendants.org_id
-                 AND om.department_id = descendants.descendant_id
+                FROM org_members om
                 JOIN metrics_events m ON m.user_id = om.user_id
                   AND m.org_id = om.org_id
                   AND m.event_type = 1
-                WHERE ($1::uuid IS NULL OR m.user_id = $1)
-                GROUP BY descendants.org_id, descendants.ancestor_id"#
+                WHERE om.department_id IS NOT NULL
+                  AND ($1::uuid IS NULL OR m.user_id = $1)
+                GROUP BY om.org_id, om.department_id"#
     };
 
     let rows: Vec<(
@@ -1490,28 +1486,10 @@ pub async fn aggregate_departments(
             ORDER BY tree.org_name ASC, tree.sort_path ASC, tree.id ASC
             LIMIT $9
         ),
-        department_descendants AS (
-            SELECT
-                page.org_id,
-                page.id AS ancestor_id,
-                page.id AS descendant_id
-            FROM department_page page
-
-            UNION ALL
-
-            SELECT
-                descendants.org_id,
-                descendants.ancestor_id,
-                child.id
-            FROM department_descendants descendants
-            JOIN departments child
-              ON child.org_id = descendants.org_id
-             AND child.parent_id = descendants.descendant_id
-        ),
         department_stats AS MATERIALIZED (
             SELECT
                 org_id,
-                ancestor_id,
+                department_id,
                 SUM(commits)::bigint AS commits,
                 SUM(total_lines)::bigint AS total_lines,
                 SUM(ai_lines)::bigint AS ai_lines
@@ -1522,17 +1500,15 @@ pub async fn aggregate_departments(
 
                 SELECT
                     p.org_id,
-                    descendants.ancestor_id,
+                    om.department_id,
                     COUNT(cs.sha)::bigint AS commits,
                     COALESCE(SUM(cs.git_diff_added_lines), 0)::bigint AS total_lines,
                     COALESCE(SUM(cs.ai_additions), 0)::bigint AS ai_lines
-                FROM department_descendants descendants
-                JOIN org_members om
-                  ON om.org_id = descendants.org_id
-                 AND om.department_id = descendants.descendant_id
+                FROM org_members om
                 JOIN projects p ON p.user_id = om.user_id AND p.org_id = om.org_id
                 JOIN commit_stats cs ON cs.project_id = p.id
-                WHERE ($1::uuid IS NULL OR p.user_id = $1)
+                WHERE om.department_id IS NOT NULL
+                  AND ($1::uuid IS NULL OR p.user_id = $1)
                   AND NOT EXISTS (
                       SELECT 1 FROM metrics_events m
                       WHERE m.event_type = 1
@@ -1540,10 +1516,10 @@ pub async fn aggregate_departments(
                         AND m.commit_sha = cs.sha
                         AND ($1::uuid IS NULL OR m.user_id = $1)
                   )
-                GROUP BY p.org_id, descendants.ancestor_id
+                GROUP BY p.org_id, om.department_id
             ) combined
-            WHERE org_id IS NOT NULL AND ancestor_id IS NOT NULL
-            GROUP BY org_id, ancestor_id
+            WHERE org_id IS NOT NULL AND department_id IS NOT NULL
+            GROUP BY org_id, department_id
         )
         SELECT
             page.id,
@@ -1565,7 +1541,7 @@ pub async fn aggregate_departments(
             COALESCE(stats.ai_lines, 0)
         FROM department_page page
         LEFT JOIN department_stats stats
-          ON stats.org_id = page.org_id AND stats.ancestor_id = page.id
+          ON stats.org_id = page.org_id AND stats.department_id = page.id
         ORDER BY page.org_name ASC, page.sort_path ASC, page.id ASC"#
     ))
     .bind(user_filter)
@@ -1632,6 +1608,7 @@ pub async fn aggregate_departments(
                     "w_total": total,
                     "w_ai": ai,
                     "w_human": human,
+                    "pct_ai": if total > 0 { (ai as f64 / total as f64) * 100.0 } else { 0.0 },
                 })
             },
         )
@@ -2771,8 +2748,8 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, MetricsRollupWriteMode};
     use crate::models::user::{AuthIdentity, AuthMethod};
-    use sqlx::PgPool;
     use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
     use uuid::Uuid;
 
     #[test]
@@ -3058,14 +3035,10 @@ mod tests {
                 .map(|(organization, department)| (organization.as_str(), department.as_str())),
             Some((beta_org_name, gamma_dept_name))
         );
-        assert!(
-            !second_department_pairs
-                .contains(&(alpha_org_name.to_string(), alpha_dept_name.to_string()))
-        );
-        assert!(
-            !second_department_pairs
-                .contains(&(alpha_org_name.to_string(), beta_dept_name.to_string()))
-        );
+        assert!(!second_department_pairs
+            .contains(&(alpha_org_name.to_string(), alpha_dept_name.to_string())));
+        assert!(!second_department_pairs
+            .contains(&(alpha_org_name.to_string(), beta_dept_name.to_string())));
 
         let mut rollup_state = state;
         rollup_state.config.dashboard_use_rollups = true;
@@ -3115,7 +3088,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn department_aggregates_roll_up_descendants_in_tree_order() -> anyhow::Result<()> {
+    async fn department_aggregates_keep_each_tree_node_independent() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
         };
@@ -3181,15 +3154,21 @@ mod tests {
             .await?;
             let root = &root_page["departments"][0];
             assert_eq!(root["department"].as_str(), Some("Root"));
-            assert_eq!(root["total_commits"].as_i64(), Some(4));
-            assert_eq!(root["w_total"].as_i64(), Some(100));
-            assert_eq!(root["w_ai"].as_i64(), Some(37));
+            assert_eq!(root["total_commits"].as_i64(), Some(1));
+            assert_eq!(root["w_total"].as_i64(), Some(10));
+            assert_eq!(root["w_ai"].as_i64(), Some(2));
+            assert_eq!(root["pct_ai"].as_f64(), Some(20.0));
             assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
 
             let Json(page) = aggregate_departments(
                 State(aggregate_state),
                 auth.clone(),
-                Query(aggregate_query(Some(org_slug.clone()), None, Some(10), None)),
+                Query(aggregate_query(
+                    Some(org_slug.clone()),
+                    None,
+                    Some(10),
+                    None,
+                )),
             )
             .await?;
 
@@ -3212,12 +3191,12 @@ mod tests {
             );
 
             let expected = [
-                ("Root", 4, 100, 37, false),
-                ("Child", 2, 50, 15, false),
-                ("Leaf", 1, 30, 10, true),
-                ("Sibling", 1, 40, 20, true),
+                ("Root", 1, 10, 2, 20.0, false),
+                ("Child", 1, 20, 5, 25.0, false),
+                ("Leaf", 1, 30, 10, 100.0 / 3.0, true),
+                ("Sibling", 1, 40, 20, 50.0, true),
             ];
-            for (name, commits, total, ai, is_leaf) in expected {
+            for (name, commits, total, ai, pct_ai, is_leaf) in expected {
                 let department = departments
                     .iter()
                     .find(|department| department["department"] == name)
@@ -3225,6 +3204,10 @@ mod tests {
                 assert_eq!(department["total_commits"].as_i64(), Some(commits));
                 assert_eq!(department["w_total"].as_i64(), Some(total));
                 assert_eq!(department["w_ai"].as_i64(), Some(ai));
+                let actual_pct_ai = department["pct_ai"]
+                    .as_f64()
+                    .expect("department AI percentage should be numeric");
+                assert!((actual_pct_ai - pct_ai).abs() < 1e-12);
                 assert_eq!(department["is_leaf"].as_bool(), Some(is_leaf));
             }
         }

@@ -356,18 +356,14 @@ mod tests {
         let status = get_status(&db.pool, user_id).await?.expect("status row");
         assert_eq!(status.status, "logged_in");
         assert_eq!(status.device_count, 2);
-        assert!(
-            status
-                .devices
-                .iter()
-                .any(|device| device.device_key == "device-a")
-        );
-        assert!(
-            status
-                .devices
-                .iter()
-                .any(|device| device.device_key == "device-b")
-        );
+        assert!(status
+            .devices
+            .iter()
+            .any(|device| device.device_key == "device-a"));
+        assert!(status
+            .devices
+            .iter()
+            .any(|device| device.device_key == "device-b"));
 
         db.cleanup().await?;
         Ok(())

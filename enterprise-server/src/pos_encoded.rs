@@ -26,19 +26,19 @@ use std::collections::HashMap;
 /// Committed event (type 1) value field mapping
 /// Based on src/metrics/events.rs committed_pos module
 const COMMITTED_VALUE_FIELDS: &[(&str, &str)] = &[
-    ("0", "human_additions"),         // u32
-    ("1", "git_diff_deleted_lines"),  // u32
-    ("2", "git_diff_added_lines"),    // u32
-    ("3", "tool_model_pairs"),        // Vec<String>
-    ("4", "mixed_additions"),         // Vec<u32>
-    ("5", "ai_additions"),            // Vec<u32>
-    ("6", "ai_accepted"),             // Vec<u32>
-    ("7", "total_ai_additions"),      // Vec<u32>
-    ("8", "total_ai_deletions"),      // Vec<u32>
-    ("9", "time_waiting_for_ai"),     // Vec<u64>
-    ("10", "first_checkpoint_ts"),    // u64
-    ("11", "commit_subject"),         // String
-    ("12", "commit_body"),            // String
+    ("0", "human_additions"),        // u32
+    ("1", "git_diff_deleted_lines"), // u32
+    ("2", "git_diff_added_lines"),   // u32
+    ("3", "tool_model_pairs"),       // Vec<String>
+    ("4", "mixed_additions"),        // Vec<u32>
+    ("5", "ai_additions"),           // Vec<u32>
+    ("6", "ai_accepted"),            // Vec<u32>
+    ("7", "total_ai_additions"),     // Vec<u32>
+    ("8", "total_ai_deletions"),     // Vec<u32>
+    ("9", "time_waiting_for_ai"),    // Vec<u64>
+    ("10", "first_checkpoint_ts"),   // u64
+    ("11", "commit_subject"),        // String
+    ("12", "commit_body"),           // String
 ];
 
 /// AgentUsage event (type 2) value field mapping
@@ -48,21 +48,21 @@ const AGENT_USAGE_VALUE_FIELDS: &[(&str, &str)] = &[];
 /// InstallHooks event (type 3) value field mapping
 /// Based on src/metrics/events.rs install_hooks_pos module
 const INSTALL_HOOKS_VALUE_FIELDS: &[(&str, &str)] = &[
-    ("0", "tool_id"),    // String - tool id (e.g., "cursor", "fork")
-    ("1", "status"),     // String - "not_found", "installed", "already_installed", "failed"
-    ("2", "message"),    // Option<String> - error message or warnings
+    ("0", "tool_id"), // String - tool id (e.g., "cursor", "fork")
+    ("1", "status"),  // String - "not_found", "installed", "already_installed", "failed"
+    ("2", "message"), // Option<String> - error message or warnings
 ];
 
 /// Checkpoint event (type 4) value field mapping
 /// Based on src/metrics/events.rs checkpoint_pos module
 const CHECKPOINT_VALUE_FIELDS: &[(&str, &str)] = &[
-    ("0", "checkpoint_ts"),       // u64
-    ("1", "kind"),                // String ("human", "ai_agent", "ai_tab")
-    ("2", "file_path"),           // String
-    ("3", "lines_added"),         // u32
-    ("4", "lines_deleted"),       // u32
-    ("5", "lines_added_sloc"),    // u32
-    ("6", "lines_deleted_sloc"),  // u32
+    ("0", "checkpoint_ts"),      // u64
+    ("1", "kind"),               // String ("human", "ai_agent", "ai_tab")
+    ("2", "file_path"),          // String
+    ("3", "lines_added"),        // u32
+    ("4", "lines_deleted"),      // u32
+    ("5", "lines_added_sloc"),   // u32
+    ("6", "lines_deleted_sloc"), // u32
 ];
 
 // =====================================================================
@@ -71,31 +71,28 @@ const CHECKPOINT_VALUE_FIELDS: &[(&str, &str)] = &[
 // =====================================================================
 
 const ATTR_FIELDS: &[(&str, &str)] = &[
-    ("0", "git_ai_version"),       // String (required)
-    ("1", "repo_url"),             // String (nullable)
-    ("2", "author"),               // String (nullable)
-    ("3", "commit_sha"),           // String (nullable)
-    ("4", "base_commit_sha"),      // String (nullable)
-    ("5", "branch"),               // String (nullable)
+    ("0", "git_ai_version"),  // String (required)
+    ("1", "repo_url"),        // String (nullable)
+    ("2", "author"),          // String (nullable)
+    ("3", "commit_sha"),      // String (nullable)
+    ("4", "base_commit_sha"), // String (nullable)
+    ("5", "branch"),          // String (nullable)
     // Positions 6-19 reserved for future use
-    ("20", "tool"),                // String (nullable)
-    ("21", "model"),               // String (nullable)
-    ("22", "prompt_id"),           // String (nullable)
-    ("23", "external_prompt_id"),  // String (nullable)
+    ("20", "tool"),               // String (nullable)
+    ("21", "model"),              // String (nullable)
+    ("22", "prompt_id"),          // String (nullable)
+    ("23", "external_prompt_id"), // String (nullable)
     // Positions 24-29 reserved for future use
-    ("30", "custom_attributes"),   // String (JSON, nullable)
+    ("30", "custom_attributes"), // String (JSON, nullable)
 ];
 
 /// Known attribute indices for filtering custom attributes
-const KNOWN_ATTR_INDICES: &[&str] = &[
-    "0", "1", "2", "3", "4", "5",
-    "20", "21", "22", "23", "30",
-];
+const KNOWN_ATTR_INDICES: &[&str] = &["0", "1", "2", "3", "4", "5", "20", "21", "22", "23", "30"];
 
 /// Decode a PosEncoded metric event into a structured DecodedMetricEvent
 pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError> {
-    let event_type = MetricEventType::try_from(event.event_id)
-        .map_err(|e| AppError::BadRequest(e))?;
+    let event_type =
+        MetricEventType::try_from(event.event_id).map_err(|e| AppError::BadRequest(e))?;
 
     let value_fields = match event_type {
         MetricEventType::InstallHooks => INSTALL_HOOKS_VALUE_FIELDS,
@@ -170,35 +167,59 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
                 "git_diff_added_lines" => git_diff_added_lines = val.as_i64().map(|v| v as i32),
                 "tool_model_pairs" => {
                     if let Some(arr) = val.as_array() {
-                        tool_model_pairs = Some(arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect());
+                        tool_model_pairs = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect(),
+                        );
                     }
                 }
                 "mixed_additions" => {
                     if let Some(arr) = val.as_array() {
-                        mixed_additions = Some(arr.iter().filter_map(|v| v.as_i64().map(|n| n as i32)).collect());
+                        mixed_additions = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_i64().map(|n| n as i32))
+                                .collect(),
+                        );
                     }
                 }
                 "ai_additions" => {
                     // Can be a single number or an array
                     if let Some(arr) = val.as_array() {
-                        ai_additions = Some(arr.iter().filter_map(|v| v.as_i64().map(|n| n as i32)).collect());
+                        ai_additions = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_i64().map(|n| n as i32))
+                                .collect(),
+                        );
                     } else {
                         ai_additions = val.as_i64().map(|v| vec![v as i32]);
                     }
                 }
                 "ai_accepted" => {
                     if let Some(arr) = val.as_array() {
-                        ai_accepted = Some(arr.iter().filter_map(|v| v.as_i64().map(|n| n as i32)).collect());
+                        ai_accepted = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_i64().map(|n| n as i32))
+                                .collect(),
+                        );
                     }
                 }
                 "total_ai_additions" => {
                     if let Some(arr) = val.as_array() {
-                        total_ai_additions = Some(arr.iter().filter_map(|v| v.as_i64().map(|n| n as i32)).collect());
+                        total_ai_additions = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_i64().map(|n| n as i32))
+                                .collect(),
+                        );
                     }
                 }
                 "total_ai_deletions" => {
                     if let Some(arr) = val.as_array() {
-                        total_ai_deletions = Some(arr.iter().filter_map(|v| v.as_i64().map(|n| n as i32)).collect());
+                        total_ai_deletions = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_i64().map(|n| n as i32))
+                                .collect(),
+                        );
                     }
                 }
                 "time_waiting_for_ai" => {
@@ -246,9 +267,7 @@ pub fn decode_event(event: &MetricEvent) -> Result<DecodedMetricEvent, AppError>
     };
 
     // Calculate aggregate ai_additions for the metrics_events table
-    let _ai_additions_total: Option<i32> = ai_additions
-        .as_ref()
-        .map(|v| v.iter().sum());
+    let _ai_additions_total: Option<i32> = ai_additions.as_ref().map(|v| v.iter().sum());
 
     // Use commit_sha from attrs (position 3) for Committed events,
     // or from the commit_sha field if available in attrs
@@ -287,9 +306,10 @@ pub fn validate_hex_hash(hash: &str) -> Result<(), AppError> {
         return Err(AppError::BadRequest("Hash cannot be empty".into()));
     }
     if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(AppError::BadRequest(
-            format!("Hash contains non-hexadecimal characters: {}", &hash[..hash.len().min(16)]),
-        ));
+        return Err(AppError::BadRequest(format!(
+            "Hash contains non-hexadecimal characters: {}",
+            &hash[..hash.len().min(16)]
+        )));
     }
     Ok(())
 }
@@ -301,16 +321,16 @@ mod tests {
     #[test]
     fn test_decode_committed_event() {
         let mut v = HashMap::new();
-        v.insert("0".into(), serde_json::json!(50));          // human_additions
-        v.insert("1".into(), serde_json::json!(20));          // git_diff_deleted_lines
-        v.insert("2".into(), serde_json::json!(150));         // git_diff_added_lines
+        v.insert("0".into(), serde_json::json!(50)); // human_additions
+        v.insert("1".into(), serde_json::json!(20)); // git_diff_deleted_lines
+        v.insert("2".into(), serde_json::json!(150)); // git_diff_added_lines
         v.insert("3".into(), serde_json::json!(["all", "cursor:gpt-4"])); // tool_model_pairs
-        v.insert("5".into(), serde_json::json!([100, 70]));   // ai_additions
+        v.insert("5".into(), serde_json::json!([100, 70])); // ai_additions
 
         let mut a = HashMap::new();
-        a.insert("0".into(), serde_json::json!("1.3.2"));     // git_ai_version
+        a.insert("0".into(), serde_json::json!("1.3.2")); // git_ai_version
         a.insert("2".into(), serde_json::json!("dev@example.com")); // author
-        a.insert("3".into(), serde_json::json!("abc123"));    // commit_sha
+        a.insert("3".into(), serde_json::json!("abc123")); // commit_sha
 
         let event = MetricEvent {
             timestamp: 1700000000,
@@ -337,12 +357,12 @@ mod tests {
     #[test]
     fn test_decode_install_hooks_event() {
         let mut v = HashMap::new();
-        v.insert("0".into(), serde_json::json!("cursor"));        // tool_id
-        v.insert("1".into(), serde_json::json!("installed"));      // status
+        v.insert("0".into(), serde_json::json!("cursor")); // tool_id
+        v.insert("1".into(), serde_json::json!("installed")); // status
         v.insert("2".into(), serde_json::json!("Successfully installed")); // message
 
         let mut a = HashMap::new();
-        a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
+        a.insert("0".into(), serde_json::json!("1.3.2")); // git_ai_version
 
         let event = MetricEvent {
             timestamp: 1700000000,
@@ -358,16 +378,16 @@ mod tests {
     #[test]
     fn test_decode_checkpoint_event() {
         let mut v = HashMap::new();
-        v.insert("0".into(), serde_json::json!(1704067200));      // checkpoint_ts
-        v.insert("1".into(), serde_json::json!("ai_agent"));      // kind
-        v.insert("2".into(), serde_json::json!("src/main.rs"));   // file_path
-        v.insert("3".into(), serde_json::json!(50));              // lines_added
-        v.insert("4".into(), serde_json::json!(10));              // lines_deleted
+        v.insert("0".into(), serde_json::json!(1704067200)); // checkpoint_ts
+        v.insert("1".into(), serde_json::json!("ai_agent")); // kind
+        v.insert("2".into(), serde_json::json!("src/main.rs")); // file_path
+        v.insert("3".into(), serde_json::json!(50)); // lines_added
+        v.insert("4".into(), serde_json::json!(10)); // lines_deleted
 
         let mut a = HashMap::new();
-        a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
-        a.insert("20".into(), serde_json::json!("claude-code"));  // tool
-        a.insert("21".into(), serde_json::json!("claude-3"));     // model
+        a.insert("0".into(), serde_json::json!("1.3.2")); // git_ai_version
+        a.insert("20".into(), serde_json::json!("claude-code")); // tool
+        a.insert("21".into(), serde_json::json!("claude-3")); // model
 
         let event = MetricEvent {
             timestamp: 1700000000,
@@ -385,9 +405,9 @@ mod tests {
     #[test]
     fn test_decode_agent_usage_event() {
         let mut a = HashMap::new();
-        a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
-        a.insert("20".into(), serde_json::json!("copilot"));      // tool
-        a.insert("21".into(), serde_json::json!("gpt-4"));        // model
+        a.insert("0".into(), serde_json::json!("1.3.2")); // git_ai_version
+        a.insert("20".into(), serde_json::json!("copilot")); // tool
+        a.insert("21".into(), serde_json::json!("gpt-4")); // model
 
         let event = MetricEvent {
             timestamp: 1700000000,
@@ -412,13 +432,13 @@ mod tests {
     #[test]
     fn test_committed_event_with_new_fields() {
         let mut v = HashMap::new();
-        v.insert("0".into(), serde_json::json!(10));              // human_additions
-        v.insert("5".into(), serde_json::json!([100]));           // ai_additions
-        v.insert("10".into(), serde_json::json!(1704067200));     // first_checkpoint_ts
+        v.insert("0".into(), serde_json::json!(10)); // human_additions
+        v.insert("5".into(), serde_json::json!([100])); // ai_additions
+        v.insert("10".into(), serde_json::json!(1704067200)); // first_checkpoint_ts
         v.insert("11".into(), serde_json::json!("Initial commit")); // commit_subject
 
         let mut a = HashMap::new();
-        a.insert("0".into(), serde_json::json!("1.3.2"));         // git_ai_version
+        a.insert("0".into(), serde_json::json!("1.3.2")); // git_ai_version
 
         let event = MetricEvent {
             timestamp: 1700000000,

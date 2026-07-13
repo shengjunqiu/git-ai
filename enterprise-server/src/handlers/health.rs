@@ -14,7 +14,9 @@ pub async fn health_check(State(_state): State<AppState>) -> Json<Value> {
 }
 
 /// Readiness check endpoint (verifies DB connection)
-pub async fn readiness_check(State(state): State<AppState>) -> Result<Json<Value>, crate::error::AppError> {
+pub async fn readiness_check(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, crate::error::AppError> {
     sqlx::query("SELECT 1")
         .execute(&state.db)
         .await

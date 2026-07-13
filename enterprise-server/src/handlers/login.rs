@@ -96,10 +96,9 @@ pub async fn login_submit(
                     token
                 );
                 let mut response = Redirect::to("/me").into_response();
-                response.headers_mut().insert(
-                    axum::http::header::SET_COOKIE,
-                    cookie.parse().unwrap(),
-                );
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
                 return Ok(response);
             }
             Err(e) => {
@@ -112,9 +111,14 @@ pub async fn login_submit(
     if token.starts_with("gai_") {
         let key_hash = crate::auth::jwt::hash_token(token);
 
-        let row: Option<(uuid::Uuid, Option<uuid::Uuid>, Vec<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        let row: Option<(
+            uuid::Uuid,
+            Option<uuid::Uuid>,
+            Vec<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
             "SELECT user_id, org_id, scopes, expires_at \
-             FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL"
+             FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
         )
         .bind(&key_hash)
         .fetch_optional(&state.db)
@@ -134,24 +138,25 @@ pub async fn login_submit(
                 token
             );
             let mut response = Redirect::to("/me").into_response();
-            response.headers_mut().insert(
-                axum::http::header::SET_COOKIE,
-                cookie.parse().unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
             return Ok(response);
         }
 
         return Ok(login_error_page("API 密钥无效或已被撤销。").into_response());
     }
 
-    Ok(login_error_page("无法识别的令牌格式。请使用 Bearer 令牌（eyJ...）或 API 密钥（gai_...）。").into_response())
+    Ok(
+        login_error_page(
+            "无法识别的令牌格式。请使用 Bearer 令牌（eyJ...）或 API 密钥（gai_...）。",
+        )
+        .into_response(),
+    )
 }
 
 /// GET /logout — Clear auth cookies and redirect to login
-pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(session_token) =
         cookie_value(&headers, crate::services::sessions::WEB_SESSION_COOKIE)
     {
@@ -161,12 +166,18 @@ pub async fn logout(
     }
 
     let mut response = Redirect::to("/auth/login").into_response();
-    let clear_access = "access_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap();
-    let clear_api = "api_key=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap();
+    let clear_access = "access_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        .parse()
+        .unwrap();
+    let clear_api = "api_key=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        .parse()
+        .unwrap();
     let clear_web_session = "web_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
         .parse()
         .unwrap();
-    response.headers_mut().insert(header::SET_COOKIE, clear_access);
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, clear_access);
     response.headers_mut().append(header::SET_COOKIE, clear_api);
     response
         .headers_mut()
@@ -189,7 +200,8 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 fn login_error_page(msg: &str) -> Html<String> {
-    Html(format!(r##"<!DOCTYPE html>
+    Html(format!(
+        r##"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">

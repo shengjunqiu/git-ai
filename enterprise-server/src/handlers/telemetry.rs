@@ -48,7 +48,9 @@ pub async fn sentry_proxy(
             Ok(resp) => {
                 let status = resp.status();
                 tracing::debug!("Sentry forward response: {}", status);
-                return Ok(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK).into_response());
+                return Ok(StatusCode::from_u16(status.as_u16())
+                    .unwrap_or(StatusCode::OK)
+                    .into_response());
             }
             Err(e) => {
                 tracing::warn!("Sentry forward failed: {}", e);
@@ -92,7 +94,9 @@ pub async fn posthog_proxy(
             Ok(resp) => {
                 let status = resp.status();
                 tracing::debug!("PostHog forward response: {}", status);
-                return Ok(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK).into_response());
+                return Ok(StatusCode::from_u16(status.as_u16())
+                    .unwrap_or(StatusCode::OK)
+                    .into_response());
             }
             Err(e) => {
                 tracing::warn!("PostHog forward failed: {}", e);

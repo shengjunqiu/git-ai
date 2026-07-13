@@ -10,8 +10,8 @@ use crate::error::AppError;
 use crate::models::auth::CreateApiKeyRequest;
 use crate::pagination::{
     clamp_limit, decode_cursor, decode_time_id_cursor, decode_time_uuid_cursor, encode_cursor,
-    fetch_limit, pagination_meta, truncate_to_limit, PaginationQuery, TimeIdCursor,
-    TimeUuidCursor, CURSOR_VERSION, DEFAULT_LIMIT, MAX_LIMIT,
+    fetch_limit, pagination_meta, truncate_to_limit, PaginationQuery, TimeIdCursor, TimeUuidCursor,
+    CURSOR_VERSION, DEFAULT_LIMIT, MAX_LIMIT,
 };
 use crate::routes::AppState;
 
@@ -30,7 +30,9 @@ struct DepartmentListCursor {
     department_id: Uuid,
 }
 
-fn decode_optional_time_uuid_cursor(cursor: Option<&str>) -> Result<Option<TimeUuidCursor>, AppError> {
+fn decode_optional_time_uuid_cursor(
+    cursor: Option<&str>,
+) -> Result<Option<TimeUuidCursor>, AppError> {
     cursor.map(decode_time_uuid_cursor).transpose()
 }
 
@@ -125,12 +127,8 @@ pub async fn create_user(
     if name.is_empty() {
         return Err(AppError::BadRequest("Name is required".into()));
     }
-    crate::services::registration::validate_department(
-        &state.db,
-        req.org_id,
-        req.department_id,
-    )
-    .await?;
+    crate::services::registration::validate_department(&state.db, req.org_id, req.department_id)
+        .await?;
 
     let user_id = Uuid::new_v4();
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
@@ -150,12 +148,12 @@ pub async fn create_user(
         "INSERT INTO org_members (user_id, org_id, department_id, role) \
          VALUES ($1, $2, $3, 'member')",
     )
-        .bind(user_id)
-        .bind(req.org_id)
-        .bind(req.department_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+    .bind(user_id)
+    .bind(req.org_id)
+    .bind(req.department_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AppError::Database(e))?;
 
     // Generate install nonce if requested
     let install_nonce = if req.generate_nonce {
@@ -340,12 +338,9 @@ pub async fn update_git_tracking_upload_authorization(
     let org_id = admin_org_id(&auth)?;
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
-    let updated: Option<(
-        bool,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<Uuid>,
-    )> = sqlx::query_as(
-        r#"UPDATE org_members
+    let updated: Option<(bool, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>)> =
+        sqlx::query_as(
+            r#"UPDATE org_members
            SET git_tracking_upload_enabled = $1,
                git_tracking_upload_authorized_at = CASE WHEN $1 THEN now() ELSE NULL END,
                git_tracking_upload_authorized_by = CASE WHEN $1 THEN $2 ELSE NULL END
@@ -353,14 +348,14 @@ pub async fn update_git_tracking_upload_authorization(
            RETURNING git_tracking_upload_enabled,
                      git_tracking_upload_authorized_at,
                      git_tracking_upload_authorized_by"#,
-    )
-    .bind(req.authorized)
-    .bind(auth.0.user_id)
-    .bind(user_id)
-    .bind(org_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(AppError::Database)?;
+        )
+        .bind(req.authorized)
+        .bind(auth.0.user_id)
+        .bind(user_id)
+        .bind(org_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
 
     let Some((enabled, authorized_at, authorized_by)) = updated else {
         return Err(AppError::NotFound(
@@ -510,29 +505,31 @@ pub async fn list_users(
 
     let users: Vec<Value> = rows
         .iter()
-        .map(|(
-            id,
-            email,
-            name,
-            personal_org_id,
-            created_at,
-            git_tracking_upload_enabled,
-            git_tracking_upload_authorized_at,
-            git_tracking_upload_authorized_by,
-            api_keys,
-        )| {
-        json!({
-            "id": id.to_string(),
-            "email": email,
-            "name": name,
-            "personal_org_id": personal_org_id.map(|u| u.to_string()),
-            "created_at": created_at,
-            "git_tracking_upload_enabled": git_tracking_upload_enabled,
-            "git_tracking_upload_authorized_at": git_tracking_upload_authorized_at,
-            "git_tracking_upload_authorized_by": git_tracking_upload_authorized_by,
-            "api_keys": api_keys,
-        })
-        })
+        .map(
+            |(
+                id,
+                email,
+                name,
+                personal_org_id,
+                created_at,
+                git_tracking_upload_enabled,
+                git_tracking_upload_authorized_at,
+                git_tracking_upload_authorized_by,
+                api_keys,
+            )| {
+                json!({
+                    "id": id.to_string(),
+                    "email": email,
+                    "name": name,
+                    "personal_org_id": personal_org_id.map(|u| u.to_string()),
+                    "created_at": created_at,
+                    "git_tracking_upload_enabled": git_tracking_upload_enabled,
+                    "git_tracking_upload_authorized_at": git_tracking_upload_authorized_at,
+                    "git_tracking_upload_authorized_by": git_tracking_upload_authorized_by,
+                    "api_keys": api_keys,
+                })
+            },
+        )
         .collect();
 
     Ok(Json(json!({
@@ -596,10 +593,10 @@ pub async fn get_organization(
 ) -> Result<Json<Value>, AppError> {
     let row: Option<(Uuid, String, String, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as("SELECT id, name, slug, created_at FROM organizations WHERE id = $1")
-    .bind(org_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+            .bind(org_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let (id, name, slug, created_at) = match row {
         Some(r) => r,
@@ -608,10 +605,10 @@ pub async fn get_organization(
 
     // Get member count
     let member_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1")
-    .bind(org_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e))?;
 
     Ok(Json(json!({
         "id": id.to_string(),
@@ -718,12 +715,12 @@ pub async fn list_organizations(
     let orgs: Vec<Value> = rows
         .iter()
         .map(|(id, name, slug, created_at)| {
-        json!({
-            "id": id.to_string(),
-            "name": name,
-            "slug": slug,
-            "created_at": created_at,
-        })
+            json!({
+                "id": id.to_string(),
+                "name": name,
+                "slug": slug,
+                "created_at": created_at,
+            })
         })
         .collect();
 
@@ -761,9 +758,7 @@ pub async fn list_departments(
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
     let cursor = decode_department_list_cursor(query.cursor.as_deref())?;
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
-    let cursor_department_name = cursor
-        .as_ref()
-        .map(|cursor| cursor.department_name.clone());
+    let cursor_department_name = cursor.as_ref().map(|cursor| cursor.department_name.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
 
     let mut rows: Vec<(
@@ -909,15 +904,15 @@ pub async fn create_department(
         "INSERT INTO departments (id, org_id, code, name, slug, parent_id) \
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
-        .bind(dept_id)
-        .bind(req.org_id)
-        .bind(&code)
-        .bind(name)
-        .bind(&slug)
-        .bind(req.parent_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+    .bind(dept_id)
+    .bind(req.org_id)
+    .bind(&code)
+    .bind(name)
+    .bind(&slug)
+    .bind(req.parent_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e))?;
 
     crate::services::audit::log_action(
         &state.db,
@@ -1179,15 +1174,15 @@ pub async fn list_api_keys(
     let result: Vec<Value> = rows
         .iter()
         .map(|(id, prefix, name, scopes, created, expires, last_used)| {
-        json!({
-            "id": id.to_string(),
-            "key_prefix": prefix,
-            "name": name,
-            "scopes": scopes,
-            "created_at": created,
-            "expires_at": expires,
-            "last_used_at": last_used,
-        })
+            json!({
+                "id": id.to_string(),
+                "key_prefix": prefix,
+                "name": name,
+                "scopes": scopes,
+                "created_at": created,
+                "expires_at": expires,
+                "last_used_at": last_used,
+            })
         })
         .collect();
 
@@ -1284,10 +1279,12 @@ mod log_pagination_tests {
         let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")?
             .with_timezone(&chrono::Utc);
-        let first_id = insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
+        let first_id =
+            insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
         let second_id =
             insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
-        let third_id = insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
+        let third_id =
+            insert_audit_log(&db.state.db, user_id, org_id, "target", created_at).await?;
         insert_audit_log(&db.state.db, user_id, org_id, "other", created_at).await?;
 
         let Json(first_page) = list_audit_log(
@@ -1338,10 +1335,12 @@ mod log_pagination_tests {
         let (user_id, org_id) = insert_test_identity(&db.state.db).await?;
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")?
             .with_timezone(&chrono::Utc);
-        let first_id = insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
+        let first_id =
+            insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
         let second_id =
             insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
-        let third_id = insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
+        let third_id =
+            insert_cas_access_log(&db.state.db, user_id, org_id, "hash-a", created_at).await?;
         insert_cas_access_log(&db.state.db, user_id, org_id, "hash-b", created_at).await?;
 
         let Json(first_page) = list_cas_access_log(
@@ -1405,7 +1404,10 @@ mod log_pagination_tests {
             }),
         )
         .await?;
-        assert_eq!(object_ids(&first_page, "users"), vec![uuid_tail(5), uuid_tail(4)]);
+        assert_eq!(
+            object_ids(&first_page, "users"),
+            vec![uuid_tail(5), uuid_tail(4)]
+        );
         assert_eq!(first_page["pagination"]["has_more"].as_bool(), Some(true));
 
         let cursor = required_next_cursor(&first_page);
@@ -1418,7 +1420,10 @@ mod log_pagination_tests {
             }),
         )
         .await?;
-        assert_eq!(object_ids(&second_page, "users"), vec![uuid_tail(3), uuid_tail(2)]);
+        assert_eq!(
+            object_ids(&second_page, "users"),
+            vec![uuid_tail(3), uuid_tail(2)]
+        );
 
         let cursor = required_next_cursor(&second_page);
         let Json(third_page) = list_users(
@@ -1688,10 +1693,25 @@ mod log_pagination_tests {
         let (admin_user_id, org_id) = insert_test_identity(&db.state.db).await?;
         let created_at = fixed_timestamp(2030);
         for idx in 1..=3 {
-            insert_api_key(&db.state.db, uuid_tail(idx), admin_user_id, org_id, created_at, false)
-                .await?;
+            insert_api_key(
+                &db.state.db,
+                uuid_tail(idx),
+                admin_user_id,
+                org_id,
+                created_at,
+                false,
+            )
+            .await?;
         }
-        insert_api_key(&db.state.db, uuid_tail(9), admin_user_id, org_id, created_at, true).await?;
+        insert_api_key(
+            &db.state.db,
+            uuid_tail(9),
+            admin_user_id,
+            org_id,
+            created_at,
+            true,
+        )
+        .await?;
 
         let Json(first_page) = list_api_keys(
             State(db.state.clone()),
@@ -2089,7 +2109,10 @@ mod log_pagination_tests {
     }
 
     fn unique_test_database_name() -> String {
-        format!("git_ai_admin_log_pagination_test_{}", Uuid::new_v4().simple())
+        format!(
+            "git_ai_admin_log_pagination_test_{}",
+            Uuid::new_v4().simple()
+        )
     }
 
     fn database_url_for_database(database_url: &str, database: &str) -> anyhow::Result<String> {
@@ -2129,10 +2152,10 @@ pub async fn revoke_api_key(
     // Admin can revoke any key, no user_id filter
     let result =
         sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
-    .bind(key_id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+            .bind(key_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("API key not found".into()));
@@ -2285,18 +2308,18 @@ pub async fn list_audit_log(
                 user_agent,
                 created_at,
             )| {
-        json!({
-            "id": id,
-            "user_id": user_id.map(|u| u.to_string()),
-            "org_id": org_id.map(|u| u.to_string()),
-            "action": action,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "details": details,
-            "ip_address": ip_address,
-            "user_agent": user_agent,
-            "created_at": created_at,
-        })
+                json!({
+                    "id": id,
+                    "user_id": user_id.map(|u| u.to_string()),
+                    "org_id": org_id.map(|u| u.to_string()),
+                    "action": action,
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
+                    "details": details,
+                    "ip_address": ip_address,
+                    "user_agent": user_agent,
+                    "created_at": created_at,
+                })
             },
         )
         .collect();
@@ -2315,8 +2338,8 @@ pub async fn list_audit_log(
 #[derive(Debug, Deserialize)]
 pub struct CreateRepoAccessRuleRequest {
     pub org_id: Uuid,
-    pub rule_type: String,   // "whitelist" or "blacklist"
-    pub pattern: String,     // Glob pattern, e.g., "github.com/myorg/*"
+    pub rule_type: String, // "whitelist" or "blacklist"
+    pub pattern: String,   // Glob pattern, e.g., "github.com/myorg/*"
     pub description: Option<String>,
 }
 
@@ -2408,16 +2431,16 @@ pub async fn list_repo_access_rules(
         .iter()
         .map(
             |(id, org_id, rule_type, pattern, desc, created_by, enabled, created_at)| {
-        json!({
-            "id": id.to_string(),
-            "org_id": org_id.to_string(),
-            "rule_type": rule_type,
-            "pattern": pattern,
-            "description": desc,
-            "created_by": created_by.map(|u| u.to_string()),
-            "enabled": enabled,
-            "created_at": created_at,
-        })
+                json!({
+                    "id": id.to_string(),
+                    "org_id": org_id.to_string(),
+                    "rule_type": rule_type,
+                    "pattern": pattern,
+                    "description": desc,
+                    "created_by": created_by.map(|u| u.to_string()),
+                    "enabled": enabled,
+                    "created_at": created_at,
+                })
             },
         )
         .collect();
@@ -2451,7 +2474,7 @@ pub async fn delete_repo_access_rule(
 #[derive(Debug, Deserialize)]
 pub struct UpsertFeatureFlagRequest {
     pub key: String,
-    pub value: serde_json::Value,  // true/false or { "debug": bool, "release": bool }
+    pub value: serde_json::Value, // true/false or { "debug": bool, "release": bool }
     pub description: Option<String>,
 }
 
@@ -2520,12 +2543,12 @@ pub async fn list_feature_flags(
     let flags: Vec<Value> = rows
         .iter()
         .map(|(key, value, desc, updated_at)| {
-        json!({
-            "key": key,
-            "value": value,
-            "description": desc,
-            "updated_at": updated_at,
-        })
+            json!({
+                "key": key,
+                "value": value,
+                "description": desc,
+                "updated_at": updated_at,
+            })
         })
         .collect();
 
@@ -2557,8 +2580,8 @@ pub async fn delete_feature_flag(
 
 #[derive(Debug, Deserialize)]
 pub struct ExportRequest {
-    pub export_type: String,   // "csv" or "json"
-    pub query_type: String,    // "summary", "developers", "projects", "organizations", "tools"
+    pub export_type: String, // "csv" or "json"
+    pub query_type: String,  // "summary", "developers", "projects", "organizations", "tools"
     pub org_id: Option<Uuid>,
 }
 
@@ -2743,9 +2766,9 @@ pub async fn get_export(
 
     let (id, export_type, query_type, status, file_path, error, created_at, completed_at) =
         match row {
-        Some(r) => r,
-        None => return Err(AppError::NotFound("Export job not found".into())),
-    };
+            Some(r) => r,
+            None => return Err(AppError::NotFound("Export job not found".into())),
+        };
 
     Ok(Json(json!({
         "id": id.to_string(),
@@ -2913,18 +2936,18 @@ pub async fn list_cas_access_log(
         .iter()
         .map(
             |(id, user_id, org_id, api_key_id, hash, method, purpose, ip, ua, created)| {
-        json!({
-            "id": id,
-            "user_id": user_id.map(|u| u.to_string()),
-            "org_id": org_id.map(|u| u.to_string()),
-            "api_key_id": api_key_id.map(|u| u.to_string()),
-            "cas_hash": hash,
-            "access_method": method,
-            "purpose": purpose,
-            "ip_address": ip,
-            "user_agent": ua,
-            "created_at": created,
-        })
+                json!({
+                    "id": id,
+                    "user_id": user_id.map(|u| u.to_string()),
+                    "org_id": org_id.map(|u| u.to_string()),
+                    "api_key_id": api_key_id.map(|u| u.to_string()),
+                    "cas_hash": hash,
+                    "access_method": method,
+                    "purpose": purpose,
+                    "ip_address": ip,
+                    "user_agent": ua,
+                    "created_at": created,
+                })
             },
         )
         .collect();
@@ -2989,15 +3012,15 @@ pub async fn list_user_api_keys(
     let result: Vec<Value> = rows
         .iter()
         .map(|(id, prefix, name, scopes, created, expires, last_used)| {
-        json!({
-            "id": id.to_string(),
-            "key_prefix": prefix,
-            "name": name,
-            "scopes": scopes,
-            "created_at": created,
-            "expires_at": expires,
-            "last_used_at": last_used,
-        })
+            json!({
+                "id": id.to_string(),
+                "key_prefix": prefix,
+                "name": name,
+                "scopes": scopes,
+                "created_at": created,
+                "expires_at": expires,
+                "last_used_at": last_used,
+            })
         })
         .collect();
 

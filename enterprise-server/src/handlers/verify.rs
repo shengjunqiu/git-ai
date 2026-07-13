@@ -88,13 +88,12 @@ pub async fn verify_submit(
     let user_code = form.user_code.trim().to_uppercase();
 
     // Look up the device code by user_code
-    let row: Option<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT device_code, expires_at FROM oauth_devices WHERE user_code = $1"
-    )
-    .bind(&user_code)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    let row: Option<(String, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT device_code, expires_at FROM oauth_devices WHERE user_code = $1")
+            .bind(&user_code)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let (device_code, expires_at) = match row {
         Some(r) => r,
@@ -109,22 +108,24 @@ pub async fn verify_submit(
     if expires_at < chrono::Utc::now() {
         return Ok(Html(format!(
             r#"<div class="msg error">This code has expired. Please generate a new one.</div>"#
-        )).into_response());
+        ))
+        .into_response());
     }
 
     // TODO: In a full implementation, the user would need to be logged in to authorize.
     // For now, we auto-authorize: find or create a default user.
     // In production, this should redirect to a login page first.
-    let user_row: (uuid::Uuid,) = sqlx::query_as(
-        "SELECT id FROM users ORDER BY created_at LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| AppError::Internal("No users found. Create a user first via admin API.".into()))?;
+    let user_row: (uuid::Uuid,) =
+        sqlx::query_as("SELECT id FROM users ORDER BY created_at LIMIT 1")
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| {
+                AppError::Internal("No users found. Create a user first via admin API.".into())
+            })?;
 
     // Mark the device code as authorized
     sqlx::query(
-        "UPDATE oauth_devices SET user_id = $1, authorized_at = now() WHERE device_code = $2"
+        "UPDATE oauth_devices SET user_id = $1, authorized_at = now() WHERE device_code = $2",
     )
     .bind(user_row.0)
     .bind(&device_code)
@@ -132,7 +133,11 @@ pub async fn verify_submit(
     .await
     .map_err(|e| AppError::Database(e))?;
 
-    tracing::info!("Device authorized: user_code={}, user_id={}", user_code, user_row.0);
+    tracing::info!(
+        "Device authorized: user_code={}, user_id={}",
+        user_code,
+        user_row.0
+    );
 
     // Return success page
     Ok(Html(format!(

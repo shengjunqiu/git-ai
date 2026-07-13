@@ -15,10 +15,14 @@ pub async fn create_bundle(
     Json(req): Json<CreateBundleRequest>,
 ) -> Result<Json<Value>, AppError> {
     if req.title.is_empty() {
-        return Err(AppError::BadRequest("Title must have at least 1 character".into()));
+        return Err(AppError::BadRequest(
+            "Title must have at least 1 character".into(),
+        ));
     }
     if req.data.prompts.is_empty() {
-        return Err(AppError::BadRequest("At least one prompt is required".into()));
+        return Err(AppError::BadRequest(
+            "At least one prompt is required".into(),
+        ));
     }
 
     let bundle_id = Uuid::new_v4();
@@ -27,7 +31,7 @@ pub async fn create_bundle(
         .map_err(|e| AppError::BadRequest(format!("Invalid bundle data: {}", e)))?;
 
     sqlx::query(
-        "INSERT INTO bundles (id, user_id, title, data, share_url) VALUES ($1, $2, $3, $4, $5)"
+        "INSERT INTO bundles (id, user_id, title, data, share_url) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(bundle_id)
     .bind(auth.0.user_id)

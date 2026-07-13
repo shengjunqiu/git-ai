@@ -659,15 +659,10 @@ mod tests {
         let html = auth_page("注册", "/auth/register", &None, true);
 
         assert!(html.contains(r#"<select id="org_id" name="org_id" required disabled>"#));
-        assert!(
-            html.contains(
-                r#"<input id="department_picker" type="search" list="department_options""#
-            )
-        );
+        assert!(html
+            .contains(r#"<input id="department_picker" type="search" list="department_options""#));
         assert!(html.contains(r#"<datalist id="department_options"></datalist>"#));
-        assert!(
-            html.contains(r#"<input id="department_id" name="department_id" type="hidden" />"#)
-        );
+        assert!(html.contains(r#"<input id="department_id" name="department_id" type="hidden" />"#));
         assert!(!html.contains(r#"id="department_search""#));
         assert!(!html.contains(r#"<select id="department_id""#));
         assert!(html.contains("输入部门名称或编码"));

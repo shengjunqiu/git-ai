@@ -44,7 +44,8 @@ pub async fn download_jetbrains_plugin(
 
     // Fetch from JetBrains Marketplace
     let client = reqwest::Client::new();
-    let response = client.get(&url)
+    let response = client
+        .get(&url)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -57,18 +58,22 @@ pub async fn download_jetbrains_plugin(
         )));
     }
 
-    let content_type = response.headers()
+    let content_type = response
+        .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/zip")
         .to_string();
 
-    let content_length = response.headers()
+    let content_length = response
+        .headers()
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
 
-    let data = response.bytes().await
+    let data = response
+        .bytes()
+        .await
         .map_err(|e| AppError::Internal(format!("Failed to read plugin data: {}", e)))?;
 
     let mut builder = Response::builder()
@@ -80,6 +85,7 @@ pub async fn download_jetbrains_plugin(
         builder = builder.header(header::CONTENT_LENGTH, len);
     }
 
-    Ok(builder.body(Body::from(data.to_vec()))
+    Ok(builder
+        .body(Body::from(data.to_vec()))
         .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
 }

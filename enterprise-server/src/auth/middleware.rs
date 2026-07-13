@@ -60,12 +60,8 @@ impl FromRequestParts<AppState> for GitTrackingUploadGuard {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let AuthExtractor(identity) = AuthExtractor::from_request_parts(parts, state).await?;
-        require_git_tracking_upload_authorization(
-            &state.db,
-            identity.user_id,
-            identity.org_id,
-        )
-        .await?;
+        require_git_tracking_upload_authorization(&state.db, identity.user_id, identity.org_id)
+            .await?;
         Ok(Self(identity))
     }
 }
@@ -196,9 +192,9 @@ async fn extract_auth_identity(
 ) -> Result<AuthIdentity, AppError> {
     // Try Bearer token first
     if let Some(auth_header) = parts.headers.get("Authorization") {
-        let auth_str = auth_header.to_str().map_err(|_| {
-            AppError::Unauthorized("Invalid Authorization header".into())
-        })?;
+        let auth_str = auth_header
+            .to_str()
+            .map_err(|_| AppError::Unauthorized("Invalid Authorization header".into()))?;
 
         if let Some(token) = auth_str.strip_prefix("Bearer ") {
             let claims = crate::auth::jwt::validate_access_token(token, config)?;
@@ -265,12 +261,10 @@ async fn extract_auth_identity(
         Some(api_key_header.to_str().ok().unwrap_or("").to_string())
     } else if let Some(cookie_header) = parts.headers.get("Cookie") {
         let cookie_str = cookie_header.to_str().unwrap_or("");
-        cookie_str
-            .split(';')
-            .find_map(|c| {
-                let c = c.trim();
-                c.strip_prefix("api_key=").map(|v| v.to_string())
-            })
+        cookie_str.split(';').find_map(|c| {
+            let c = c.trim();
+            c.strip_prefix("api_key=").map(|v| v.to_string())
+        })
     } else {
         None
     };
@@ -279,9 +273,14 @@ async fn extract_auth_identity(
         if !api_key.is_empty() {
             let key_hash = crate::auth::jwt::hash_token(&api_key);
 
-            let row: Option<(Uuid, Option<Uuid>, Vec<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+            let row: Option<(
+                Uuid,
+                Option<Uuid>,
+                Vec<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            )> = sqlx::query_as(
                 "SELECT user_id, org_id, scopes, expires_at \
-                 FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL"
+                 FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
             )
             .bind(&key_hash)
             .fetch_optional(pool)
@@ -295,13 +294,12 @@ async fn extract_auth_identity(
                     }
                 }
 
-                let user_row: Option<(Uuid, String, String)> = sqlx::query_as(
-                    "SELECT id, email, name FROM users WHERE id = $1"
-                )
-                .bind(user_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| AppError::Database(e))?;
+                let user_row: Option<(Uuid, String, String)> =
+                    sqlx::query_as("SELECT id, email, name FROM users WHERE id = $1")
+                        .bind(user_id)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| AppError::Database(e))?;
 
                 if let Some((_id, email, name)) = user_row {
                     let membership_scope = if let Some(key_org_id) = org_id {
@@ -315,14 +313,17 @@ async fn extract_auth_identity(
                         .as_ref()
                         .map(|scope| scope.role.clone())
                         .unwrap_or_else(|| "api_key".into());
-                    let effective_org_id = org_id.or_else(|| membership_scope.as_ref().map(|scope| scope.org_id));
+                    let effective_org_id =
+                        org_id.or_else(|| membership_scope.as_ref().map(|scope| scope.org_id));
 
                     return Ok(AuthIdentity {
                         user_id,
                         email,
                         name,
                         org_id: effective_org_id,
-                        org_slug: membership_scope.as_ref().map(|scope| scope.org_slug.clone()),
+                        org_slug: membership_scope
+                            .as_ref()
+                            .map(|scope| scope.org_slug.clone()),
                         department_id: membership_scope
                             .as_ref()
                             .and_then(|scope| scope.department_id),
@@ -362,13 +363,12 @@ async fn extract_web_session_identity(
         return Ok(None);
     };
 
-    let user_row: Option<(String, String)> = sqlx::query_as(
-        "SELECT email, name FROM users WHERE id = $1 AND status = 'active'",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::Database)?;
+    let user_row: Option<(String, String)> =
+        sqlx::query_as("SELECT email, name FROM users WHERE id = $1 AND status = 'active'")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(AppError::Database)?;
 
     let Some((email, name)) = user_row else {
         return Ok(None);

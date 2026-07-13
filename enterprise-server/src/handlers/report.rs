@@ -428,8 +428,8 @@ mod tests {
     use crate::auth::middleware::HeaderExtractor;
     use crate::models::report::{ReportCommit, ReportCommitStats, ReportRepo, ToolModelBreakdown};
     use crate::models::user::{AuthIdentity, AuthMethod, RequestHeaders};
-    use sqlx::PgPool;
     use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -686,7 +686,10 @@ mod tests {
         .await?;
         assert_eq!(stored_identity.0, Some(user_id));
         assert_eq!(stored_identity.1, Some(org_id));
-        assert_eq!(stored_identity.2.as_deref(), Some("client-controlled-label"));
+        assert_eq!(
+            stored_identity.2.as_deref(),
+            Some("client-controlled-label")
+        );
 
         db.cleanup().await?;
         Ok(())

@@ -131,7 +131,7 @@ pub struct InstallNonce {
 /// JWT Claims matching git-ai client expectations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtClaims {
-    pub sub: String,                // user UUID
+    pub sub: String, // user UUID
     pub email: String,
     pub name: String,
     pub personal_org_id: Option<String>,

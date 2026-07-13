@@ -38,7 +38,11 @@ pub fn scan_json_for_secrets(value: &serde_json::Value) -> ScanResult {
     }
 }
 
-fn scan_value_recursive(value: &serde_json::Value, path: &str, detections: &mut Vec<(String, String)>) {
+fn scan_value_recursive(
+    value: &serde_json::Value,
+    path: &str,
+    detections: &mut Vec<(String, String)>,
+) {
     match value {
         serde_json::Value::String(s) => {
             if let Some(secret) = find_high_entropy_substring(s) {
@@ -70,8 +74,21 @@ fn scan_value_recursive(value: &serde_json::Value, path: &str, detections: &mut 
 /// Checks candidate tokens delimited by common separators.
 fn find_high_entropy_substring(s: &str) -> Option<String> {
     // Split by common delimiters and check each token
-    for token in s.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '=' || c == ':' || c == ',' || c == ';' || c == '|' || c == '/' || c == '\\') {
-        let trimmed = token.trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']');
+    for token in s.split(|c: char| {
+        c.is_whitespace()
+            || c == '"'
+            || c == '\''
+            || c == '='
+            || c == ':'
+            || c == ','
+            || c == ';'
+            || c == '|'
+            || c == '/'
+            || c == '\\'
+    }) {
+        let trimmed = token.trim_matches(|c| {
+            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']'
+        });
         if trimmed.len() >= MIN_SECRET_LENGTH && trimmed.len() <= MAX_SECRET_LENGTH {
             let entropy = shannon_entropy(trimmed);
             if entropy > ENTROPY_THRESHOLD && looks_like_secret(trimmed) {
@@ -147,7 +164,10 @@ fn looks_like_secret(s: &str) -> bool {
     let has_symbol = s.chars().any(|c| !c.is_ascii_alphanumeric());
 
     // A secret typically has at least 3 of 4 character categories
-    let categories = [has_upper, has_lower, has_digit, has_symbol].iter().filter(|&&x| x).count();
+    let categories = [has_upper, has_lower, has_digit, has_symbol]
+        .iter()
+        .filter(|&&x| x)
+        .count();
     categories >= 3
 }
 

@@ -14,13 +14,16 @@ pub async fn view_bundle(
     State(state): State<AppState>,
     Path(bundle_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    let row: Option<(String, serde_json::Value, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT title, data, view_count, created_at FROM bundles WHERE id = $1"
-    )
-    .bind(bundle_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
+    let row: Option<(
+        String,
+        serde_json::Value,
+        i32,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as("SELECT title, data, view_count, created_at FROM bundles WHERE id = $1")
+        .bind(bundle_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e))?;
 
     let (title, data, view_count, created_at) = match row {
         Some(r) => r,
@@ -35,12 +38,14 @@ pub async fn view_bundle(
         .ok();
 
     // Extract prompts and files from data
-    let prompts_count = data.get("prompts")
+    let prompts_count = data
+        .get("prompts")
         .and_then(|p| p.as_object())
         .map(|o| o.len())
         .unwrap_or(0);
 
-    let files_count = data.get("files")
+    let files_count = data
+        .get("files")
         .and_then(|f| f.as_object())
         .map(|o| o.len())
         .unwrap_or(0);
