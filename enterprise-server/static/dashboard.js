@@ -561,10 +561,21 @@ async function loadOrgs() {
 }
 
 // --- Developers ---
+let developerSortBy = 'ai_lines';
+let developerSortOrder = 'desc';
+
+function changeDeveloperSorting() {
+    developerSortBy = document.getElementById('developer-sort-by')?.value || 'ai_lines';
+    developerSortOrder = document.getElementById('developer-sort-order')?.value || 'desc';
+    resetTablePage('developers');
+    loadDevs();
+}
+
 async function loadDevs() {
     setTableLoading('dev-table', 8);
     try {
-        const d = await fetchPaginatedJson('developers', '/api/v1/aggregate/developers', '加载开发者数据失败');
+        const developerUrl = `/api/v1/aggregate/developers?sort_by=${encodeURIComponent(developerSortBy)}&sort_order=${encodeURIComponent(developerSortOrder)}`;
+        const d = await fetchPaginatedJson('developers', developerUrl, '加载开发者数据失败');
         const developers = pageItems(d, 'developers');
         developerGitInfo = new Map();
         if (developers.length === 0) {

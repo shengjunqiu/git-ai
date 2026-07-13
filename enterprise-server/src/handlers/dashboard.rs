@@ -178,6 +178,8 @@ pub struct AggregateQuery {
     pub org: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -207,7 +209,10 @@ struct ProjectAggregateCursor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DeveloperAggregateCursor {
     v: u8,
+    sort_by: String,
+    sort_order: String,
     ai_added_lines: i64,
+    total_added_lines: i64,
     total_commits: i64,
     name: String,
     user_id: Uuid,
@@ -1945,9 +1950,48 @@ pub async fn aggregate_developers(
     let (user_filter, org_filter) = build_data_filters(&auth.0);
     let (since_ts, until_ts) = parse_epoch_filters(query.since.as_deref(), query.until.as_deref())?;
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, DASHBOARD_MAX_LIMIT);
+    let sort_by = query.sort_by.as_deref().unwrap_or("ai_lines");
+    let sort_order = query.sort_order.as_deref().unwrap_or("desc");
+    let sort_expression = match sort_by {
+        "ai_lines" => "ai_added_lines::numeric",
+        "ai_ratio" => {
+            "CASE WHEN total_added_lines > 0 \
+             THEN ai_added_lines::numeric / total_added_lines::numeric ELSE 0::numeric END"
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "sort_by must be either ai_lines or ai_ratio".into(),
+            ));
+        }
+    };
+    let cursor_sort_expression = match sort_by {
+        "ai_lines" => "$7::numeric",
+        "ai_ratio" => {
+            "CASE WHEN $8::bigint > 0 \
+             THEN $7::numeric / $8::numeric ELSE 0::numeric END"
+        }
+        _ => unreachable!("sort_by was validated above"),
+    };
+    let (sort_comparison, sort_direction) = match sort_order {
+        "desc" => ("<", "DESC"),
+        "asc" => (">", "ASC"),
+        _ => {
+            return Err(AppError::BadRequest(
+                "sort_order must be either asc or desc".into(),
+            ));
+        }
+    };
     let cursor: Option<DeveloperAggregateCursor> =
         decode_dashboard_cursor(query.cursor.as_deref())?;
+    if let Some(cursor) = &cursor {
+        if cursor.sort_by != sort_by || cursor.sort_order != sort_order {
+            return Err(AppError::BadRequest(
+                "Developer pagination cursor does not match the selected sorting".into(),
+            ));
+        }
+    }
     let cursor_ai_added_lines = cursor.as_ref().map(|cursor| cursor.ai_added_lines);
+    let cursor_total_added_lines = cursor.as_ref().map(|cursor| cursor.total_added_lines);
     let cursor_total_commits = cursor.as_ref().map(|cursor| cursor.total_commits);
     let cursor_name = cursor.as_ref().map(|cursor| cursor.name.clone());
     let cursor_user_id = cursor.as_ref().map(|cursor| cursor.user_id);
@@ -2061,18 +2105,18 @@ pub async fn aggregate_developers(
             FROM developer_rows
             WHERE (
                 $7::bigint IS NULL
-                OR ai_added_lines < $7::bigint
-                OR (ai_added_lines = $7::bigint AND total_commits < $8::bigint)
-                OR (ai_added_lines = $7::bigint AND total_commits = $8::bigint AND name > $9::text)
+                OR {sort_expression} {sort_comparison} {cursor_sort_expression}
+                OR ({sort_expression} = {cursor_sort_expression} AND total_commits < $9::bigint)
+                OR ({sort_expression} = {cursor_sort_expression} AND total_commits = $9::bigint AND name > $10::text)
                 OR (
-                    ai_added_lines = $7::bigint
-                    AND total_commits = $8::bigint
-                    AND name = $9::text
-                    AND id > $10::uuid
+                    {sort_expression} = {cursor_sort_expression}
+                    AND total_commits = $9::bigint
+                    AND name = $10::text
+                    AND id > $11::uuid
                 )
             )
-            ORDER BY ai_added_lines DESC, total_commits DESC, name ASC, id ASC
-            LIMIT $11
+            ORDER BY {sort_expression} {sort_direction}, total_commits DESC, name ASC, id ASC
+            LIMIT $12
         ),
         git_identity_candidates AS (
                 SELECT
@@ -2196,7 +2240,7 @@ pub async fn aggregate_developers(
         FROM ranked_developers rd
         LEFT JOIN git_identities gi ON gi.user_id = rd.id
           AND gi.org_id IS NOT DISTINCT FROM rd.org_id
-        ORDER BY rd.ai_added_lines DESC, rd.total_commits DESC, rd.name ASC, rd.id ASC"#
+        ORDER BY {sort_expression} {sort_direction}, rd.total_commits DESC, rd.name ASC, rd.id ASC"#
     ))
     .bind(user_filter)
     .bind(org_filter)
@@ -2205,6 +2249,7 @@ pub async fn aggregate_developers(
     .bind(&query.since)
     .bind(&query.until)
     .bind(cursor_ai_added_lines)
+    .bind(cursor_total_added_lines)
     .bind(cursor_total_commits)
     .bind(cursor_name)
     .bind(cursor_user_id)
@@ -2217,10 +2262,13 @@ pub async fn aggregate_developers(
     let has_more = truncate_to_limit(&mut rows, limit);
     let next_cursor = if has_more {
         rows.last()
-            .map(|(user_id, name, _, _, commits, _, ai, _, _)| {
+            .map(|(user_id, name, _, _, commits, total, ai, _, _)| {
                 encode_cursor(&DeveloperAggregateCursor {
                     v: CURSOR_VERSION,
+                    sort_by: sort_by.to_string(),
+                    sort_order: sort_order.to_string(),
                     ai_added_lines: ai.unwrap_or(0),
+                    total_added_lines: total.unwrap_or(0),
                     total_commits: commits.unwrap_or(0),
                     name: name.clone(),
                     user_id: *user_id,
@@ -3344,6 +3392,60 @@ mod tests {
             vec!["Carol"]
         );
 
+        let mut ratio_desc_query = aggregate_query(Some(org_slug.clone()), None, Some(2), None);
+        ratio_desc_query.sort_by = Some("ai_ratio".into());
+        ratio_desc_query.sort_order = Some("desc".into());
+        let Json(first_ratio_desc_page) =
+            aggregate_developers(State(state.clone()), auth.clone(), Query(ratio_desc_query))
+                .await?;
+        assert_eq!(
+            string_values(&first_ratio_desc_page, "developers", "name"),
+            vec!["Alice", "Carol"]
+        );
+        let mut second_ratio_desc_query = aggregate_query(
+            Some(org_slug.clone()),
+            None,
+            Some(2),
+            Some(required_next_cursor(&first_ratio_desc_page)),
+        );
+        second_ratio_desc_query.sort_by = Some("ai_ratio".into());
+        second_ratio_desc_query.sort_order = Some("desc".into());
+        let Json(second_ratio_desc_page) = aggregate_developers(
+            State(state.clone()),
+            auth.clone(),
+            Query(second_ratio_desc_query),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&second_ratio_desc_page, "developers", "name"),
+            vec!["Bob"]
+        );
+
+        let mut ai_lines_asc_query = aggregate_query(Some(org_slug.clone()), None, Some(3), None);
+        ai_lines_asc_query.sort_by = Some("ai_lines".into());
+        ai_lines_asc_query.sort_order = Some("asc".into());
+        let Json(ai_lines_asc_page) = aggregate_developers(
+            State(state.clone()),
+            auth.clone(),
+            Query(ai_lines_asc_query),
+        )
+        .await?;
+        assert_eq!(
+            string_values(&ai_lines_asc_page, "developers", "name"),
+            vec!["Carol", "Bob", "Alice"]
+        );
+
+        let mut ratio_asc_query = aggregate_query(Some(org_slug.clone()), None, Some(3), None);
+        ratio_asc_query.sort_by = Some("ai_ratio".into());
+        ratio_asc_query.sort_order = Some("asc".into());
+        let Json(ratio_asc_page) =
+            aggregate_developers(State(state.clone()), auth.clone(), Query(ratio_asc_query))
+                .await?;
+        assert_eq!(
+            string_values(&ratio_asc_page, "developers", "name"),
+            vec!["Bob", "Carol", "Alice"]
+        );
+
         let Json(first_project_page) = aggregate_projects(
             State(state.clone()),
             auth.clone(),
@@ -3844,6 +3946,8 @@ mod tests {
             org,
             since,
             until: None,
+            sort_by: None,
+            sort_order: None,
             limit,
             cursor,
         }

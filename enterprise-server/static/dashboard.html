@@ -180,6 +180,17 @@
                         <div class="page-title">开发者</div>
                         <div class="page-subtitle">开发者个人 AI 使用统计</div>
                     </div>
+                    <div class="toolbar admin-only">
+                        <label class="refresh-info" for="developer-sort-by">排序指标</label>
+                        <select id="developer-sort-by" onchange="changeDeveloperSorting()">
+                            <option value="ai_lines">AI 代码行</option>
+                            <option value="ai_ratio">AI 代码占比</option>
+                        </select>
+                        <select id="developer-sort-order" aria-label="排序方向" onchange="changeDeveloperSorting()">
+                            <option value="desc">从高到低</option>
+                            <option value="asc">从低到高</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="table-card">
                     <table>
