@@ -1,0 +1,32 @@
+src/config.rs
+  5c9c0617e53b6970 25
+src/daemon/telemetry_worker.rs
+  5c9c0617e53b6970 770,1103
+tests/config_fresh_test.rs
+  5c9c0617e53b6970 277,291
+install.ps1
+  5c9c0617e53b6970 219-222,659-666
+install.sh
+  5c9c0617e53b6970 67-70,389-392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "0d13ea9f4dc7979ef080a615300c6805a6445cae",
+  "prompts": {
+    "5c9c0617e53b6970": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f596a-2574-7b00-a690-18c7a18aca2c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 5,
+      "accepted_lines": 28,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080//cas/3b56a41ed37e27798881613c64ca8a974073764522864092996135e885c63b4f"
+    }
+  }
+}
