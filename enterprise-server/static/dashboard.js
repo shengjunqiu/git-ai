@@ -1049,7 +1049,7 @@ async function loadDepartments() {
         if (departmentTreeRows.length === 0) {
             renderDepartmentBreadcrumb();
             document.getElementById('departments-table').innerHTML =
-                '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>暂无部门数据</p></div></td></tr>';
+                `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`;
             return;
         }
 
@@ -1065,11 +1065,13 @@ async function loadDepartments() {
 }
 
 function openDepartmentLevel(parentId) {
+    if (!isAdmin) return;
     activeDepartmentParentId = parentId || null;
     renderDepartmentLevel();
 }
 
 function backDepartmentLevel() {
+    if (!isAdmin) return;
     if (!activeDepartmentParentId) return;
     const current = departmentTreeRows.find(dept => dept.id === activeDepartmentParentId);
     activeDepartmentParentId = current?.parent_id || null;
@@ -1080,6 +1082,12 @@ function renderDepartmentBreadcrumb() {
     const breadcrumb = document.getElementById('departments-breadcrumb');
     const backButton = document.getElementById('departments-back');
     if (!breadcrumb || !backButton) return;
+
+    if (!isAdmin) {
+        breadcrumb.innerHTML = '<strong>我的部门</strong>';
+        backButton.style.display = 'none';
+        return;
+    }
 
     const byId = new Map(departmentTreeRows.map(dept => [dept.id, dept]));
     const trail = [];
@@ -1110,8 +1118,9 @@ function renderDepartmentBreadcrumb() {
 
 function renderDepartmentLevel() {
     renderDepartmentBreadcrumb();
-    const departments = departmentTreeRows
-        .filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
+    const departments = (isAdmin
+        ? departmentTreeRows.filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
+        : departmentTreeRows.slice())
         .sort((left, right) => {
             const percentageDifference = departmentAiPercentage(right) - departmentAiPercentage(left);
             if (percentageDifference !== 0) return percentageDifference;
@@ -1131,8 +1140,8 @@ function renderDepartmentLevel() {
     document.getElementById('departments-table').innerHTML = departments.map(dept => {
             const departmentName = escapeHtml(dept.department || '—');
             const orgName = escapeHtml(dept.organization || '—');
-            const nodeIcon = dept.has_children ? '›' : '•';
-            const rowAction = dept.has_children
+            const nodeIcon = isAdmin && dept.has_children ? '›' : '•';
+            const rowAction = isAdmin && dept.has_children
                 ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer"`
                 : '';
             const total = dept.w_total || 0;

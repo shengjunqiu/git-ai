@@ -3115,6 +3115,8 @@ mod tests {
         let root_user = insert_user(&db.pool, org_id, "Root User", "member", Some(root_id)).await?;
         let child_user =
             insert_user(&db.pool, org_id, "Child User", "member", Some(child_id)).await?;
+        let child_peer =
+            insert_user(&db.pool, org_id, "Child Peer", "member", Some(child_id)).await?;
         let leaf_user = insert_user(&db.pool, org_id, "Leaf User", "member", Some(leaf_id)).await?;
         let sibling_user =
             insert_user(&db.pool, org_id, "Sibling User", "member", Some(sibling_id)).await?;
@@ -3124,6 +3126,7 @@ mod tests {
             (2, child_user, 20, 5),
             (3, leaf_user, 30, 10),
             (4, sibling_user, 40, 20),
+            (5, child_peer, 12, 6),
         ] {
             insert_dashboard_metric_row_with_tool(
                 &db.pool,
@@ -3161,7 +3164,7 @@ mod tests {
             assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
 
             let Json(page) = aggregate_departments(
-                State(aggregate_state),
+                State(aggregate_state.clone()),
                 auth.clone(),
                 Query(aggregate_query(
                     Some(org_slug.clone()),
@@ -3192,7 +3195,7 @@ mod tests {
 
             let expected = [
                 ("Root", 1, 10, 2, 20.0, false),
-                ("Child", 1, 20, 5, 25.0, false),
+                ("Child", 2, 32, 11, 34.375, false),
                 ("Leaf", 1, 30, 10, 100.0 / 3.0, true),
                 ("Sibling", 1, 40, 20, 50.0, true),
             ];
@@ -3210,6 +3213,31 @@ mod tests {
                 assert!((actual_pct_ai - pct_ai).abs() < 1e-12);
                 assert_eq!(department["is_leaf"].as_bool(), Some(is_leaf));
             }
+
+            let Json(developer_page) = aggregate_departments(
+                State(aggregate_state),
+                department_member_auth(child_user, org_id, &org_slug, child_id),
+                Query(aggregate_query(
+                    Some(org_slug.clone()),
+                    None,
+                    Some(10),
+                    None,
+                )),
+            )
+            .await?;
+            let developer_departments = developer_page["departments"]
+                .as_array()
+                .expect("developer departments should be an array");
+            assert_eq!(developer_departments.len(), 1);
+            let own_department = &developer_departments[0];
+            assert_eq!(
+                own_department["id"].as_str(),
+                Some(child_id.to_string().as_str())
+            );
+            assert_eq!(own_department["department"].as_str(), Some("Child"));
+            assert_eq!(own_department["total_commits"].as_i64(), Some(2));
+            assert_eq!(own_department["w_total"].as_i64(), Some(32));
+            assert_eq!(own_department["w_ai"].as_i64(), Some(11));
         }
 
         db.cleanup().await?;
@@ -3844,6 +3872,25 @@ mod tests {
             org_slug: Some(org_slug.to_string()),
             department_id: None,
             role: Some("admin".into()),
+            scopes: vec![],
+            auth_method: AuthMethod::BearerToken,
+        })
+    }
+
+    fn department_member_auth(
+        user_id: Uuid,
+        org_id: Uuid,
+        org_slug: &str,
+        department_id: Uuid,
+    ) -> DashboardAuth {
+        DashboardAuth(AuthIdentity {
+            user_id,
+            email: format!("{user_id}@example.com"),
+            name: "Department Member".into(),
+            org_id: Some(org_id),
+            org_slug: Some(org_slug.to_string()),
+            department_id: Some(department_id),
+            role: Some("member".into()),
             scopes: vec![],
             auth_method: AuthMethod::BearerToken,
         })
