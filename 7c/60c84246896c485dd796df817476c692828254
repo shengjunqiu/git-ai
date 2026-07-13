@@ -1,0 +1,66 @@
+enterprise-server/src/handlers/jetbrains.rs
+  bb640ba9b24f535c 1-91
+enterprise-server/src/services/secrets.rs
+  bb640ba9b24f535c 1-46,53-170,183-228,234-235
+enterprise-server/src/handlers/auth_pages.rs
+  bb640ba9b24f535c 662-663,665
+enterprise-server/src/handlers/bundle_view.rs
+  bb640ba9b24f535c 1-126
+enterprise-server/src/auth/middleware.rs
+  bb640ba9b24f535c 1-9,11-13,15-38,40-42,63-64,117-146,148-203,205-208,215-235,237-240,247-304,307,309-311,316-321,324-326,332-341,366-371,392-427
+enterprise-server/src/handlers/dashboard.rs
+  bb640ba9b24f535c 2,6,15-16,1396-1397,1401,1405-1407,1410-1411,1415,1419-1421,1492,1503,1507,1510-1511,1519,1521-1522,1544,1611,2752,3038-3041,3091,3157-3160,3166-3171,3194-3197,3199,3207-3210
+enterprise-server/src/handlers/mod.rs
+  bb640ba9b24f535c 1,3-7,10-20
+enterprise-server/src/handlers/bundle.rs
+  bb640ba9b24f535c 1-79
+enterprise-server/src/models/mod.rs
+  bb640ba9b24f535c 1-7
+enterprise-server/src/handlers/verify.rs
+  bb640ba9b24f535c 1-182
+enterprise-server/src/services/data_retention.rs
+  bb640ba9b24f535c 1-214
+enterprise-server/src/services/client_status.rs
+  bb640ba9b24f535c 359-366
+enterprise-server/src/pos_encoded.rs
+  bb640ba9b24f535c 1-117,119-161,163-251,253-277,279-283,290-296,299-334,341-366,373-391,398-411,418-442,449-454
+enterprise-server/src/handlers/health.rs
+  bb640ba9b24f535c 1-31
+enterprise-server/src/handlers/ci_events.rs
+  bb640ba9b24f535c 1-208
+enterprise-server/src/handlers/report.rs
+  bb640ba9b24f535c 16-19,21-38,47-48,50-51,59-65,380,387-397,408-420,432,689-692
+enterprise-server/src/handlers/admin.rs
+  bb640ba9b24f535c 1-2,4-6,13-14,33-35,105-106,115-116,118-120,130-131,151-166,200,212-213,241-243,262,271,276-281,287-297,299-321,341-343,351-358,397-412,425-429,508-532,540-567,574,580-593,596-606,608-638,651-654,718-723,732,761,907-917,935,1024-1026,1042-1051,1064-1080,1087-1107,1114,1120-1130,1177-1185,1282-1283,1286-1287,1338-1339,1342-1343,1407-1410,1423-1426,1696-1704,1706-1714,2112-2115,2145-2152,2155-2164,2178-2235,2253-2258,2311-2322,2333-2352,2356-2364,2366-2377,2384,2390-2409,2420-2422,2424-2429,2434-2443,2447-2496,2498-2506,2513,2519-2530,2538-2542,2546-2551,2554-2594,2598,2606-2607,2610-2644,2646-2675,2677-2703,2711-2716,2718-2766,2769-2806,2817-2818,2825-2829,2835-2849,2852-2863,2870,2876-2884,2892-2897,2939-2950,2961-2966,3015-3023
+enterprise-server/src/handlers/lifecycle.rs
+  bb640ba9b24f535c 1-4,22-23,67-72,80-96,122,147-186,220-309,346-347,373-378,389,407-437,445,455-463,469,478-479,486-494,502-607,609-620,626-691,698-718,723,739-762,781-786,791,810-819,1064-1067,1128-1130,1132-1135,1428-1439
+enterprise-server/src/error.rs
+  bb640ba9b24f535c 1-90
+enterprise-server/src/handlers/login.rs
+  bb640ba9b24f535c 1-6,8-80,82-159,169-174,178-180,182,200-244
+enterprise-server/src/handlers/telemetry.rs
+  bb640ba9b24f535c 1-110
+enterprise-server/src/models/user.rs
+  bb640ba9b24f535c 1-2,6-13,18-38,48-49,60-155,163-191,204-208,210-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "7c60c84246896c485dd796df817476c692828254",
+  "prompts": {
+    "bb640ba9b24f535c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f565b-c18d-7ea2-8f3c-68a579cae528",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 767,
+      "total_deletions": 555,
+      "accepted_lines": 4252,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/adacf836d9ca275e4fa10f9a52ca6932de1c0d799b7667a7948cd1144b2a709b"
+    }
+  }
+}
