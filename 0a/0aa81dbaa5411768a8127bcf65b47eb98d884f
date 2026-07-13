@@ -1,0 +1,34 @@
+src/config.rs
+  5c9c0617e53b6970 581-583,588,592
+src/commands/git_ai_handlers.rs
+  5c9c0617e53b6970 46,62,189,326,328
+tests/windows_install_script.rs
+  5c9c0617e53b6970 420,425
+src/commands/upgrade.rs
+  5c9c0617e53b6970 157,646,709,717,825
+install.ps1
+  5c9c0617e53b6970 665-675
+install.sh
+  5c9c0617e53b6970 394-402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "0a0aa81dbaa5411768a8127bcf65b47eb98d884f",
+  "prompts": {
+    "5c9c0617e53b6970": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f596a-2574-7b00-a690-18c7a18aca2c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 37,
+      "total_deletions": 15,
+      "accepted_lines": 37,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080//cas/3d63229cefd91c028bd7c84d99d91098c85732d4d512a1c82fe4def6c807b09d"
+    }
+  }
+}
