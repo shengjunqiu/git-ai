@@ -240,14 +240,14 @@ fn authorize_html(params: &AuthorizeParams, context: &UserAuthorizeContext) -> S
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>git-ai — CLI 授权</title>
+  <title>AI编码统计 — CLI 授权</title>
   <style>{styles}</style>
 </head>
 <body>
   <main class="auth-shell">
     <section class="auth-card">
       <div class="brand-lockup">
-        <div class="brand-title"><span>git-ai</span> Enterprise</div>
+        <div class="brand-title"><span>AI编码统计</span></div>
         <div class="brand-subtitle">AI 代码归属分析平台</div>
       </div>
       <div class="page-kicker">CLI 授权</div>

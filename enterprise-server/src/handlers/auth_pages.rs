@@ -22,14 +22,14 @@ pub fn success_page(title: &str, message: &str) -> Html<String> {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>git-ai — {title}</title>
+  <title>AI编码统计 — {title}</title>
   <style>{styles}</style>
 </head>
 <body>
   <main class="auth-shell">
     <section class="auth-card auth-card-compact">
       <div class="brand-lockup">
-        <div class="brand-title"><span>git-ai</span> Enterprise</div>
+        <div class="brand-title"><span>AI编码统计</span></div>
         <div class="brand-subtitle">AI 代码归属分析平台</div>
       </div>
       <div class="page-kicker">账户状态</div>
@@ -106,14 +106,14 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>git-ai — {title}</title>
+  <title>AI编码统计 — {title}</title>
   <style>{styles}</style>
 </head>
 <body>
   <main class="auth-shell">
     <section class="auth-card">
       <div class="brand-lockup">
-        <div class="brand-title"><span>git-ai</span> Enterprise</div>
+        <div class="brand-title"><span>AI编码统计</span></div>
         <div class="brand-subtitle">AI 代码归属分析平台</div>
       </div>
       <div class="page-kicker">账号访问</div>
