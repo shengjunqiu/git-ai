@@ -1,0 +1,28 @@
+enterprise-server/static/dashboard.html
+  bb640ba9b24f535c 254
+enterprise-server/src/handlers/dashboard.rs
+  bb640ba9b24f535c 3118-3119,3129,3167,3198,3216-3240,3880-3893
+enterprise-server/static/dashboard.js
+  bb640ba9b24f535c 1052,1068,1074,1086-1091,1121-1123,1143-1144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.2",
+  "base_commit_sha": "285119562e353c8e9255c25db90aa2bcdb0bfb5f",
+  "prompts": {
+    "bb640ba9b24f535c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f565b-c18d-7ea2-8f3c-68a579cae528",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 65,
+      "total_deletions": 9,
+      "accepted_lines": 341,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8080/cas/09f76d8c29ec7dc877c80776f6e94832339aa4dba1ddd4d1f58d7f19a46dd906"
+    }
+  }
+}
