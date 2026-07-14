@@ -1,0 +1,51 @@
+Cargo.toml
+  h_8c00d195f87269 3
+src/auth/client.rs
+  70c1bd396a39adf0 13-15,22,26,61-63,332-341
+enterprise-server/src/services/registration.rs
+  ff69a46c14a08471 23-24,76-96,105-115,142-148,171,209-213
+enterprise-server/static/dashboard.html
+  ff69a46c14a08471 472
+enterprise-server/src/handlers/auth_pages.rs
+  ff69a46c14a08471 73,238,246-247,251,262-263,271-272,274,279,281,289,661-666,669
+enterprise-server/src/handlers/auth_api.rs
+  ff69a46c14a08471 727-786,975-993
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.3",
+  "base_commit_sha": "494caae4021a4a802692df633132110476a1dbf2",
+  "prompts": {
+    "70c1bd396a39adf0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5fae-6959-7bb1-bbe2-ba75171221f3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 8,
+      "accepted_lines": 20,
+      "overriden_lines": 0
+    },
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 187,
+      "total_deletions": 75,
+      "accepted_lines": 156,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
