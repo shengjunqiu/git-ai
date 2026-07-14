@@ -48,6 +48,7 @@ unicode-normalization = "0.1"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
+junction = "1.4.2"
 named_pipe = "0.4.1"
 widestring = "1"
 

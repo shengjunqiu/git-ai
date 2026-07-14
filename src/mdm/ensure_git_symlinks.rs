@@ -161,9 +161,34 @@ fn ensure_libexec_symlink_for_binary(exe_path: &Path) -> Result<(), GitAiError> 
         // On Windows, junctions are directories, so use remove_dir
         #[cfg(windows)]
         {
-            // Try remove_dir first (for junctions), then remove_file (for symlinks)
-            if std::fs::remove_dir(&symlink_path).is_err() {
-                let _ = std::fs::remove_file(&symlink_path);
+            if junction::exists(&symlink_path).map_err(|e| {
+                GitAiError::Generic(format!(
+                    "Failed to inspect existing libexec junction {}: {}",
+                    symlink_path.display(),
+                    e
+                ))
+            })? {
+                junction::delete(&symlink_path).map_err(|e| {
+                    GitAiError::Generic(format!(
+                        "Failed to remove existing libexec junction {}: {}",
+                        symlink_path.display(),
+                        e
+                    ))
+                })?;
+            } else {
+                let metadata = symlink_path.symlink_metadata()?;
+                if !metadata.file_type().is_symlink() {
+                    return Err(GitAiError::Generic(format!(
+                        "Refusing to replace non-link libexec path {}",
+                        symlink_path.display()
+                    )));
+                }
+                // Windows uses remove_dir for directory symlinks. Broken links
+                // cannot be followed to determine their kind, so keep the safe
+                // remove_file fallback after verifying this is a reparse link.
+                if std::fs::remove_dir(&symlink_path).is_err() {
+                    std::fs::remove_file(&symlink_path)?;
+                }
             }
         }
         #[cfg(unix)]
@@ -185,29 +210,14 @@ fn create_junction(
     junction_path: &std::path::Path,
     target: &std::path::Path,
 ) -> Result<(), GitAiError> {
-    use std::process::Command;
-
-    // Use mklink /J to create a junction - this doesn't require admin privileges
-    let status = Command::new("cmd")
-        .args([
-            "/C",
-            "mklink",
-            "/J",
-            &junction_path.to_string_lossy(),
-            &target.to_string_lossy(),
-        ])
-        .output()
-        .map_err(|e| GitAiError::Generic(format!("Failed to run mklink: {}", e)))?;
-
-    if !status.status.success() {
-        let stderr = String::from_utf8_lossy(&status.stderr);
-        return Err(GitAiError::Generic(format!(
-            "Failed to create junction: {}",
-            stderr
-        )));
-    }
-
-    Ok(())
+    junction::create(target, junction_path).map_err(|e| {
+        GitAiError::Generic(format!(
+            "Failed to create junction {} -> {}: {}",
+            junction_path.display(),
+            target.display(),
+            e
+        ))
+    })
 }
 
 #[cfg(test)]

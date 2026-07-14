@@ -615,9 +615,17 @@ git commit -m "Harden Windows daemon named pipes"
 
 验收标准：
 
-- [ ] junction 创建不再经过 `cmd.exe`。
+- [x] junction 创建不再经过 `cmd.exe`。
 - [ ] 特殊字符路径安装、升级和卸载均可完成。
 - [ ] 重复执行安装具有幂等性。
+
+### 阶段 5.1 执行记录（2026-07-15）
+
+- Windows junction 创建改用 `junction 1.4.2` 的原生 reparse-point 实现，移除 `cmd.exe /C mklink /J`，路径不再经过 shell 解析。
+- 替换前先区分 junction、目录符号链接和真实目录：junction 只删除重解析点；符号链接使用目录/文件删除回退；真实目录或普通文件会安全失败，不会被递归删除或覆盖。
+- 目标仍来自 `git --exec-path` 的父目录，创建位置仍为 `~/.git-ai/libexec`，保持无需管理员权限的 junction 语义。
+- `cargo test mdm::ensure_git_symlinks --lib` 通过（3 tests）；特殊字符路径、重复安装和 Git for Windows/GUI 仍需原生 Windows 验收。
+- Windows 目标检查已下载并解析 `junction` 依赖，随后仍在 bundled SQLite 编译处因 macOS 缺少 MSVC `stdlib.h` 停止。
 
 ### Task 5.2：明确 Windows 更新命令边界
 

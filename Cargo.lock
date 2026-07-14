@@ -1121,6 +1121,7 @@ dependencies = [
  "insta",
  "interprocess",
  "jsonc-parser",
+ "junction",
  "keyring",
  "libc",
  "named_pipe",
@@ -1935,6 +1936,16 @@ name = "jsonc-parser"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8de0ffda8def4eb16ed430641db8056c2509b20e38f2dd327bdb4c83239f88c4"
+
+[[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "kasuari"
