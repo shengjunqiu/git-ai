@@ -226,8 +226,9 @@ jobs:
       - name: Prepare test home
         shell: pwsh
         run: |
-          $testHome = Join-Path $env:RUNNER_TEMP "git-ai-home"
+          $testHome = Join-Path $env:RUNNER_TEMP "git ai home"
           New-Item -ItemType Directory -Force -Path $testHome | Out-Null
+          if ($testHome -notmatch ' ') { throw "Windows E2E home must contain a space: $testHome" }
           $homeDrive = [System.IO.Path]::GetPathRoot($testHome).TrimEnd('\')
           $homePath = $testHome.Substring($homeDrive.Length)
           Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME=$testHome"
