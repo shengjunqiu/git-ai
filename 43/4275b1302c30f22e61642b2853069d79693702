@@ -1,0 +1,32 @@
+enterprise-server/static/dashboard.css
+  4e6033a3fba0a89b 253-255,257-260,301-302
+enterprise-server/static/dashboard.html
+  h_8c00d195f87269 310-311
+  4e6033a3fba0a89b 323,376-385,388-390,393-395,399-401,404-405,407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.3",
+  "base_commit_sha": "434275b1302c30f22e61642b2853069d79693702",
+  "prompts": {
+    "4e6033a3fba0a89b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5e4a-f173-7262-98b4-50cb704b7eff",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 32,
+      "total_deletions": 25,
+      "accepted_lines": 32,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/d50916629b83f02c59ceb2020a8733c4a454a061452da3861a86ce8d2da8cdeb"
+    }
+  },
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
