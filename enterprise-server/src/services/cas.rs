@@ -149,4 +149,32 @@ impl CasStore {
             ))),
         }
     }
+
+    /// Store a versioned file managed from the enterprise dashboard.
+    pub async fn put_managed_file(
+        &self,
+        slug: &str,
+        version: &str,
+        filename: &str,
+        content: &[u8],
+    ) -> Result<String, AppError> {
+        let storage_path = format!("managed-files/{}/{}/{}", slug, version, filename);
+        let path = ObjectPath::from(storage_path.clone());
+        let bytes = bytes::Bytes::copy_from_slice(content);
+
+        self.store
+            .put(&path, bytes.into())
+            .await
+            .map_err(|e| AppError::CasStorage(format!("S3 managed file put failed: {}", e)))?;
+
+        Ok(storage_path)
+    }
+
+    pub async fn delete_path(&self, storage_path: &str) -> Result<(), AppError> {
+        let path = ObjectPath::from(storage_path.to_string());
+        match self.store.delete(&path).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(AppError::CasStorage(format!("S3 delete failed: {}", e))),
+        }
+    }
 }

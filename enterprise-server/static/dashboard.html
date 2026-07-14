@@ -47,6 +47,12 @@
             <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-section="apikeys" onclick="return showSection(event, 'apikeys')">
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
+            <a class="nav-item admin-only" href="/me?section=releases" data-section="releases" onclick="return showSection(event, 'releases')">
+                <span class="nav-icon">🚀</span> CLI 版本发布
+            </a>
+            <a class="nav-item admin-only" href="/me?section=files" data-section="files" onclick="return showSection(event, 'files')">
+                <span class="nav-icon">📦</span> 文件中心
+            </a>
 
             <div class="nav-section">帮助与支持</div>
             <a class="nav-item" href="/me?section=help" data-section="help" onclick="return showSection(event, 'help')">
@@ -303,6 +309,105 @@
                 </div>
             </div>
 
+            <!-- CLI Release Management Section -->
+            <div id="section-releases" class="section admin-only">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">CLI 版本发布</div>
+                        <div class="page-subtitle">上传完整跨平台安装包，并安全更新企业版 latest 渠道</div>
+                    </div>
+                    <button class="btn" onclick="loadReleaseManagement()">🔄 刷新</button>
+                </div>
+
+                <div class="publish-card">
+                    <div class="publish-card-title">发布新版本</div>
+                    <div class="publish-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="release-version">版本号</label>
+                            <input id="release-version" class="form-input" placeholder="例如 1.3.4" />
+                        </div>
+                        <div class="form-group publish-grid-wide">
+                            <label class="form-label" for="release-files">平台二进制（必须完整选择 6 个文件）</label>
+                            <input id="release-files" class="form-input file-input" type="file" multiple onchange="renderSelectedReleaseFiles()" />
+                            <div class="form-hint">只需要选择六个平台二进制。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
+                        </div>
+                    </div>
+                    <div id="release-selected-files" class="selected-files">尚未选择文件</div>
+                    <div class="publish-actions">
+                        <label class="checkbox-label"><input id="release-promote-latest" type="checkbox" checked /> 发布后立即设为 latest</label>
+                        <button class="btn btn-primary" onclick="publishCliRelease(this)">上传并发布</button>
+                    </div>
+                    <div id="release-publish-status" class="publish-status"></div>
+                </div>
+
+                <div class="stats-grid" id="release-channel-stats"></div>
+                <div class="table-card">
+                    <div class="table-header"><div class="table-title">已上传版本</div></div>
+                    <div class="table-scroll">
+                        <table>
+                            <thead><tr><th>版本</th><th>状态</th><th>文件</th><th>校验值</th><th>操作</th></tr></thead>
+                            <tbody id="release-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Managed Files Section -->
+            <div id="section-files" class="section admin-only">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">文件中心</div>
+                        <div class="page-subtitle">管理文档、配置和压缩包的版本及稳定下载链接</div>
+                    </div>
+                    <button class="btn" onclick="loadManagedFiles()">🔄 刷新</button>
+                </div>
+
+                <div class="publish-card">
+                    <div class="publish-card-title">上传文件版本</div>
+                    <div class="publish-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="managed-file-name">显示名称</label>
+                            <input id="managed-file-name" class="form-input" placeholder="例如 公司开发配置" />
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="managed-file-slug">文件标识</label>
+                            <input id="managed-file-slug" class="form-input" placeholder="例如 company-config" />
+                            <div class="form-hint">只能使用小写字母、数字、短横线和下划线，发布后将用于下载链接。</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="managed-file-version">版本号</label>
+                            <input id="managed-file-version" class="form-input" placeholder="例如 2.0.0" />
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="managed-file-upload">选择文件</label>
+                            <input id="managed-file-upload" class="form-input file-input" type="file" />
+                        </div>
+                        <div class="form-group publish-grid-wide">
+                            <label class="form-label" for="managed-file-description">说明</label>
+                            <input id="managed-file-description" class="form-input" placeholder="可选，说明文件用途或本次更新内容" />
+                        </div>
+                    </div>
+                    <div class="publish-actions">
+                        <div class="checkbox-group">
+                            <label class="checkbox-label"><input id="managed-file-public" type="checkbox" checked /> 公开下载（无需登录）</label>
+                            <label class="checkbox-label"><input id="managed-file-publish-now" type="checkbox" checked /> 上传后立即发布为最新版</label>
+                        </div>
+                        <button class="btn btn-primary" onclick="uploadManagedFile(this)">上传文件</button>
+                    </div>
+                    <div id="managed-file-upload-status" class="publish-status"></div>
+                </div>
+
+                <div class="table-card">
+                    <div class="table-header"><div class="table-title">文件与版本</div></div>
+                    <div class="table-scroll">
+                        <table>
+                            <thead><tr><th>文件</th><th>当前版本</th><th>历史版本</th><th>访问权限</th><th>操作</th></tr></thead>
+                            <tbody id="managed-files-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <!-- Help Section -->
             <div id="section-help" class="section">
                 <div class="page-header help-page-header">
@@ -328,6 +433,7 @@
                 <div class="help-layout">
                     <nav class="help-toc" aria-label="帮助页面目录">
                         <div class="help-toc-title">本页目录</div>
+                        <a href="#help-quick">最快上手</a>
                         <a href="#help-prepare">1. 安装前准备</a>
                         <a href="#help-install">2. 安装客户端</a>
                         <a href="#help-login">3. 登录与授权</a>
@@ -339,6 +445,53 @@
                     </nav>
 
                     <div class="help-content">
+                        <section id="help-quick" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">GO</span>
+                                <div><h2>最快上手：5 步完成安装与使用</h2><p>按顺序完成以下步骤即可开始使用；遇到问题时再查看后面的详细说明。</p></div>
+                            </div>
+                            <div class="help-checklist">
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">1</span>
+                                    <div><h3>确认 Git 并注册账号</h3><p>运行 <code>git --version</code>，确认电脑已经安装 Git；然后使用公司企业邮箱注册账号，并保持浏览器登录状态。</p></div>
+                                    <a class="help-link-btn" href="http://117.147.213.234:38080/auth/register" target="_blank" rel="noreferrer">打开注册页面 ↗</a>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">2</span>
+                                    <div><h3>安装 Git AI</h3><p>macOS / Linux 在终端执行：</p></div>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
+  http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
+  | bash</code></pre></div>
+                                    <p>Windows 在 PowerShell 执行：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>irm http://117.147.213.234:38080/worker/releases/latest/download/install.ps1 | iex</code></pre></div>
+                                    <p class="help-note">安装完成后重新打开终端或 PowerShell，并运行 <code>git-ai --version</code>。</p>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">3</span>
+                                    <div><h3>登录并授权</h3><p>运行登录命令，在打开的浏览器中确认授权，再检查当前账号：</p></div>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server http://117.147.213.234:38080
+git-ai whoami</code></pre></div>
+                                    <p class="help-note"><code>git-ai whoami</code> 能显示当前账号即表示授权成功。</p>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">4</span>
+                                    <div><h3>安装并配置编辑器扩展</h3><p>下载并安装扩展，然后在编辑器设置中开启 checkpoint 与 AI Tab 追踪：</p></div>
+                                    <a class="help-link-btn" href="http://117.147.213.234:38080/static/downloads/git-ai-extension.vsix">下载 git-ai 扩展</a>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>{
+  "gitai.enableCheckpointLogging": true,
+  "gitai.experiments.aiTabTracking": true
+}</code></pre></div>
+                                    <p class="help-note">Trae 用户还需要在 Hooks 设置中手动开启“已配置的 Hooks”。扩展或 Hooks 未自动生效时，运行 <code>git-ai install-hooks</code>。</p>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">5</span>
+                                    <div><h3>开始使用</h3><p>无需为每个 Git 仓库单独初始化。直接使用支持的 AI 工具编辑代码，照常执行 <code>git add</code>、<code>git commit</code> 等 Git 命令；提交时会自动上传 AI 与人工代码归属统计。</p><p>查看当前归属统计：</p></div>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai status</code></pre></div>
+                                    <p class="help-note">需要更新时运行 <code>git-ai update</code>；遇到问题时运行 <code>git-ai debug</code>，并将输出发给管理员。</p>
+                                </div>
+                            </div>
+                        </section>
+
                         <section id="help-prepare" class="help-card">
                             <div class="help-section-heading">
                                 <span class="help-step">01</span>
@@ -451,6 +604,7 @@ git-ai --version</code></pre></div></div>
                                 <span class="help-step">05</span>
                                 <div><h2>编辑器与 AI 工具集成</h2><p>使用前请安装扩展 <strong>git-ai-0.1.22.vsix</strong>，并开启 checkpoint 与 AI Tab 追踪。</p></div>
                             </div>
+                            <a class="help-link-btn" href="http://117.147.213.234:38080/static/downloads/git-ai-extension.vsix">下载 git-ai 扩展</a>
                             <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>{
   "gitai.enableCheckpointLogging": true,
   "gitai.experiments.aiTabTracking": true

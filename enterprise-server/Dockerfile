@@ -17,6 +17,7 @@ WORKDIR /build/enterprise-server
 # layer prevents dashboard HTML edits from invalidating the Rust build cache.
 COPY enterprise-server/Cargo.toml enterprise-server/Cargo.lock ./
 COPY crates/git-ai-protocol /build/crates/git-ai-protocol
+COPY install.sh install.ps1 /build/
 COPY enterprise-server/src ./src
 COPY enterprise-server/migrations ./migrations
 

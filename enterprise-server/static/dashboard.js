@@ -12,6 +12,14 @@ function jsString(value) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 }
+function escapeAttribute(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
 function fmtTimeAgo(value) {
     if (!value) return '从未';
     const date = new Date(value);
@@ -40,9 +48,11 @@ const DASHBOARD_SECTIONS = [
     'tools',
     'users',
     'apikeys',
+    'releases',
+    'files',
     'help',
 ];
-const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys'];
+const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys', 'releases', 'files'];
 let currentSection = 'overview';
 let departmentTreeRows = [];
 let activeDepartmentParentId = null;
@@ -226,6 +236,7 @@ function dashboardSectionFromLocation() {
 
 function updateDashboardSectionUrl(id, replace = false) {
     const url = new URL(window.location.href);
+    url.hash = '';
     if (id === DASHBOARD_DEFAULT_SECTION) {
         url.searchParams.delete('section');
     } else {
@@ -270,6 +281,8 @@ function loadSection(id) {
         case 'users': loadUsers(); break;
         case 'departments': loadDepartments(); break;
         case 'apikeys': loadApiKeys(); break;
+        case 'releases': loadReleaseManagement(); break;
+        case 'files': loadManagedFiles(); break;
         case 'help': break;
     }
 }
@@ -1576,6 +1589,349 @@ async function revokeApiKey(keyId, keyName) {
         }
     } catch(e) {
         showToast('撤销密钥时发生错误', 'error');
+    }
+}
+
+// --- CLI Release Management ---
+const REQUIRED_RELEASE_FILES = [
+    'git-ai-linux-x64',
+    'git-ai-linux-arm64',
+    'git-ai-windows-x64.exe',
+    'git-ai-windows-arm64.exe',
+    'git-ai-macos-x64',
+    'git-ai-macos-arm64',
+];
+
+function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+async function readResponseJson(response) {
+    try {
+        return await response.json();
+    } catch (_) {
+        return {};
+    }
+}
+
+function renderSelectedReleaseFiles() {
+    const input = document.getElementById('release-files');
+    const target = document.getElementById('release-selected-files');
+    if (!input || !target) return;
+    const selected = new Map(Array.from(input.files || []).map(file => [file.name, file]));
+    target.innerHTML = REQUIRED_RELEASE_FILES.map(filename => {
+        const file = selected.get(filename);
+        return file
+            ? `<span class="selected-file-ok">✓ ${escapeHtml(filename)}（${formatBytes(file.size)}）</span>`
+            : `<span class="selected-file-missing">缺少 ${escapeHtml(filename)}</span>`;
+    }).join('<br>');
+}
+
+async function loadReleaseManagement() {
+    const table = document.getElementById('release-table');
+    if (!table) return;
+    table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+    try {
+        const [metadataResponse, assetsResponse] = await Promise.all([
+            fetch('/worker/releases'),
+            fetch('/api/admin/releases/assets'),
+        ]);
+        const metadata = await readResponseJson(metadataResponse);
+        const assetData = await readResponseJson(assetsResponse);
+        if (!metadataResponse.ok || !assetsResponse.ok) {
+            throw new Error(metadata.error || assetData.error || '加载发布数据失败');
+        }
+
+        const channels = metadata.channels || {};
+        const latest = channels.latest || null;
+        const versionGroups = new Map();
+        (assetData.assets || []).forEach(asset => {
+            if (!versionGroups.has(asset.version)) versionGroups.set(asset.version, []);
+            versionGroups.get(asset.version).push(asset);
+        });
+        Object.entries(channels).forEach(([channel, info]) => {
+            if (channel === info.version && !versionGroups.has(info.version)) {
+                versionGroups.set(info.version, []);
+            }
+        });
+
+        const stats = document.getElementById('release-channel-stats');
+        stats.innerHTML = `
+            <div class="stat-card"><div class="stat-label">LATEST</div><div class="stat-value total">${escapeHtml(latest?.version || '未发布')}</div><div class="stat-detail">${latest ? '客户端自动更新目标' : '尚未设置 latest 渠道'}</div></div>
+            <div class="stat-card"><div class="stat-label">版本数量</div><div class="stat-value total">${versionGroups.size}</div><div class="stat-detail">包含草稿和已发布版本</div></div>
+            <div class="stat-card"><div class="stat-label">发布文件</div><div class="stat-value total">${(assetData.assets || []).length}</div><div class="stat-detail">跨平台二进制、脚本与校验文件</div></div>`;
+
+        const versions = Array.from(versionGroups.keys()).sort((a, b) =>
+            b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+        table.innerHTML = versions.map(version => {
+            const assets = versionGroups.get(version) || [];
+            const versionChannel = channels[version];
+            const checksum = versionChannel?.checksum || assets.find(asset => asset.filename === 'SHA256SUMS')?.sha256 || '';
+            const isLatest = latest?.version === version;
+            const isPublished = Boolean(versionChannel);
+            const assetNames = assets
+                .slice()
+                .sort((a, b) => a.filename.localeCompare(b.filename))
+                .map(asset => `${escapeHtml(asset.filename)} (${formatBytes(asset.size_bytes)})`)
+                .join('<br>');
+            const actions = [];
+            if (isPublished && !isLatest) {
+                actions.push(`<button class="btn btn-sm btn-primary" onclick="promoteCliRelease(${jsString(version)}, ${jsString(checksum)})">设为 latest</button>`);
+            }
+            if (isPublished) {
+                actions.push(`<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/worker/releases/${version}/download/install.sh`)})">复制安装链接</button>`);
+            }
+            return `<tr>
+                <td><strong>${escapeHtml(version)}</strong></td>
+                <td>${isLatest ? '<span class="badge active">latest</span>' : isPublished ? '<span class="badge ai">已发布</span>' : '<span class="badge revoked">草稿</span>'}</td>
+                <td><div class="asset-list">${assetNames || '暂无资产记录'}</div></td>
+                <td><span class="checksum" title="${escapeHtml(checksum)}">${escapeHtml(checksum || '—')}</span></td>
+                <td><div class="action-group">${actions.join('') || '—'}</div></td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🚀</div><p>尚未上传 CLI 版本</p></div></td></tr>';
+    } catch (error) {
+        table.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">${escapeHtml(error.message || '加载发布数据失败')}</td></tr>`;
+    }
+}
+
+async function publishCliRelease(button) {
+    const version = document.getElementById('release-version').value.trim();
+    const input = document.getElementById('release-files');
+    const status = document.getElementById('release-publish-status');
+    const selectedFiles = Array.from(input.files || []);
+    const selectedNames = new Set(selectedFiles.map(file => file.name));
+    const missing = REQUIRED_RELEASE_FILES.filter(filename => !selectedNames.has(filename));
+    const unexpected = selectedFiles.filter(file => !REQUIRED_RELEASE_FILES.includes(file.name)).map(file => file.name);
+    if (!version) {
+        showToast('请填写版本号', 'error');
+        return;
+    }
+    if (missing.length || unexpected.length || selectedFiles.length !== REQUIRED_RELEASE_FILES.length) {
+        showToast(`发布文件不完整${missing.length ? `，缺少：${missing.join('、')}` : ''}${unexpected.length ? `，多余：${unexpected.join('、')}` : ''}`, 'error');
+        renderSelectedReleaseFiles();
+        return;
+    }
+
+    const data = new FormData();
+    data.append('version', version);
+    data.append('promote_to_latest', document.getElementById('release-promote-latest').checked ? 'true' : 'false');
+    selectedFiles.forEach(file => data.append('files', file, file.name));
+    button.disabled = true;
+    status.className = 'publish-status';
+    status.textContent = '正在上传并校验完整发布包，请不要关闭页面...';
+    try {
+        const response = await fetch('/api/admin/releases/publish', { method: 'POST', body: data });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '发布失败');
+        status.className = 'publish-status success';
+        status.textContent = `版本 ${result.version} 发布成功${result.latest_updated ? '，latest 已更新' : ''}`;
+        showToast(`CLI ${result.version} 发布成功`, 'success');
+        input.value = '';
+        renderSelectedReleaseFiles();
+        await loadReleaseManagement();
+    } catch (error) {
+        status.className = 'publish-status error';
+        status.textContent = error.message || '发布失败';
+        showToast(status.textContent, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function promoteCliRelease(version, checksum) {
+    if (!confirm(`确定将 latest 切换到 CLI ${version} 吗？\n客户端下一次检查更新时将看到这个版本。`)) return;
+    try {
+        const response = await fetch('/api/admin/releases/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: 'latest', version, checksum }),
+        });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '切换 latest 失败');
+        showToast(`latest 已切换到 ${version}`, 'success');
+        await loadReleaseManagement();
+    } catch (error) {
+        showToast(error.message || '切换 latest 失败', 'error');
+    }
+}
+
+// --- Managed File Center ---
+async function loadManagedFiles() {
+    const table = document.getElementById('managed-files-table');
+    if (!table) return;
+    table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+    try {
+        const response = await fetch('/api/admin/files');
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '加载文件列表失败');
+        const files = result.files || [];
+        table.innerHTML = files.map(file => {
+            const versions = (file.versions || []).slice().sort((a, b) =>
+                b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: 'base' }));
+            const versionList = versions.map(version => {
+                const state = file.current_version === version.version
+                    ? '<span class="badge active">当前</span>'
+                    : version.published_at
+                        ? '<span class="badge ai">已发布</span>'
+                        : '<span class="badge revoked">草稿</span>';
+                return `<span class="version-chip">${escapeHtml(version.version)} · ${formatBytes(version.size_bytes)} ${state}</span>`;
+            }).join('');
+            const fixedLinkActions = versions
+                .filter(version => version.published_at)
+                .map(version => `<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/files/${file.slug}/${version.version}/download`)})">复制 ${escapeHtml(version.version)} 固定链接</button>`)
+                .join('');
+            const versionActions = versions
+                .filter(version => version.version !== file.current_version)
+                .map(version => `<button class="btn btn-sm" onclick="publishManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">发布 ${escapeHtml(version.version)}</button><button class="btn btn-sm btn-danger" onclick="deleteManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">删除 ${escapeHtml(version.version)}</button>`)
+                .join('');
+            return `<tr>
+                <td><strong>${escapeHtml(file.name)}</strong><br><code style="color:var(--accent);font-size:0.72rem">${escapeHtml(file.slug)}</code><br><span style="color:var(--text-muted);font-size:0.7rem">${escapeHtml(file.description || '')}</span></td>
+                <td>${file.current_version ? `<strong>${escapeHtml(file.current_version)}</strong>` : '<span class="badge revoked">未发布</span>'}</td>
+                <td><div class="version-list">${versionList || '暂无版本'}</div></td>
+                <td>${file.is_public ? '<span class="badge active">公开</span>' : '<span class="badge role">登录后下载</span>'}</td>
+                <td><div class="action-group">
+                    ${file.current_version ? `<button class="btn btn-sm btn-primary" onclick="copyPublishedUrl(${jsString(file.latest_download_url)})">复制下载链接</button>` : ''}
+                    <button class="btn btn-sm" onclick="showEditManagedFileModal(${jsString(file.slug)}, ${jsString(file.name)}, ${jsString(file.description || '')}, ${file.is_public})">设置</button>
+                    ${fixedLinkActions}
+                    ${versionActions}
+                </div></td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📦</div><p>尚未上传普通文件</p></div></td></tr>';
+    } catch (error) {
+        table.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">${escapeHtml(error.message || '加载文件列表失败')}</td></tr>`;
+    }
+}
+
+async function uploadManagedFile(button) {
+    const name = document.getElementById('managed-file-name').value.trim();
+    const slug = document.getElementById('managed-file-slug').value.trim();
+    const version = document.getElementById('managed-file-version').value.trim();
+    const description = document.getElementById('managed-file-description').value.trim();
+    const input = document.getElementById('managed-file-upload');
+    const file = input.files?.[0];
+    const status = document.getElementById('managed-file-upload-status');
+    if (!name || !slug || !version || !file) {
+        showToast('请填写名称、文件标识、版本号并选择文件', 'error');
+        return;
+    }
+
+    const data = new FormData();
+    data.append('name', name);
+    data.append('slug', slug);
+    data.append('version', version);
+    data.append('description', description);
+    data.append('is_public', document.getElementById('managed-file-public').checked ? 'true' : 'false');
+    data.append('file', file, file.name);
+    button.disabled = true;
+    status.className = 'publish-status';
+    status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}）...`;
+    try {
+        const response = await fetch('/api/admin/files/upload', { method: 'POST', body: data });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '上传失败');
+        if (document.getElementById('managed-file-publish-now').checked) {
+            const publishResponse = await fetch(`/api/admin/files/${encodeURIComponent(result.slug)}/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: result.version }),
+            });
+            const publishResult = await readResponseJson(publishResponse);
+            if (!publishResponse.ok) throw new Error(publishResult.error || '文件已上传，但发布失败');
+        }
+        status.className = 'publish-status success';
+        status.textContent = `文件 ${result.filename} ${document.getElementById('managed-file-publish-now').checked ? '上传并发布' : '上传为草稿'}成功`;
+        showToast(status.textContent, 'success');
+        input.value = '';
+        await loadManagedFiles();
+    } catch (error) {
+        status.className = 'publish-status error';
+        status.textContent = error.message || '上传失败';
+        showToast(status.textContent, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function publishManagedFileVersion(slug, version) {
+    if (!confirm(`确定将 ${slug} 的当前版本切换到 ${version} 吗？`)) return;
+    try {
+        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ version }),
+        });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '发布失败');
+        showToast(`${slug} 已发布 ${version}`, 'success');
+        await loadManagedFiles();
+    } catch (error) {
+        showToast(error.message || '发布失败', 'error');
+    }
+}
+
+async function deleteManagedFileVersion(slug, version) {
+    if (!confirm(`确定删除 ${slug} ${version} 吗？此操作无法撤销。`)) return;
+    try {
+        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, { method: 'DELETE' });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '删除失败');
+        showToast(`${slug} ${version} 已删除`, 'success');
+        await loadManagedFiles();
+    } catch (error) {
+        showToast(error.message || '删除失败', 'error');
+    }
+}
+
+function showEditManagedFileModal(slug, name, description, isPublic) {
+    document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+            <div class="modal-title">文件设置</div>
+            <div class="form-group"><label class="form-label">文件标识</label><input id="edit-file-slug" class="form-input" value="${escapeAttribute(slug)}" disabled /></div>
+            <div class="form-group"><label class="form-label">显示名称</label><input id="edit-file-name" class="form-input" value="${escapeAttribute(name)}" /></div>
+            <div class="form-group"><label class="form-label">说明</label><input id="edit-file-description" class="form-input" value="${escapeAttribute(description)}" /></div>
+            <label class="checkbox-label"><input id="edit-file-public" type="checkbox" ${isPublic ? 'checked' : ''} /> 公开下载（无需登录）</label>
+            <div class="form-actions"><button class="btn" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveManagedFileSettings()">保存</button></div>
+        </div>
+    </div>`;
+}
+
+async function saveManagedFileSettings() {
+    const slug = document.getElementById('edit-file-slug').value;
+    const name = document.getElementById('edit-file-name').value.trim();
+    const description = document.getElementById('edit-file-description').value.trim();
+    const isPublic = document.getElementById('edit-file-public').checked;
+    if (!name) {
+        showToast('显示名称不能为空', 'error');
+        return;
+    }
+    try {
+        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description, is_public: isPublic }),
+        });
+        const result = await readResponseJson(response);
+        if (!response.ok) throw new Error(result.error || '保存失败');
+        closeModal();
+        showToast('文件设置已保存', 'success');
+        await loadManagedFiles();
+    } catch (error) {
+        showToast(error.message || '保存失败', 'error');
+    }
+}
+
+async function copyPublishedUrl(path) {
+    const url = new URL(path, window.location.origin).href;
+    try {
+        await copyHelpText(url);
+        showToast('下载链接已复制', 'success');
+    } catch (_) {
+        showToast(`复制失败：${url}`, 'error');
     }
 }
 

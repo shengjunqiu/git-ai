@@ -101,6 +101,10 @@ pub fn build_router(state: AppState) -> Router {
             "/worker/releases/{channel}/download/{filename}",
             get(crate::handlers::release::download_release),
         )
+        .route(
+            "/files/{slug}/{version}/download",
+            get(crate::handlers::managed_files::download_managed_file),
+        )
         // Feature Flags
         .route(
             "/worker/config/feature-flags",
@@ -255,12 +259,39 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route(
+            "/api/admin/releases/publish",
+            post(crate::handlers::release::publish_release_bundle)
+                .layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+        )
+        .route(
             "/api/admin/releases/assets",
             get(crate::handlers::release::list_release_assets),
         )
         .route(
             "/api/admin/releases/assets/{channel}/{filename}",
             delete(crate::handlers::release::delete_release_asset),
+        )
+        // Admin: General file publishing
+        .route(
+            "/api/admin/files",
+            get(crate::handlers::managed_files::list_managed_files),
+        )
+        .route(
+            "/api/admin/files/upload",
+            post(crate::handlers::managed_files::upload_managed_file)
+                .layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+        )
+        .route(
+            "/api/admin/files/{slug}",
+            put(crate::handlers::managed_files::update_managed_file),
+        )
+        .route(
+            "/api/admin/files/{slug}/publish",
+            post(crate::handlers::managed_files::publish_managed_file),
+        )
+        .route(
+            "/api/admin/files/{slug}/versions/{version}",
+            delete(crate::handlers::managed_files::delete_managed_file_version),
         )
         // Admin: Repository access rules (whitelist/blacklist)
         .route(

@@ -6,6 +6,76 @@
 - Windows：x64 和 ARM64
 - Linux：x64 和 ARM64
 
+## 最快上手：安装与使用步骤总结
+
+如果只想快速完成安装并开始使用，请按以下步骤操作；遇到问题时再查看后文对应章节。
+
+### 第 1 步：确认环境并注册账号
+
+1. 执行 `git --version`，确认电脑已经安装 Git。
+2. 在浏览器中打开 <http://117.147.213.234:38080/auth/register>，使用公司企业邮箱注册账号，并保持浏览器登录状态。
+
+### 第 2 步：安装 Git AI
+
+macOS/Linux 在终端执行：
+
+```bash
+curl -fsSL \
+  http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
+  | bash
+```
+
+Windows 在 PowerShell 执行：
+
+```powershell
+irm http://117.147.213.234:38080/worker/releases/latest/download/install.ps1 | iex
+```
+
+安装完成后重新打开终端或 PowerShell，并确认安装成功：
+
+```bash
+git-ai --version
+```
+
+### 第 3 步：登录并授权
+
+```bash
+git-ai login --server http://117.147.213.234:38080
+git-ai whoami
+```
+
+第一条命令会打开浏览器，请登录并确认授权；第二条命令能显示当前账号即表示授权成功。
+
+### 第 4 步：安装并配置编辑器扩展
+
+1. 下载并安装扩展：<http://117.147.213.234:38080/static/downloads/git-ai-extension.vsix>
+2. 在编辑器设置中开启：
+
+```json
+{
+  "gitai.enableCheckpointLogging": true,
+  "gitai.experiments.aiTabTracking": true
+}
+```
+
+使用 Trae 时，还需要在 Hooks 设置中手动开启“已配置的 Hooks”。如果扩展或 Hooks 没有自动生效，请执行：
+
+```bash
+git-ai install-hooks
+```
+
+### 第 5 步：开始使用
+
+无需在每个 Git 仓库中单独初始化。直接使用支持的 AI 工具编辑代码，然后照常执行 `git add`、`git commit` 等 Git 命令；提交时会自动上传 AI 与人工代码归属统计。
+
+查看当前归属统计：
+
+```bash
+git-ai status
+```
+
+至此即可正常使用。需要更新时执行 `git-ai update`，遇到问题时执行 `git-ai debug` 并将输出发给管理员。
+
 
 ## 1. 安装前准备
 
@@ -340,6 +410,5 @@ git-ai debug
 ```
 
 将输出内容、操作系统版本、`git-ai --version` 结果以及报错截图一起发给管理员，可以更快定位问题。
-
 
 

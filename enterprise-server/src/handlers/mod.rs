@@ -12,6 +12,7 @@ pub mod health;
 pub mod jetbrains;
 pub mod lifecycle;
 pub mod login;
+pub mod managed_files;
 pub mod metrics;
 pub mod oauth;
 pub mod release;

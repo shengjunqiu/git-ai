@@ -5,7 +5,7 @@ use axum::response::{Json, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::auth::middleware::{AdminGuard, OptionalAuth};
 use crate::error::AppError;
@@ -223,6 +223,187 @@ pub async fn upload_release_asset(
         "filename": asset.filename,
         "sha256": asset.sha256,
         "size_bytes": asset.size_bytes,
+    })))
+}
+
+const INSTALL_SH_TEMPLATE: &str = include_str!("../../../install.sh");
+const INSTALL_PS1_TEMPLATE: &str = include_str!("../../../install.ps1");
+
+const RELEASE_BINARY_FILES: [&str; 6] = [
+    "git-ai-linux-x64",
+    "git-ai-linux-arm64",
+    "git-ai-windows-x64.exe",
+    "git-ai-windows-arm64.exe",
+    "git-ai-macos-x64",
+    "git-ai-macos-arm64",
+];
+
+const RELEASE_BUNDLE_FILES: [&str; 8] = [
+    "git-ai-linux-x64",
+    "git-ai-linux-arm64",
+    "git-ai-windows-x64.exe",
+    "git-ai-windows-arm64.exe",
+    "git-ai-macos-x64",
+    "git-ai-macos-arm64",
+    "install.sh",
+    "install.ps1",
+];
+
+/// POST /api/admin/releases/publish — Upload, validate, and publish a complete release.
+pub async fn publish_release_bundle(
+    State(state): State<AppState>,
+    _auth: AdminGuard,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, AppError> {
+    let mut version = String::new();
+    let mut promote_to_latest = true;
+    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+        match field_name.as_str() {
+            "version" => {
+                version = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Field error: {}", e)))?;
+            }
+            "promote_to_latest" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Field error: {}", e)))?;
+                promote_to_latest = matches!(value.as_str(), "true" | "1" | "on");
+            }
+            "files" | "file" => {
+                let filename = field
+                    .file_name()
+                    .ok_or_else(|| AppError::BadRequest("Release file needs a filename".into()))?
+                    .to_string();
+                if files.contains_key(&filename) {
+                    return Err(AppError::BadRequest(format!(
+                        "Duplicate release file: {}",
+                        filename
+                    )));
+                }
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("File error: {}", e)))?
+                    .to_vec();
+                files.insert(filename, data);
+            }
+            _ => {}
+        }
+    }
+
+    let version = validate_release_version(&version)?.to_string();
+    if release_channel_version(&state, &version).await?.is_some() {
+        return Err(AppError::Conflict(format!(
+            "Release version {} has already been published",
+            version
+        )));
+    }
+
+    let allowed_files = RELEASE_BINARY_FILES.iter().copied().collect::<HashSet<_>>();
+    let unexpected = files
+        .keys()
+        .filter(|filename| !allowed_files.contains(filename.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Unexpected release files: {}",
+            unexpected.join(", ")
+        )));
+    }
+    let missing = RELEASE_BINARY_FILES
+        .iter()
+        .filter(|filename| !files.contains_key(**filename))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "Missing release files: {}",
+            missing.join(", ")
+        )));
+    }
+    if files.values().any(Vec::is_empty) {
+        return Err(AppError::BadRequest(
+            "Release files must not be empty".into(),
+        ));
+    }
+
+    let mut binary_manifest = String::new();
+    for filename in RELEASE_BINARY_FILES {
+        let data = &files[filename];
+        binary_manifest.push_str(&format!("{}  {}\n", sha256_hex(data), filename));
+    }
+    let embedded_checksums = binary_manifest.trim_end().replace('\n', "|");
+    let release_base_url = state.config.base_url.trim_end_matches('/');
+    let install_sh = render_installer_template(
+        INSTALL_SH_TEMPLATE,
+        &version,
+        &embedded_checksums,
+        release_base_url,
+    );
+    let install_ps1 = render_installer_template(
+        INSTALL_PS1_TEMPLATE,
+        &version,
+        &embedded_checksums,
+        release_base_url,
+    );
+    files.insert("install.sh".into(), install_sh.into_bytes());
+    files.insert("install.ps1".into(), install_ps1.into_bytes());
+
+    validate_pinned_installer(&version, "install.sh", &files["install.sh"])?;
+    validate_pinned_installer(&version, "install.ps1", &files["install.ps1"])?;
+
+    let mut manifest = String::new();
+    for filename in RELEASE_BUNDLE_FILES {
+        manifest.push_str(&format!("{}  {}\n", sha256_hex(&files[filename]), filename));
+    }
+    let manifest_bytes = manifest.into_bytes();
+    let manifest_checksum = sha256_hex(&manifest_bytes);
+
+    for filename in RELEASE_BUNDLE_FILES {
+        store_release_asset(
+            &state,
+            &version,
+            Some(&version),
+            filename,
+            None,
+            &files[filename],
+        )
+        .await?;
+    }
+    store_release_asset(
+        &state,
+        &version,
+        Some(&version),
+        "SHA256SUMS",
+        Some(&manifest_checksum),
+        &manifest_bytes,
+    )
+    .await?;
+
+    publish_release_channel(&state, &version, &version, &manifest_checksum).await?;
+    if promote_to_latest {
+        publish_release_channel(&state, "latest", &version, &manifest_checksum).await?;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "version": version,
+        "version_channel": version,
+        "latest_updated": promote_to_latest,
+        "checksum": manifest_checksum,
+        "asset_count": RELEASE_BUNDLE_FILES.len() + 1,
+        "install_url": format!("/worker/releases/{}/download/install.sh", version),
     })))
 }
 
@@ -493,6 +674,85 @@ fn optional_text(value: &str) -> Option<&str> {
     } else {
         Some(value)
     }
+}
+
+fn validate_release_version(value: &str) -> Result<&str, AppError> {
+    let value = require_text(value, "version")?;
+    if matches!(value, "." | "..")
+        || value.len() > 80
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '+'))
+    {
+        return Err(AppError::BadRequest(
+            "version contains invalid characters".into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_pinned_installer(version: &str, filename: &str, data: &[u8]) -> Result<(), AppError> {
+    let content = std::str::from_utf8(data)
+        .map_err(|_| AppError::BadRequest(format!("{} is not valid UTF-8", filename)))?;
+    let valid = match filename {
+        "install.sh" => {
+            content.contains(&format!("PINNED_VERSION=\"{}\"", version))
+                && content.contains(&format!("ENTERPRISE_RELEASE_CHANNEL=\"{}\"", version))
+        }
+        "install.ps1" => {
+            content.contains(&format!("$PinnedVersion = '{}'", version))
+                && content.contains(&format!("$EnterpriseReleaseChannel = '{}'", version))
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(AppError::BadRequest(format!(
+            "{} is not pinned to release channel {}",
+            filename, version
+        )));
+    }
+    Ok(())
+}
+
+fn render_installer_template(
+    template: &str,
+    version: &str,
+    embedded_checksums: &str,
+    release_base_url: &str,
+) -> String {
+    template
+        .replace(
+            "PINNED_VERSION=\"__VERSION_PLACEHOLDER__\"",
+            &format!("PINNED_VERSION=\"{}\"", version),
+        )
+        .replace(
+            "EMBEDDED_CHECKSUMS=\"__CHECKSUMS_PLACEHOLDER__\"",
+            &format!("EMBEDDED_CHECKSUMS=\"{}\"", embedded_checksums),
+        )
+        .replace(
+            "ENTERPRISE_RELEASE_BASE_URL=\"__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__\"",
+            &format!("ENTERPRISE_RELEASE_BASE_URL=\"{}\"", release_base_url),
+        )
+        .replace(
+            "ENTERPRISE_RELEASE_CHANNEL=\"__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__\"",
+            &format!("ENTERPRISE_RELEASE_CHANNEL=\"{}\"", version),
+        )
+        .replace(
+            "$PinnedVersion = '__VERSION_PLACEHOLDER__'",
+            &format!("$PinnedVersion = '{}'", version),
+        )
+        .replace(
+            "$EmbeddedChecksums = '__CHECKSUMS_PLACEHOLDER__'",
+            &format!("$EmbeddedChecksums = '{}'", embedded_checksums),
+        )
+        .replace(
+            "$EnterpriseReleaseBaseUrl = '__ENTERPRISE_RELEASE_BASE_URL_PLACEHOLDER__'",
+            &format!("$EnterpriseReleaseBaseUrl = '{}'", release_base_url),
+        )
+        .replace(
+            "$EnterpriseReleaseChannel = '__ENTERPRISE_RELEASE_CHANNEL_PLACEHOLDER__'",
+            &format!("$EnterpriseReleaseChannel = '{}'", version),
+        )
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -885,6 +1145,46 @@ mod tests {
             manifest.push_str(&format!("{}  {}\n", sha256_hex(data), filename));
         }
         manifest.into_bytes()
+    }
+
+    #[test]
+    fn release_bundle_validates_version_and_pinned_installers() {
+        assert!(validate_release_version("..").is_err());
+        assert!(validate_release_version("1.3.4").is_ok());
+
+        let shell = br#"PINNED_VERSION="1.3.4"
+ENTERPRISE_RELEASE_CHANNEL="1.3.4""#;
+        let powershell = br#"$PinnedVersion = '1.3.4'
+$EnterpriseReleaseChannel = '1.3.4'"#;
+        assert!(validate_pinned_installer("1.3.4", "install.sh", shell).is_ok());
+        assert!(validate_pinned_installer("1.3.4", "install.ps1", powershell).is_ok());
+        assert!(validate_pinned_installer("1.3.5", "install.sh", shell).is_err());
+
+        let checksums = "abc  git-ai-linux-x64|def  git-ai-macos-arm64";
+        let generated_shell = render_installer_template(
+            INSTALL_SH_TEMPLATE,
+            "1.3.4",
+            checksums,
+            "http://example.test:38080",
+        );
+        assert!(generated_shell.contains("PINNED_VERSION=\"1.3.4\""));
+        assert!(generated_shell
+            .contains("EMBEDDED_CHECKSUMS=\"abc  git-ai-linux-x64|def  git-ai-macos-arm64\""));
+        assert!(
+            generated_shell.contains("ENTERPRISE_RELEASE_BASE_URL=\"http://example.test:38080\"")
+        );
+        assert!(generated_shell.contains("ENTERPRISE_RELEASE_CHANNEL=\"1.3.4\""));
+
+        let generated_powershell = render_installer_template(
+            INSTALL_PS1_TEMPLATE,
+            "1.3.4",
+            checksums,
+            "http://example.test:38080",
+        );
+        assert!(generated_powershell.contains("$PinnedVersion = '1.3.4'"));
+        assert!(generated_powershell
+            .contains("$EnterpriseReleaseBaseUrl = 'http://example.test:38080'"));
+        assert!(generated_powershell.contains("$EnterpriseReleaseChannel = '1.3.4'"));
     }
 
     async fn download_asset(
