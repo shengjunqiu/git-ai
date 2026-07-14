@@ -53,7 +53,11 @@ impl CallbackListener {
                 Ok((stream, _addr)) => match handle_stream(stream) {
                     Ok(Some(response)) => return Ok(response),
                     Ok(None) => {}
-                    Err(err) => return Err(err),
+                    // Browsers, endpoint security software, and port checks may
+                    // probe a newly opened loopback port before the real OAuth
+                    // redirect arrives. A malformed probe must not terminate
+                    // the login flow.
+                    Err(_) => {}
                 },
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -381,6 +385,34 @@ mod tests {
 
         let browser_response = requester.join().unwrap();
         assert!(browser_response.contains("授权未完成"));
+    }
+
+    #[test]
+    fn callback_ignores_empty_probe_before_valid_request() {
+        let listener = CallbackListener::bind().unwrap();
+        let redirect_uri = listener.redirect_uri().to_string();
+        let requester = thread::spawn(move || {
+            let parsed = Url::parse(&redirect_uri).unwrap();
+            let addr = format!("127.0.0.1:{}", parsed.port().unwrap());
+            drop(TcpStream::connect(&addr).unwrap());
+
+            thread::sleep(Duration::from_millis(50));
+            request_callback(&redirect_uri, "/callback?code=abc123&state=state123")
+        });
+
+        let response = listener
+            .wait_for_callback(Duration::from_secs(2))
+            .expect("valid callback should arrive after an empty probe");
+
+        match response {
+            CallbackResponse::Authorized { code, state } => {
+                assert_eq!(code, "abc123");
+                assert_eq!(state, "state123");
+            }
+            CallbackResponse::Error { .. } => panic!("expected authorized callback"),
+        }
+
+        assert!(requester.join().unwrap().contains("授权成功"));
     }
 
     #[test]

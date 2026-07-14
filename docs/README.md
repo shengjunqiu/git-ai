@@ -31,6 +31,7 @@
 ## 开发计划 `plans/`
 
 - [developer-registration-and-cli-auth-plan.md](plans/developer-registration-and-cli-auth-plan.md) — 开发者注册登录与 CLI 授权任务文档。
+- [windows-compatibility-task-plan.md](plans/windows-compatibility-task-plan.md) — Windows 兼容性改进的分阶段执行与验收清单。
 
 ## 规范与策略 `reference/`
 

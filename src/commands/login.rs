@@ -208,11 +208,7 @@ fn open_browser(url: &str) -> Result<(), String> {
     };
 
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "start", "", url]);
-        cmd
-    };
+    let mut cmd = windows_browser_command(url);
 
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -220,6 +216,13 @@ fn open_browser(url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_browser_command(url: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("rundll32.exe");
+    cmd.arg("url.dll,FileProtocolHandler").arg(url);
+    cmd
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -416,6 +419,22 @@ mod tests {
             Some("S256")
         );
         assert_eq!(pairs.get("state").map(String::as_str), Some("state"));
+    }
+
+    #[test]
+    fn windows_browser_command_passes_authorization_url_as_one_argument() {
+        let url = "https://git-ai.example.com/auth/cli/authorize?client_id=git-ai-cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A12345%2Fcallback&state=state";
+        let command = windows_browser_command(url);
+        let args: Vec<_> = command.get_args().collect();
+
+        assert_eq!(command.get_program(), std::ffi::OsStr::new("rundll32.exe"));
+        assert_eq!(
+            args,
+            vec![
+                std::ffi::OsStr::new("url.dll,FileProtocolHandler"),
+                std::ffi::OsStr::new(url),
+            ]
+        );
     }
 
     #[test]
