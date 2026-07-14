@@ -205,7 +205,6 @@ tr:hover { background: var(--bg-card-hover); }
 .help-hero > * { position: relative; z-index: 1; }
 .help-eyebrow { margin-bottom: 0.45rem; color: var(--accent); font-size: 0.72rem; font-weight: 750;
                 letter-spacing: 0.12em; text-transform: uppercase; }
-.help-hero h2 { max-width: 720px; margin-bottom: 0.7rem; font-size: 1.45rem; line-height: 1.35; }
 .help-hero p { max-width: 760px; color: var(--text-secondary); font-size: 0.86rem; line-height: 1.75; }
 .help-platforms { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; flex-shrink: 0; }
 .help-platforms span { padding: 0.45rem 0.7rem; border: 1px solid rgba(148,163,184,0.18); border-radius: 8px;
@@ -251,12 +250,14 @@ tr:hover { background: var(--bg-card-hover); }
                           background: #172033; font-size: 0.65rem; cursor: pointer; transition: all 0.15s; }
 .help-code-block button:hover { color: var(--accent); border-color: rgba(129,140,248,0.45); }
 .help-note { margin-top: 0.55rem; color: var(--text-muted) !important; font-size: 0.74rem !important; }
-.help-os-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; }
-.help-os-card { min-width: 0; padding: 1.05rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 11px;
+.help-os-grid { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
+.help-os-card { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 1.15rem; min-width: 0;
+                padding: 1.05rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 11px;
                 background: rgba(15,23,42,0.3); }
-.help-os-card > p { color: var(--text-secondary); font-size: 0.75rem; line-height: 1.6; }
-.help-os-title { display: flex; align-items: center; gap: 0.55rem; padding-bottom: 0.8rem; margin-bottom: 0.8rem;
-                 border-bottom: 1px solid rgba(148,163,184,0.13); }
+.help-os-body { min-width: 0; }
+.help-os-body > p { color: var(--text-secondary); font-size: 0.75rem; line-height: 1.6; }
+.help-os-title { display: flex; align-items: flex-start; gap: 0.55rem; padding-right: 1rem;
+                 border-right: 1px solid rgba(148,163,184,0.13); }
 .help-os-title span { color: var(--accent); font-size: 1.05rem; }
 .help-os-title h3 { font-size: 0.92rem; }
 .help-command-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem; margin-top: 0.9rem; }
@@ -288,7 +289,6 @@ tr:hover { background: var(--bg-card-hover); }
     .help-layout { grid-template-columns: 1fr; }
     .help-toc { position: static; flex-direction: row; flex-wrap: wrap; }
     .help-toc-title { width: 100%; }
-    .help-os-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
     .sidebar { display: none; }
@@ -298,6 +298,8 @@ tr:hover { background: var(--bg-card-hover); }
     .help-hero { align-items: flex-start; flex-direction: column; padding: 1.35rem; }
     .help-platforms { justify-content: flex-start; }
     .help-card { padding: 1.15rem; }
+    .help-os-card { grid-template-columns: 1fr; gap: 0.8rem; }
+    .help-os-title { padding: 0 0 0.75rem; border-right: 0; border-bottom: 1px solid rgba(148,163,184,0.13); }
     .help-command-row { grid-template-columns: 1fr; }
     .help-check-item { padding-left: 1.1rem; padding-top: 3.35rem; }
 }

@@ -307,8 +307,8 @@
             <div id="section-help" class="section">
                 <div class="page-header help-page-header">
                     <div>
-                        <div class="page-title">Git AI 安装与使用指南</div>
-                        <div class="page-subtitle">从环境检查、客户端安装到编辑器集成，一步完成企业版 Git AI 配置</div>
+                        <div class="page-title">安装与使用指南</div>
+                        <div class="page-subtitle">从环境检查、客户端安装到编辑器集成，完成配置</div>
                     </div>
                     <span class="help-version-badge">企业版 CLI</span>
                 </div>
@@ -316,12 +316,11 @@
                 <div class="help-hero">
                     <div>
                         <div class="help-eyebrow">快速开始</div>
-                        <h2>让每位开发者都能正确安装并使用 Git AI</h2>
                         <p>支持 macOS（Apple Silicon / Intel）、Windows（x64 / ARM64）和 Linux（x64 / ARM64）。安装前请确认电脑已安装 Git，并能访问企业服务器。</p>
                     </div>
                     <div class="help-platforms" aria-label="支持的平台">
-                        <span> macOS</span>
                         <span>⊞ Windows</span>
+                        <span> macOS</span>
                         <span>◉ Linux</span>
                     </div>
                 </div>
@@ -375,31 +374,37 @@
                             </div>
                             <div class="help-os-grid">
                                 <article class="help-os-card">
+                                    <div class="help-os-title"><span>⊞</span><h3>Windows</h3></div>
+                                    <div class="help-os-body">
+                                        <p>打开 PowerShell，执行：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>irm http://117.147.213.234:38080/worker/releases/latest/download/install.ps1 | iex</code></pre></div>
+                                        <p>如 PowerShell 禁止运行脚本，先为当前窗口临时放行：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code></pre></div>
+                                        <p class="help-note">安装后关闭并重新打开 PowerShell，再运行 <code>git-ai --version</code>。</p>
+                                    </div>
+                                </article>
+                                <article class="help-os-card">
                                     <div class="help-os-title"><span></span><h3>macOS</h3></div>
-                                    <p>打开“终端”，执行：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
+                                    <div class="help-os-body">
+                                        <p>打开“终端”，执行：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
   http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
   | bash</code></pre></div>
-                                    <p>关闭并重新打开终端，然后检查版本：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version</code></pre></div>
+                                        <p>关闭并重新打开终端，然后检查版本：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version</code></pre></div>
+                                    </div>
                                 </article>
                                 <article class="help-os-card">
                                     <div class="help-os-title"><span>◉</span><h3>Linux</h3></div>
-                                    <p>打开终端，执行：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
+                                    <div class="help-os-body">
+                                        <p>打开终端，执行：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
   http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
   | bash</code></pre></div>
-                                    <p>重新打开终端，或刷新当前窗口的 PATH：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
+                                        <p>重新打开终端，或刷新当前窗口的 PATH：</p>
+                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
 git-ai --version</code></pre></div>
-                                </article>
-                                <article class="help-os-card">
-                                    <div class="help-os-title"><span>⊞</span><h3>Windows</h3></div>
-                                    <p>打开 PowerShell，执行：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>irm http://117.147.213.234:38080/worker/releases/latest/download/install.ps1 | iex</code></pre></div>
-                                    <p>如 PowerShell 禁止运行脚本，先为当前窗口临时放行：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code></pre></div>
-                                    <p class="help-note">安装后关闭并重新打开 PowerShell，再运行 <code>git-ai --version</code>。</p>
+                                    </div>
                                 </article>
                             </div>
                         </section>
