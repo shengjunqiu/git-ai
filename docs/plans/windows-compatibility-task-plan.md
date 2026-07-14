@@ -516,10 +516,26 @@ git commit -m "Secure Windows credential storage"
 
 验收标准：
 
-- [ ] control 和 trace pipe 创建时已经带有限制性 ACL。
+- [x] control 和 trace pipe 创建时已经带有限制性 ACL。
 - [ ] 同一用户的 CLI、Git 代理和 Hook 可以正常连接。
 - [ ] 其他普通 Windows 用户不能发送 control request 或 trace payload。
 - [ ] daemon 重启后 ACL 仍然正确。
+
+### 阶段 4.1 执行记录（2026-07-15）
+
+- 已确认旧 `named_pipe 0.4.1` 服务端创建 API 固定传入空 `SECURITY_ATTRIBUTES`，无法配置 DACL。
+- 服务端改用现有 `interprocess 2.4` 的 Windows named pipe listener；创建 control/trace pipe 时传入受保护 DACL，仅允许当前进程用户 SID、SYSTEM 和 Administrators，并保持拒绝远程客户端。
+- listener 初次创建仍使用 `FILE_FLAG_FIRST_PIPE_INSTANCE`；后续 worker 共享 listener，由它创建相同安全描述符的管道实例。
+- 客户端继续使用兼容的 byte-mode named pipe 协议，连接超时行为不变。
+
+验证结果：
+
+- `task lint`：通过。
+- `task build`：通过。
+- SID 解析测试覆盖 Azure AD 风格、非 ASCII 用户名和畸形输出。
+- `cargo check --target x86_64-pc-windows-msvc`：`interprocess`、`named_pipe` 等 Windows 依赖检查通过，随后仍因 macOS 主机缺少 MSVC C 头文件而在 bundled SQLite 的 `stdlib.h` 处停止。
+
+阶段 4.1 状态：**代码实现和本机检查完成；同用户连接、跨用户拒绝及 daemon 重启后的 ACL 仍需在原生 Windows 验收**。
 
 ### Task 4.2：增加服务端读超时、帧限制和可靠退出
 

@@ -35,10 +35,12 @@ use crate::{
 #[cfg(not(windows))]
 use interprocess::local_socket::{ListenerOptions, prelude::*};
 #[cfg(windows)]
-use named_pipe::{
-    ConnectingServer as WindowsConnectingServer, OpenMode as WindowsPipeOpenMode,
-    PipeClient as WindowsPipeClient, PipeOptions as WindowsPipeOptions,
+use interprocess::os::windows::{
+    named_pipe::{PipeListener, PipeListenerOptions, pipe_mode},
+    security_descriptor::SecurityDescriptor,
 };
+#[cfg(windows)]
+use named_pipe::PipeClient as WindowsPipeClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -51,6 +53,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot};
 use tokio::time::Duration;
+#[cfg(windows)]
+use widestring::U16CString;
 
 mod client;
 mod runtime;
@@ -6922,29 +6926,18 @@ fn control_listener_loop_actor(
     #[cfg(windows)]
     {
         let mut workers = Vec::new();
-        let first_connecting = windows_pipe_connecting_server(&control_socket_path, true)?;
-        {
+        let listener = Arc::new(windows_pipe_listener(
+            &control_socket_path,
+            WINDOWS_CONTROL_PIPE_WORKERS,
+        )?);
+        for _ in 0..WINDOWS_CONTROL_PIPE_WORKERS {
             let path = control_socket_path.clone();
             let coord = coordinator.clone();
             let handle = runtime_handle.clone();
+            let listener = listener.clone();
             workers.push(std::thread::spawn(move || {
                 let result =
-                    windows_control_pipe_worker_loop(path, first_connecting, coord.clone(), handle);
-                if let Err(error) = &result {
-                    tracing::error!(%error, "control worker error");
-                    coord.request_shutdown();
-                }
-                result
-            }));
-        }
-        for _ in 1..WINDOWS_CONTROL_PIPE_WORKERS {
-            let path = control_socket_path.clone();
-            let coord = coordinator.clone();
-            let handle = runtime_handle.clone();
-            let connecting = windows_pipe_connecting_server(&path, false)?;
-            workers.push(std::thread::spawn(move || {
-                let result =
-                    windows_control_pipe_worker_loop(path, connecting, coord.clone(), handle);
+                    windows_control_pipe_worker_loop(path, listener, coord.clone(), handle);
                 if let Err(error) = &result {
                     tracing::error!(%error, "control worker error");
                     coord.request_shutdown();
@@ -6971,21 +6964,93 @@ fn control_listener_loop_actor(
 }
 
 #[cfg(windows)]
-fn windows_pipe_connecting_server(
+type WindowsPipeListener = PipeListener<pipe_mode::Bytes, pipe_mode::Bytes>;
+
+#[cfg(windows)]
+fn windows_pipe_listener(
     pipe_path: &Path,
-    first_instance: bool,
-) -> Result<WindowsConnectingServer, GitAiError> {
-    let mut options = WindowsPipeOptions::new(pipe_path.as_os_str());
-    options
-        .first(first_instance)
-        .open_mode(WindowsPipeOpenMode::Duplex);
-    options.single().map_err(|e| {
+    worker_count: usize,
+) -> Result<WindowsPipeListener, GitAiError> {
+    let sid = windows_current_user_sid()?;
+    let sddl = U16CString::from_str(format!("D:P(A;;GA;;;{})(A;;GA;;;SY)(A;;GA;;;BA)", sid))
+        .map_err(|e| {
+            GitAiError::Generic(format!("invalid daemon pipe security descriptor: {}", e))
+        })?;
+    let security_descriptor = SecurityDescriptor::deserialize(&sddl).map_err(|e| {
         GitAiError::Generic(format!(
-            "failed binding windows daemon pipe {}: {}",
-            pipe_path.display(),
+            "failed creating daemon pipe security descriptor: {}",
             e
         ))
-    })
+    })?;
+    // A listener keeps one unconnected instance ready while up to
+    // `worker_count` accepted streams are active.
+    let instance_limit = u8::try_from(worker_count.saturating_add(1))
+        .ok()
+        .and_then(std::num::NonZeroU8::new)
+        .ok_or_else(|| GitAiError::Generic("invalid Windows pipe worker count".to_string()))?;
+
+    PipeListenerOptions::new()
+        .path(pipe_path)
+        .instance_limit(Some(instance_limit))
+        .input_buffer_size_hint(65_536)
+        .output_buffer_size_hint(65_536)
+        .security_descriptor(Some(security_descriptor))
+        .create_duplex::<pipe_mode::Bytes>()
+        .map_err(|e| {
+            GitAiError::Generic(format!(
+                "failed binding windows daemon pipe {}: {}",
+                pipe_path.display(),
+                e
+            ))
+        })
+}
+
+#[cfg(windows)]
+fn windows_current_user_sid() -> Result<String, GitAiError> {
+    let system_root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| GitAiError::Generic("SystemRoot is not set".to_string()))?;
+    let whoami = PathBuf::from(system_root)
+        .join("System32")
+        .join("whoami.exe");
+    let output = std::process::Command::new(whoami)
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .map_err(|e| GitAiError::Generic(format!("failed determining current user SID: {}", e)))?;
+    if !output.status.success() {
+        return Err(GitAiError::Generic(
+            "failed determining current user SID".to_string(),
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_windows_whoami_sid(&text)
+        .ok_or_else(|| GitAiError::Generic("could not parse current user SID".to_string()))
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_whoami_sid(text: &str) -> Option<String> {
+    text.split('"')
+        .nth(3)
+        .filter(|value| value.starts_with("S-"))
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod windows_pipe_security_tests {
+    use super::parse_windows_whoami_sid;
+
+    #[test]
+    fn parses_sid_without_depending_on_account_name() {
+        let output = "\"AzureAD\\测试用户\",\"S-1-12-1-111-222-333-444\"\r\n";
+        assert_eq!(
+            parse_windows_whoami_sid(output).as_deref(),
+            Some("S-1-12-1-111-222-333-444")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_identity_output() {
+        assert_eq!(parse_windows_whoami_sid("unexpected output"), None);
+    }
 }
 
 #[cfg(windows)]
@@ -6998,12 +7063,12 @@ fn wake_windows_pipe_workers(pipe_path: &Path, worker_count: usize) {
 #[cfg(windows)]
 fn windows_control_pipe_worker_loop(
     control_socket_path: PathBuf,
-    mut connecting: WindowsConnectingServer,
+    listener: Arc<WindowsPipeListener>,
     coordinator: Arc<ActorDaemonCoordinator>,
     runtime_handle: tokio::runtime::Handle,
 ) -> Result<(), GitAiError> {
     loop {
-        let mut server = connecting.wait().map_err(|e| {
+        let mut server = listener.accept().map_err(|e| {
             GitAiError::Generic(format!(
                 "failed accepting control pipe {}: {}",
                 control_socket_path.display(),
@@ -7012,7 +7077,6 @@ fn windows_control_pipe_worker_loop(
         })?;
 
         if coordinator.is_shutting_down() {
-            let _ = server.disconnect();
             break;
         }
 
@@ -7026,14 +7090,6 @@ fn windows_control_pipe_worker_loop(
                 tracing::debug!(%e, "control connection error");
             }
         }
-
-        connecting = server.disconnect().map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed recycling control pipe {}: {}",
-                control_socket_path.display(),
-                e
-            ))
-        })?;
     }
 
     Ok(())
@@ -7117,25 +7173,16 @@ fn trace_listener_loop_actor(
     #[cfg(windows)]
     {
         let mut workers = Vec::new();
-        let first_connecting = windows_pipe_connecting_server(&trace_socket_path, true)?;
-        {
+        let listener = Arc::new(windows_pipe_listener(
+            &trace_socket_path,
+            WINDOWS_TRACE_PIPE_WORKERS,
+        )?);
+        for _ in 0..WINDOWS_TRACE_PIPE_WORKERS {
             let path = trace_socket_path.clone();
             let coord = coordinator.clone();
+            let listener = listener.clone();
             workers.push(std::thread::spawn(move || {
-                let result = windows_trace_pipe_worker_loop(path, first_connecting, coord.clone());
-                if let Err(error) = &result {
-                    tracing::error!(%error, "trace worker error");
-                    coord.request_shutdown();
-                }
-                result
-            }));
-        }
-        for _ in 1..WINDOWS_TRACE_PIPE_WORKERS {
-            let path = trace_socket_path.clone();
-            let coord = coordinator.clone();
-            let connecting = windows_pipe_connecting_server(&path, false)?;
-            workers.push(std::thread::spawn(move || {
-                let result = windows_trace_pipe_worker_loop(path, connecting, coord.clone());
+                let result = windows_trace_pipe_worker_loop(path, listener, coord.clone());
                 if let Err(error) = &result {
                     tracing::error!(%error, "trace worker error");
                     coord.request_shutdown();
@@ -7164,11 +7211,11 @@ fn trace_listener_loop_actor(
 #[cfg(windows)]
 fn windows_trace_pipe_worker_loop(
     trace_socket_path: PathBuf,
-    mut connecting: WindowsConnectingServer,
+    listener: Arc<WindowsPipeListener>,
     coordinator: Arc<ActorDaemonCoordinator>,
 ) -> Result<(), GitAiError> {
     loop {
-        let mut server = connecting.wait().map_err(|e| {
+        let mut server = listener.accept().map_err(|e| {
             GitAiError::Generic(format!(
                 "failed accepting trace pipe {}: {}",
                 trace_socket_path.display(),
@@ -7177,7 +7224,6 @@ fn windows_trace_pipe_worker_loop(
         })?;
 
         if coordinator.is_shutting_down() {
-            let _ = server.disconnect();
             break;
         }
 
@@ -7187,14 +7233,6 @@ fn windows_trace_pipe_worker_loop(
                 tracing::debug!(%e, "trace connection error");
             }
         }
-
-        connecting = server.disconnect().map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed recycling trace pipe {}: {}",
-                trace_socket_path.display(),
-                e
-            ))
-        })?;
     }
 
     Ok(())
