@@ -124,6 +124,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "030_promote_linewell_top_level_departments",
         include_str!("../../migrations/030_promote_linewell_top_level_departments.sql"),
     ),
+    (
+        "031_managed_files",
+        include_str!("../../migrations/031_managed_files.sql"),
+    ),
 ];
 
 /// Run all database migrations
@@ -283,6 +287,14 @@ mod tests {
         .fetch_one(&test_pool)
         .await?;
         assert!(dirty_scopes_table_exists);
+
+        let managed_file_tables_exist: bool = sqlx::query_scalar(
+            "SELECT to_regclass('public.managed_files') IS NOT NULL
+                AND to_regclass('public.managed_file_versions') IS NOT NULL",
+        )
+        .fetch_one(&test_pool)
+        .await?;
+        assert!(managed_file_tables_exist);
 
         let dirty_claim_index_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(
