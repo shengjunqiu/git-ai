@@ -50,7 +50,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot};
 use tokio::time::Duration;
 #[cfg(windows)]
@@ -100,6 +100,8 @@ const DAEMON_CHECKPOINT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_CONTROL_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACE_FRAME_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(windows)]
+const WINDOWS_PIPE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const WINDOWS_TRACE_PIPE_WORKERS: usize = 16;
 #[cfg(windows)]
@@ -3162,10 +3164,29 @@ fn read_json_line<R: BufRead>(
     reader: &mut R,
     max_bytes: usize,
     frame_kind: &str,
+    read_timeout: Option<Duration>,
 ) -> Result<Option<String>, GitAiError> {
     let mut bytes = Vec::new();
+    let started = Instant::now();
     loop {
-        let buffer = reader.fill_buf()?;
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let Some(timeout) = read_timeout else {
+                    return Err(error.into());
+                };
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(GitAiError::Generic(format!(
+                        "timed out reading {} frame after {:?}",
+                        frame_kind, timeout
+                    )));
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if buffer.is_empty() {
             break;
         }
@@ -3193,16 +3214,54 @@ fn read_json_line<R: BufRead>(
         .map_err(|_| GitAiError::Generic(format!("{} frame is not valid UTF-8", frame_kind)))
 }
 
+fn daemon_frame_read_timeout() -> Option<Duration> {
+    #[cfg(windows)]
+    {
+        Some(WINDOWS_PIPE_READ_TIMEOUT)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod daemon_frame_tests {
     use super::read_json_line;
-    use std::io::{BufReader, Cursor};
+    use std::io::{self, BufRead, BufReader, Cursor, Read};
+    use std::time::Duration;
+
+    struct StalledReader {
+        partial_available: bool,
+    }
+
+    impl Read for StalledReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
+        }
+    }
+
+    impl BufRead for StalledReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.partial_available {
+                Ok(b"{")
+            } else {
+                Err(io::Error::from(io::ErrorKind::WouldBlock))
+            }
+        }
+
+        fn consume(&mut self, amount: usize) {
+            if amount > 0 {
+                self.partial_available = false;
+            }
+        }
+    }
 
     #[test]
     fn reads_frame_at_size_limit() {
         let mut reader = BufReader::new(Cursor::new(b"1234\n"));
         assert_eq!(
-            read_json_line(&mut reader, 5, "control").unwrap(),
+            read_json_line(&mut reader, 5, "control", None).unwrap(),
             Some("1234\n".to_string())
         );
     }
@@ -3210,7 +3269,7 @@ mod daemon_frame_tests {
     #[test]
     fn rejects_frame_over_size_limit() {
         let mut reader = BufReader::new(Cursor::new(b"12345\n"));
-        let error = read_json_line(&mut reader, 5, "trace").unwrap_err();
+        let error = read_json_line(&mut reader, 5, "trace", None).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -3222,9 +3281,33 @@ mod daemon_frame_tests {
     fn reads_final_frame_without_newline() {
         let mut reader = BufReader::new(Cursor::new(b"{}"));
         assert_eq!(
-            read_json_line(&mut reader, 2, "control").unwrap(),
+            read_json_line(&mut reader, 2, "control", None).unwrap(),
             Some("{}".to_string())
         );
+    }
+
+    #[test]
+    fn times_out_empty_nonblocking_connection() {
+        let mut reader = StalledReader {
+            partial_available: false,
+        };
+        let error = read_json_line(&mut reader, 128, "control", Some(Duration::from_millis(15)))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("timed out reading control frame")
+        );
+    }
+
+    #[test]
+    fn times_out_partial_frame_without_newline() {
+        let mut reader = StalledReader {
+            partial_available: true,
+        };
+        let error =
+            read_json_line(&mut reader, 128, "trace", Some(Duration::from_millis(15))).unwrap_err();
+        assert!(error.to_string().contains("timed out reading trace frame"));
     }
 }
 
@@ -7138,6 +7221,13 @@ fn windows_control_pipe_worker_loop(
                 e
             ))
         })?;
+        server.set_nonblocking(true).map_err(|e| {
+            GitAiError::Generic(format!(
+                "failed configuring control pipe {} read timeout: {}",
+                control_socket_path.display(),
+                e
+            ))
+        })?;
 
         if coordinator.is_shutting_down() {
             break;
@@ -7173,7 +7263,12 @@ fn handle_control_connection_actor_reader<R: Read + Write>(
     coordinator: Arc<ActorDaemonCoordinator>,
     runtime_handle: tokio::runtime::Handle,
 ) -> Result<(), GitAiError> {
-    while let Some(line) = read_json_line(reader, MAX_CONTROL_FRAME_BYTES, "control")? {
+    while let Some(line) = read_json_line(
+        reader,
+        MAX_CONTROL_FRAME_BYTES,
+        "control",
+        daemon_frame_read_timeout(),
+    )? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -7285,6 +7380,13 @@ fn windows_trace_pipe_worker_loop(
                 e
             ))
         })?;
+        server.set_nonblocking(true).map_err(|e| {
+            GitAiError::Generic(format!(
+                "failed configuring trace pipe {} read timeout: {}",
+                trace_socket_path.display(),
+                e
+            ))
+        })?;
 
         if coordinator.is_shutting_down() {
             break;
@@ -7315,7 +7417,12 @@ fn handle_trace_connection_actor_reader<R: Read>(
     coordinator: Arc<ActorDaemonCoordinator>,
 ) -> Result<(), GitAiError> {
     let mut observed_roots = std::collections::BTreeSet::new();
-    while let Some(line) = read_json_line(reader, MAX_TRACE_FRAME_BYTES, "trace")? {
+    while let Some(line) = read_json_line(
+        reader,
+        MAX_TRACE_FRAME_BYTES,
+        "trace",
+        daemon_frame_read_timeout(),
+    )? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

@@ -576,8 +576,8 @@ git-ai daemon shutdown
 
 验收标准：
 
-- [ ] 恶意或异常客户端不能永久占用 worker。
-- [ ] graceful shutdown 不需要依靠最终强杀才能完成。
+- [x] 恶意或异常客户端不能永久占用 worker。
+- [x] graceful shutdown 不需要依靠最终强杀才能完成。
 - [ ] 合法的大型 checkpoint 不会被错误截断。
 - [ ] Windows daemon、wrapper-daemon CI 均通过。
 
@@ -585,8 +585,9 @@ git-ai daemon shutdown
 
 - control frame 上限明确为 16 MiB，为大型 checkpoint 请求保留余量。
 - trace frame 上限明确为 8 MiB；读取过程按块累计并在越界时立即断开，不再通过无限制 `read_line()` 扩张内存。
-- 已覆盖“刚好达到上限”“超过上限”“EOF 前没有换行”三类边界，`cargo test daemon_frame_tests --lib` 通过（3 tests）。
-- Windows 已连接管道读取超时、卡住连接的 shutdown 取消和 worker 耗尽恢复测试仍待下一步完成。
+- Windows 接受连接后切换为非阻塞读取；空连接或半行 JSON 在 5 秒后断开并回收 worker，因此 shutdown 不会无限等待已连接客户端。
+- 已覆盖“刚好达到上限”“超过上限”“EOF 前没有换行”“空连接超时”和“半行超时”五类边界，`cargo test daemon_frame_tests --lib` 通过（5 tests）。
+- Windows worker 耗尽恢复、合法大型 checkpoint 和 wrapper-daemon CI 仍待原生 Windows 验收。
 
 提交建议：
 
