@@ -1,7 +1,7 @@
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, post, put};
+use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -35,6 +35,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_headers(Any);
 
     Router::new()
+        .route("/", get(crate::handlers::dashboard::dashboard_root))
         // Health checks
         .route("/health", get(crate::handlers::health::health_check))
         .route("/ready", get(crate::handlers::health::readiness_check))

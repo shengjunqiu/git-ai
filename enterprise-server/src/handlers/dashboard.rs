@@ -21,6 +21,11 @@ const TREND_DAY_BUCKET_LIMIT: i64 = 366;
 const TREND_WEEK_BUCKET_LIMIT: i64 = 260;
 const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
 
+/// GET / — Redirect to the dashboard entry point.
+pub async fn dashboard_root() -> Redirect {
+    Redirect::to("/me")
+}
+
 /// GET /me — Dashboard home page
 pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
     // If not authenticated, redirect to login page
@@ -2828,6 +2833,14 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn dashboard_root_redirects_to_me() {
+        let response = dashboard_root().await.into_response();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/me");
+    }
 
     #[test]
     fn parse_epoch_seconds_param_accepts_rfc3339() {

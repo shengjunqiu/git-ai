@@ -29,6 +29,20 @@ function fmtTimeAgo(value) {
 // --- Auto refresh ---
 let refreshInterval = null;
 const AUTO_REFRESH_MS = 60000; // 60 seconds
+const DASHBOARD_DEFAULT_SECTION = 'overview';
+const DASHBOARD_SECTIONS = [
+    'overview',
+    'trends',
+    'organizations',
+    'departments',
+    'developers',
+    'projects',
+    'tools',
+    'users',
+    'apikeys',
+    'help',
+];
+const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys'];
 let currentSection = 'overview';
 let departmentTreeRows = [];
 let activeDepartmentParentId = null;
@@ -198,18 +212,52 @@ function refreshCurrentSection() {
 }
 
 // --- Navigation ---
-function showSection(id) {
-    // Non-admin users cannot access restricted sections
-    if (!isAdmin && (id === 'users' || id === 'apikeys' || id === 'organizations')) {
-        return;
+function canAccessDashboardSection(id) {
+    return DASHBOARD_SECTIONS.includes(id)
+        && (isAdmin || !ADMIN_ONLY_DASHBOARD_SECTIONS.includes(id));
+}
+
+function dashboardSectionFromLocation() {
+    const requestedSection = new URL(window.location.href).searchParams.get('section');
+    return canAccessDashboardSection(requestedSection)
+        ? requestedSection
+        : DASHBOARD_DEFAULT_SECTION;
+}
+
+function updateDashboardSectionUrl(id, replace = false) {
+    const url = new URL(window.location.href);
+    if (id === DASHBOARD_DEFAULT_SECTION) {
+        url.searchParams.delete('section');
+    } else {
+        url.searchParams.set('section', id);
     }
-    currentSection = id;
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history[replace ? 'replaceState' : 'pushState']({ section: id }, '', nextUrl);
+}
+
+function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } = {}) {
+    const nextSection = canAccessDashboardSection(id) ? id : DASHBOARD_DEFAULT_SECTION;
+    currentSection = nextSection;
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    document.getElementById('section-' + id).classList.add('active');
-    event.currentTarget.classList.add('active');
-    loadSection(id);
+    document.getElementById('section-' + nextSection).classList.add('active');
+    const activeNavItem = Array.from(document.querySelectorAll('.nav-item'))
+        .find(item => item.dataset.section === nextSection);
+    if (activeNavItem) activeNavItem.classList.add('active');
+    if (updateUrl) updateDashboardSectionUrl(nextSection, replaceUrl);
+    loadSection(nextSection);
 }
+
+function showSection(event, id) {
+    event.preventDefault();
+    if (!canAccessDashboardSection(id)) return false;
+    activateDashboardSection(id, { updateUrl: true });
+    return false;
+}
+
+window.addEventListener('popstate', () => {
+    activateDashboardSection(dashboardSectionFromLocation());
+});
 
 function loadSection(id) {
     switch(id) {
@@ -1536,7 +1584,12 @@ function closeModal() {
 }
 
 // --- Init ---
-loadOverview();
+const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
+const initialSection = dashboardSectionFromLocation();
+activateDashboardSection(initialSection);
+if (requestedInitialSection && requestedInitialSection !== initialSection) {
+    updateDashboardSectionUrl(initialSection, true);
+}
 if (!isAdmin) loadClientStatus();
 updateRefreshTime();
 startAutoRefresh();

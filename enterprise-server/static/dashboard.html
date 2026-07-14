@@ -18,38 +18,38 @@
             <div class="sidebar-subtitle">AI 代码归属分析平台</div>
 
             <div class="nav-section">数据概览</div>
-            <a class="nav-item active" onclick="showSection('overview')">
+            <a class="nav-item active" href="/me" data-section="overview" onclick="return showSection(event, 'overview')">
                 <span class="nav-icon">📊</span> 总览
             </a>
-            <a class="nav-item" onclick="showSection('trends')">
+            <a class="nav-item" href="/me?section=trends" data-section="trends" onclick="return showSection(event, 'trends')">
                 <span class="nav-icon">📈</span> 趋势分析
             </a>
-            <a class="nav-item" id="org-nav-item" onclick="showSection('organizations')">
+            <a class="nav-item" id="org-nav-item" href="/me?section=organizations" data-section="organizations" onclick="return showSection(event, 'organizations')">
                 <span class="nav-icon">🏢</span> 组织
             </a>
-            <a class="nav-item" onclick="showSection('departments')">
+            <a class="nav-item" href="/me?section=departments" data-section="departments" onclick="return showSection(event, 'departments')">
                 <span class="nav-icon">🏷️</span> 部门
             </a>
-            <a class="nav-item" onclick="showSection('developers')">
+            <a class="nav-item" href="/me?section=developers" data-section="developers" onclick="return showSection(event, 'developers')">
                 <span class="nav-icon">👥</span> 开发者
             </a>
-            <a class="nav-item" onclick="showSection('projects')">
+            <a class="nav-item" href="/me?section=projects" data-section="projects" onclick="return showSection(event, 'projects')">
                 <span class="nav-icon">📁</span> 项目
             </a>
-            <a class="nav-item" onclick="showSection('tools')">
+            <a class="nav-item" href="/me?section=tools" data-section="tools" onclick="return showSection(event, 'tools')">
                 <span class="nav-icon">🤖</span> AI 工具
             </a>
 
             <div class="nav-section" id="admin-nav-section">系统管理</div>
-            <a class="nav-item" id="admin-nav-users" onclick="showSection('users')">
+            <a class="nav-item" id="admin-nav-users" href="/me?section=users" data-section="users" onclick="return showSection(event, 'users')">
                 <span class="nav-icon">👤</span> 用户管理
             </a>
-            <a class="nav-item" id="admin-nav-apikeys" onclick="showSection('apikeys')">
+            <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-section="apikeys" onclick="return showSection(event, 'apikeys')">
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
 
             <div class="nav-section">帮助与支持</div>
-            <a class="nav-item" onclick="showSection('help')">
+            <a class="nav-item" href="/me?section=help" data-section="help" onclick="return showSection(event, 'help')">
                 <span class="nav-icon">❓</span> 安装与使用指南
             </a>
 
