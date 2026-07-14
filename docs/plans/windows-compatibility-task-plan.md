@@ -693,13 +693,14 @@ git commit -m "Finish Windows install and update compatibility"
 
 - [x] Windows E2E 使用带空格 HOME 执行安装流程。
 - [ ] 至少 Claude、Codex、Gemini、OpenCode 的真实配置入口被执行。
-- [ ] 生成的 Hook 命令能找到正确的 `git-ai.exe`。
+- [x] Claude、Codex、Gemini 生成的 Hook 命令会被真实解释器执行并定位带空格路径下的 `git-ai.exe`。
 
 ### 阶段 6.1 执行记录（进行中，2026-07-15）
 
 - `install-local-windows` 的 `TEST_HOME` 已从 `git-ai-home` 改为 `git ai home`，并在准备阶段显式断言路径包含空格。
 - 安装、Hook 配置检查、daemon 和 attribution 步骤继续统一传入 HOME、USERPROFILE、HOMEDRIVE、HOMEPATH，可覆盖安装器、配置路径与可执行文件引用的空格边界。
-- 当前 Hook 步骤仍主要检查配置文本，下一步需要从 Claude、Codex、Gemini 的配置中提取生成命令并交给各自声明的解释器实际执行；OpenCode 需要执行插件入口或增加等价集成夹具。
+- 新增真实 Hook 执行步骤：从 Claude、Codex、Gemini 配置提取安装器生成的命令，分别交给 Git Bash、PowerShell 和 `cmd.exe`，输入受控的最小合法 JSON fixture；原 synthetic attribution 流程继续保留。
+- OpenCode 仍需执行插件入口或增加等价集成夹具，因此四类配置入口的整体验收尚未完成。
 
 ### Task 6.2：在 Windows E2E 开启 async mode
 

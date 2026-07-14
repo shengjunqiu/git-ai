@@ -312,6 +312,56 @@ jobs:
           & $gitAiExe install
           if ($LASTEXITCODE -ne 0) { throw "git-ai install failed with exit code $LASTEXITCODE" }
 
+      - name: Execute generated agent hook (Windows)
+        if: matrix.agent.name != 'opencode'
+        shell: pwsh
+        env:
+          HOME: ${{ env.TEST_HOME }}
+          USERPROFILE: ${{ env.TEST_HOME }}
+          HOMEDRIVE: ${{ env.TEST_HOME_DRIVE }}
+          HOMEPATH: ${{ env.TEST_HOME_PATH }}
+        run: |
+          Set-Location $env:E2E_TEST_REPO
+          $agent = "${{ matrix.agent.name }}"
+          $transcript = Join-Path $env:RUNNER_TEMP "11111111-1111-1111-1111-111111111111.jsonl"
+          if ($agent -eq "gemini") {
+            [System.IO.File]::WriteAllText($transcript, '{"messages":[]}')
+          } else {
+            [System.IO.File]::WriteAllText($transcript, '')
+          }
+          $payload = @{
+            session_id = "windows-hook-e2e-$agent"
+            thread_id = "windows-hook-e2e-$agent"
+            transcript_path = $transcript
+            cwd = $env:E2E_TEST_REPO
+            hook_event_name = "PreToolUse"
+            tool_name = $(if ($agent -eq "gemini") { "write_file" } elseif ($agent -eq "codex") { "apply_patch" } else { "Write" })
+            tool_input = @{ file_path = (Join-Path $env:E2E_TEST_REPO "hook-boundary.txt") }
+          } | ConvertTo-Json -Depth 6 -Compress
+
+          switch ($agent) {
+            "claude" {
+              $settings = Get-Content -LiteralPath (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
+              $command = $settings.hooks.PreToolUse[0].hooks[0].command
+              if (-not $command) { throw "Claude generated hook command is missing" }
+              $bash = (Get-Command bash.exe -ErrorAction Stop).Source
+              $payload | & $bash -lc $command
+            }
+            "codex" {
+              $hooks = Get-Content -LiteralPath (Join-Path $env:USERPROFILE ".codex\hooks.json") -Raw | ConvertFrom-Json
+              $command = $hooks.hooks.PreToolUse[0].hooks[0].commandWindows
+              if (-not $command) { throw "Codex generated Windows hook command is missing" }
+              $payload | & powershell.exe -NoProfile -Command $command
+            }
+            "gemini" {
+              $settings = Get-Content -LiteralPath (Join-Path $env:USERPROFILE ".gemini\settings.json") -Raw | ConvertFrom-Json
+              $command = $settings.hooks.BeforeTool[0].hooks[0].command
+              if (-not $command) { throw "Gemini generated hook command is missing" }
+              $payload | & cmd.exe /D /S /C $command
+            }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "$agent generated hook failed with exit code $LASTEXITCODE" }
+
       - name: Run synthetic agent commit (Windows)
         shell: pwsh
         env:
