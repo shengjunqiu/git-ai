@@ -39,15 +39,9 @@ pub async fn download_release(
     State(state): State<AppState>,
     Path((channel, filename)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    // Validate channel
-    let valid_channels = ["latest", "next", "enterprise-latest", "enterprise-next"];
-    if !valid_channels.contains(&channel.as_str()) {
-        return Err(AppError::NotFound(format!(
-            "Unknown release channel: {}",
-            channel
-        )));
-    }
-
+    // A channel is valid when it has been published in release_channels. This
+    // includes moving aliases such as `latest` and immutable version channels
+    // such as `1.3.3` generated for pinned installers.
     let Some(version) = release_channel_version(&state, &channel).await? else {
         return Err(AppError::NotFound(format!(
             "Unknown release channel: {}",
@@ -702,6 +696,44 @@ mod tests {
         assert_eq!(
             download_asset(&db.state, "latest", "git-ai").await?,
             b"v2 binary".to_vec()
+        );
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn immutable_version_channel_can_download_published_asset() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+
+        let binary = b"versioned binary";
+        let manifest = manifest_for(&[("git-ai-macos-x64", binary)]);
+        let checksum = sha256_hex(&manifest);
+        store_release_asset(
+            &db.state,
+            "1.3.3",
+            Some("1.3.3"),
+            "SHA256SUMS",
+            Some(&checksum),
+            &manifest,
+        )
+        .await?;
+        store_release_asset(
+            &db.state,
+            "1.3.3",
+            Some("1.3.3"),
+            "git-ai-macos-x64",
+            None,
+            binary,
+        )
+        .await?;
+        publish_release_channel(&db.state, "1.3.3", "1.3.3", &checksum).await?;
+
+        assert_eq!(
+            download_asset(&db.state, "1.3.3", "git-ai-macos-x64").await?,
+            binary.to_vec()
         );
 
         db.cleanup().await?;

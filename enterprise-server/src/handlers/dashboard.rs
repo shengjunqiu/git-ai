@@ -1450,7 +1450,8 @@ pub async fn aggregate_departments(
                 d.parent_id,
                 o.name AS org_name,
                 1 AS depth,
-                ARRAY[d.code || ' [' || d.name || '] ' || d.id::text]::text[] AS sort_path
+                ARRAY[d.code || ' [' || d.name || '] ' || d.id::text]::text[] AS sort_path,
+                ARRAY[d.id]::uuid[] AS ancestor_ids
             FROM departments d
             JOIN organizations o ON d.org_id = o.id
             WHERE ($2::text IS NULL OR o.slug = $2)
@@ -1468,7 +1469,8 @@ pub async fn aggregate_departments(
                 child.parent_id,
                 tree.org_name,
                 tree.depth + 1,
-                tree.sort_path || (child.code || ' [' || child.name || '] ' || child.id::text)
+                tree.sort_path || (child.code || ' [' || child.name || '] ' || child.id::text),
+                tree.ancestor_ids || child.id
             FROM department_tree tree
             JOIN departments child
               ON child.org_id = tree.org_id
@@ -1491,7 +1493,7 @@ pub async fn aggregate_departments(
             ORDER BY tree.org_name ASC, tree.sort_path ASC, tree.id ASC
             LIMIT $9
         ),
-        department_stats AS MATERIALIZED (
+        department_direct_stats AS MATERIALIZED (
             SELECT
                 org_id,
                 department_id,
@@ -1525,6 +1527,21 @@ pub async fn aggregate_departments(
             ) combined
             WHERE org_id IS NOT NULL AND department_id IS NOT NULL
             GROUP BY org_id, department_id
+        ),
+        department_stats AS MATERIALIZED (
+            SELECT
+                direct.org_id,
+                ancestor_department.department_id,
+                SUM(direct.commits)::bigint AS commits,
+                SUM(direct.total_lines)::bigint AS total_lines,
+                SUM(direct.ai_lines)::bigint AS ai_lines
+            FROM department_direct_stats direct
+            JOIN department_tree node
+              ON node.org_id = direct.org_id
+             AND node.id = direct.department_id
+            CROSS JOIN LATERAL unnest(node.ancestor_ids)
+                AS ancestor_department(department_id)
+            GROUP BY direct.org_id, ancestor_department.department_id
         )
         SELECT
             page.id,
@@ -3136,7 +3153,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn department_aggregates_keep_each_tree_node_independent() -> anyhow::Result<()> {
+    async fn department_aggregates_include_all_descendants() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
         };
@@ -3205,10 +3222,10 @@ mod tests {
             .await?;
             let root = &root_page["departments"][0];
             assert_eq!(root["department"].as_str(), Some("Root"));
-            assert_eq!(root["total_commits"].as_i64(), Some(1));
-            assert_eq!(root["w_total"].as_i64(), Some(10));
-            assert_eq!(root["w_ai"].as_i64(), Some(2));
-            assert_eq!(root["pct_ai"].as_f64(), Some(20.0));
+            assert_eq!(root["total_commits"].as_i64(), Some(5));
+            assert_eq!(root["w_total"].as_i64(), Some(112));
+            assert_eq!(root["w_ai"].as_i64(), Some(43));
+            assert_eq!(root["pct_ai"].as_f64(), Some(43.0 / 112.0 * 100.0));
             assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
 
             let Json(page) = aggregate_departments(
@@ -3242,8 +3259,8 @@ mod tests {
             );
 
             let expected = [
-                ("Root", 1, 10, 2, 20.0, false),
-                ("Child", 2, 32, 11, 34.375, false),
+                ("Root", 5, 112, 43, 43.0 / 112.0 * 100.0, false),
+                ("Child", 3, 62, 21, 21.0 / 62.0 * 100.0, false),
                 ("Leaf", 1, 30, 10, 100.0 / 3.0, true),
                 ("Sibling", 1, 40, 20, 50.0, true),
             ];
@@ -3283,9 +3300,9 @@ mod tests {
                 Some(child_id.to_string().as_str())
             );
             assert_eq!(own_department["department"].as_str(), Some("Child"));
-            assert_eq!(own_department["total_commits"].as_i64(), Some(2));
-            assert_eq!(own_department["w_total"].as_i64(), Some(32));
-            assert_eq!(own_department["w_ai"].as_i64(), Some(11));
+            assert_eq!(own_department["total_commits"].as_i64(), Some(3));
+            assert_eq!(own_department["w_total"].as_i64(), Some(62));
+            assert_eq!(own_department["w_ai"].as_i64(), Some(21));
         }
 
         db.cleanup().await?;
