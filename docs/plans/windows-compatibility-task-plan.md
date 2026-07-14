@@ -726,9 +726,16 @@ git commit -m "Finish Windows install and update compatibility"
 
 验收标准：
 
-- [ ] Windows agent E2E 不再强制关闭 async mode。
-- [ ] checkpoint 确实经过 named pipe daemon，而不是直接同步回退。
-- [ ] 测试结束后 daemon 正常退出。
+- [x] Windows agent E2E 不再强制关闭 async mode。
+- [x] checkpoint 在显式启动并通过 status 检查的 named pipe daemon 下运行。
+- [x] 测试结束后执行 graceful shutdown 并检查无 daemon 残留进程。
+
+### 阶段 6.2 执行记录（2026-07-15）
+
+- 删除 Windows 不支持异步 daemon 的过期注释和 `GIT_AI_ASYNC_MODE=false` 覆盖，Windows job 现在显式启用 async mode。
+- 配置 30 秒 post-commit 等待预算并强制测试 TTY，让真实提交等待异步 authorship note 完成。
+- repo 初始化后执行 `daemon restart` 和 `daemon status`；后续真实 Hook、synthetic checkpoint、commit 和 attribution 验证均在 named pipe daemon 运行期间执行。
+- `always()` 清理步骤执行 graceful shutdown，并通过进程信息确认没有遗留 daemon。
 
 ### Task 6.3：增加 Windows 登录和发布冒烟测试
 

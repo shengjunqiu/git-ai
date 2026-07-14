@@ -20,11 +20,7 @@ on:
   workflow_dispatch:
 
 env:
-  # Async mode: each Unix job starts a per-job daemon via
-  # start-async-daemon.sh which exports GIT_AI_TEST_FORCE_TTY and
-  # GIT_AI_POST_COMMIT_TIMEOUT_MS so the wrapper polls for authorship
-  # notes after commits.  Windows jobs override this to "false" because
-  # Unix-domain sockets are not available there.
+  # Async mode uses Unix sockets on Linux/macOS and named pipes on Windows.
   GIT_AI_ASYNC_MODE: "true"
 
 jobs:
@@ -180,8 +176,9 @@ jobs:
     name: E2E ${{ matrix.agent.name }} on windows-latest
     runs-on: windows-latest
     env:
-      # Windows does not support Unix-domain sockets for the async daemon.
-      GIT_AI_ASYNC_MODE: "false"
+      GIT_AI_ASYNC_MODE: "true"
+      GIT_AI_TEST_FORCE_TTY: "1"
+      GIT_AI_POST_COMMIT_TIMEOUT_MS: "30000"
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -311,6 +308,10 @@ jobs:
           # Run git-ai install in the test repo
           & $gitAiExe install
           if ($LASTEXITCODE -ne 0) { throw "git-ai install failed with exit code $LASTEXITCODE" }
+          & $gitAiExe daemon restart
+          if ($LASTEXITCODE -ne 0) { throw "git-ai daemon restart failed with exit code $LASTEXITCODE" }
+          & $gitAiExe daemon status
+          if ($LASTEXITCODE -ne 0) { throw "git-ai daemon status failed with exit code $LASTEXITCODE" }
 
       - name: Execute generated agent hook (Windows)
         if: matrix.agent.name != 'opencode'
@@ -517,6 +518,25 @@ jobs:
           }
           $lines | Set-Content -Path $log
           Write-Log "=== Synthetic attribution verification COMPLETE: $agent ==="
+
+      - name: Shutdown Windows daemon
+        if: always()
+        shell: pwsh
+        env:
+          HOME: ${{ env.TEST_HOME }}
+          USERPROFILE: ${{ env.TEST_HOME }}
+          HOMEDRIVE: ${{ env.TEST_HOME_DRIVE }}
+          HOMEPATH: ${{ env.TEST_HOME_PATH }}
+        run: |
+          $gitAiExe = Join-Path $env:USERPROFILE ".git-ai\bin\git-ai.exe"
+          if (-not (Test-Path -LiteralPath $gitAiExe)) { exit 0 }
+          & $gitAiExe daemon shutdown
+          if ($LASTEXITCODE -ne 0) { throw "git-ai daemon shutdown failed with exit code $LASTEXITCODE" }
+          Start-Sleep -Milliseconds 500
+          $remaining = Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -eq $gitAiExe -and $_.CommandLine -match 'daemon'
+          }
+          if ($remaining) { throw "git-ai daemon process remained after graceful shutdown" }
 
       - name: Upload E2E test results
         if: always()
