@@ -15,6 +15,8 @@ coverage/
 
 # Node / editor extension builds
 node_modules/
+*.tsbuildinfo
+.eslintcache
 /agent-support/vscode/out/
 /agent-support/vscode/dist/
 /agent-support/vscode/.vscode-test/
@@ -34,6 +36,8 @@ build/
 /prompts.db
 /prompts.db-*
 /demo-report.sqlite
+/git-ai-report-server.sqlite
+/git-ai-report-server.sqlite-*
 /data/*.sqlite
 /data/*.sqlite-shm
 /data/*.sqlite-wal
@@ -57,6 +61,7 @@ dev-debug.log
 .env
 .env.*
 !.env.example
+!.env.*.example
 
 # Benchmark, fuzz, and temporary worktrees
 .benchmarks/
@@ -64,6 +69,7 @@ dev-debug.log
 fuzz/artifacts/
 fuzz/corpus/
 .worktrees/
+/.claude/settings.local.json
 .claude/worktrees/
 
 # Python helpers
@@ -84,10 +90,11 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+*.orig
 
 # Local task files
-tasks.json
-tasks/
+/tasks.json
+/tasks/
 
 # Local git-ai state, if created inside the checkout
 .git-ai/
