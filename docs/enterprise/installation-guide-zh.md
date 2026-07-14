@@ -215,6 +215,8 @@ git-ai update --force
 
 **使用之前编辑器必须安装拓展：git-ai-0.1.22.vsix**
 
+vsix拓展下载地址：http://117.147.213.234:38080/static/downloads/git-ai-vscode-0.1.22.vsix
+
 安装成功后设置拓展：
 
 ```json

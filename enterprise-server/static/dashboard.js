@@ -1074,6 +1074,13 @@ async function deleteUser(userId, userName) {
 
 // --- Departments Management ---
 let adminOrganizationsCache = null;
+const DEPARTMENT_CODE_PREFIX_ORDER = ['F', 'A', 'C', 'S'];
+
+function departmentCodePrefixRank(code) {
+    const prefix = String(code || '').trim().charAt(0).toUpperCase();
+    const rank = DEPARTMENT_CODE_PREFIX_ORDER.indexOf(prefix);
+    return rank === -1 ? DEPARTMENT_CODE_PREFIX_ORDER.length : rank;
+}
 
 async function loadAdminOrganizations() {
     if (adminOrganizationsCache) return adminOrganizationsCache;
@@ -1085,7 +1092,7 @@ async function loadAdminOrganizations() {
 }
 
 async function loadDepartments() {
-    setTableLoading('departments-table', 5);
+    setTableLoading('departments-table', 6);
     try {
         departmentTreeRows = await fetchAllPaginated(
             '/api/v1/aggregate/departments',
@@ -1094,7 +1101,7 @@ async function loadDepartments() {
         if (departmentTreeRows.length === 0) {
             renderDepartmentBreadcrumb();
             document.getElementById('departments-table').innerHTML =
-                `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`;
+                `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`;
             return;
         }
 
@@ -1105,7 +1112,7 @@ async function loadDepartments() {
     } catch(e) {
         console.error(e);
         document.getElementById('departments-table').innerHTML =
-            '<tr><td colspan="5" style="color:var(--danger)">加载部门列表失败</td></tr>';
+            '<tr><td colspan="6" style="color:var(--danger)">加载部门列表失败</td></tr>';
     }
 }
 
@@ -1167,23 +1174,26 @@ function renderDepartmentLevel() {
         ? departmentTreeRows.filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
         : departmentTreeRows.slice())
         .sort((left, right) => {
-            const percentageDifference = departmentAiPercentage(right) - departmentAiPercentage(left);
-            if (percentageDifference !== 0) return percentageDifference;
-            return String(left.code || '').localeCompare(
+            const prefixDifference = departmentCodePrefixRank(left.code) - departmentCodePrefixRank(right.code);
+            if (prefixDifference !== 0) return prefixDifference;
+            const codeDifference = String(left.code || '').localeCompare(
                 String(right.code || ''),
                 undefined,
                 { numeric: true, sensitivity: 'base' }
             );
+            if (codeDifference !== 0) return codeDifference;
+            return String(left.id || '').localeCompare(String(right.id || ''));
         });
 
     if (departments.length === 0) {
         document.getElementById('departments-table').innerHTML =
-            '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🏷️</div><p>当前层级暂无下级部门</p></div></td></tr>';
+            '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>当前层级暂无下级部门</p></div></td></tr>';
         return;
     }
 
     document.getElementById('departments-table').innerHTML = departments.map(dept => {
             const departmentName = escapeHtml(dept.department || '—');
+            const departmentCode = escapeHtml(dept.code || '—');
             const orgName = escapeHtml(dept.organization || '—');
             const nodeIcon = isAdmin && dept.has_children ? '›' : '•';
             const rowAction = isAdmin && dept.has_children
@@ -1193,6 +1203,7 @@ function renderDepartmentLevel() {
             const pct = departmentAiPercentage(dept) * 100;
             return `<tr${rowAction}>
                 <td><strong>${orgName}</strong></td>
+                <td><span class="department-code">${departmentCode}</span></td>
                 <td>
                     <div style="display:flex;align-items:center;gap:0.45rem">
                         <span style="color:var(--text-muted);width:0.9rem">${nodeIcon}</span>

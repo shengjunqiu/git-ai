@@ -1450,7 +1450,13 @@ pub async fn aggregate_departments(
                 d.parent_id,
                 o.name AS org_name,
                 1 AS depth,
-                ARRAY[d.code || ' [' || d.name || '] ' || d.id::text]::text[] AS sort_path,
+                ARRAY[(CASE UPPER(LEFT(d.code, 1))
+                    WHEN 'F' THEN '0'
+                    WHEN 'A' THEN '1'
+                    WHEN 'C' THEN '2'
+                    WHEN 'S' THEN '3'
+                    ELSE '4'
+                END) || ' ' || d.code || ' [' || d.name || '] ' || d.id::text]::text[] AS sort_path,
                 ARRAY[d.id]::uuid[] AS ancestor_ids
             FROM departments d
             JOIN organizations o ON d.org_id = o.id
@@ -1469,7 +1475,13 @@ pub async fn aggregate_departments(
                 child.parent_id,
                 tree.org_name,
                 tree.depth + 1,
-                tree.sort_path || (child.code || ' [' || child.name || '] ' || child.id::text),
+                tree.sort_path || ((CASE UPPER(LEFT(child.code, 1))
+                    WHEN 'F' THEN '0'
+                    WHEN 'A' THEN '1'
+                    WHEN 'C' THEN '2'
+                    WHEN 'S' THEN '3'
+                    ELSE '4'
+                END) || ' ' || child.code || ' [' || child.name || '] ' || child.id::text),
                 tree.ancestor_ids || child.id
             FROM department_tree tree
             JOIN departments child
@@ -3304,6 +3316,52 @@ mod tests {
             assert_eq!(own_department["w_total"].as_i64(), Some(62));
             assert_eq!(own_department["w_ai"].as_i64(), Some(21));
         }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn department_aggregates_follow_code_prefix_order() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let state = db.state()?;
+        let (org_id, org_slug) = insert_organization(&db.pool, "Code Order Org").await?;
+
+        for (name, code) in [
+            ("Other Department", "Z00001"),
+            ("S Department", "S00001"),
+            ("C Department", "C00001"),
+            ("A Department", "A00001"),
+            ("F Department", "F00001"),
+        ] {
+            let department_id = insert_department(&db.pool, org_id, name).await?;
+            sqlx::query("UPDATE departments SET code = $1 WHERE id = $2")
+                .bind(code)
+                .bind(department_id)
+                .execute(&db.pool)
+                .await?;
+        }
+
+        let admin_id = insert_user(&db.pool, org_id, "Admin", "admin", None).await?;
+        let Json(page) = aggregate_departments(
+            State(state),
+            org_admin_auth(admin_id, org_id, &org_slug),
+            Query(aggregate_query(Some(org_slug), None, Some(10), None)),
+        )
+        .await?;
+
+        assert_eq!(
+            string_values(&page, "departments", "department"),
+            vec![
+                "F Department",
+                "A Department",
+                "C Department",
+                "S Department",
+                "Other Department",
+            ]
+        );
 
         db.cleanup().await?;
         Ok(())
