@@ -232,6 +232,10 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME_DRIVE=$homeDrive"
           Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME_PATH=$homePath"
 
+      - name: Test Windows CLI OAuth round trip
+        shell: pwsh
+        run: cargo test --test windows_oauth_login -- --nocapture
+
       - name: Run install.ps1 with local binary
         shell: pwsh
         env:

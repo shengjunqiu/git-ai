@@ -121,6 +121,16 @@ jobs:
           OSS_BUILD: "1"
           RUSTFLAGS: "-C strip=symbols"
 
+      - name: Smoke test Windows release binary
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          $binary = "target/${{ matrix.target }}/release/git-ai.exe"
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { throw "Windows release --version smoke test failed" }
+          & $binary --help
+          if ($LASTEXITCODE -ne 0) { throw "Windows release --help smoke test failed" }
+
       - name: Verify binary architecture (Linux)
         if: contains(matrix.os, 'ubuntu')
         run: |

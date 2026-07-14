@@ -755,9 +755,17 @@ git commit -m "Finish Windows install and update compatibility"
 
 验收标准：
 
-- [ ] Windows 登录回归不再只能靠人工发现。
+- [x] Windows 登录回归已纳入 `install-local-windows` 自动测试。
 - [ ] 测试覆盖浏览器 URL、loopback callback 和 Credential Manager。
-- [ ] 发布产物而非仅源码构建产物通过冒烟验证。
+- [x] Windows x64/ARM64 release binary 在归档前执行 `--version` 和 `--help` 冒烟验证。
+
+### 阶段 6.3 执行记录（进行中，2026-07-15）
+
+- 新增 `tests/windows_oauth_login.rs`：启动隔离的本地 token/client-status mock server，运行真实 `git-ai login --no-browser --server` 子进程并解析终端输出的授权 URL。
+- 测试断言 client id、response type、动态 `redirect_uri`、state、PKCE challenge 和 S256；先建立并关闭空 TCP 探测，再发送合法 callback。
+- mock server 校验 authorization code、完整 redirect URI 和非空 verifier，随后验证凭据驱动的 `whoami` 身份输出、`logout` 和登出后的未认证状态。
+- `install-local-windows` 运行该测试；release workflow 对 Windows x64/ARM64 最终 release binary 执行版本和帮助冒烟。
+- 当前自动测试显式使用文件凭据后端以保持 CI 隔离，Credential Manager 后端仍需增加专用 Windows runner 验证；发布压缩包执行 `install.ps1` 的完整冒烟也仍待补齐。
 
 提交建议：
 
