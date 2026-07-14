@@ -337,9 +337,9 @@ cargo test personal_dashboard --lib
 
 验收标准：
 
-- [ ] 登录和 dashboard 不再经过 `cmd.exe` 打开 URL。
-- [ ] 含多个 `&` 的 URL 仍作为一个完整参数传给系统浏览器。
-- [ ] 用户关闭自动打开功能或系统打开失败时，仍能复制完整 URL。
+- [x] 登录和 dashboard 不再经过 `cmd.exe` 打开 URL。
+- [x] 含多个 `&` 的 URL 仍作为一个完整参数传给系统浏览器。
+- [x] 用户关闭自动打开功能或系统打开失败时，仍能复制完整 URL。
 
 ### Task 2.2：加固 CLI 回调监听器
 
@@ -367,10 +367,31 @@ git-ai login --server https://your-git-ai-server.example.com
 
 验收标准：
 
-- [ ] 空探测、无效请求和合法 callback 的顺序组合测试通过。
-- [ ] state 不匹配时不会兑换 token。
-- [ ] 登录总超时仍然生效。
-- [ ] 浏览器点击授权后 CLI 能完成 token 兑换并退出。
+- [x] 空探测、无效请求和合法 callback 的顺序组合测试通过。
+- [x] state 不匹配时不会兑换 token。
+- [x] 登录总超时仍然生效。
+- [ ] 浏览器点击授权后 CLI 能完成 token 兑换并退出（待原生 Windows 验收）。
+
+### 阶段 2 执行记录（2026-07-15）
+
+实现结果：
+
+- 新增 `src/platform/browser.rs`，统一封装 macOS `open`、Linux `xdg-open` 和 Windows `rundll32.exe url.dll,FileProtocolHandler`；URL 始终作为单独参数传递。
+- `login` 与 `personal-dashboard` 共用浏览器模块，移除 dashboard 的 `cmd /C start`；打开失败仍打印完整授权 URL。
+- 回调监听器按总截止时间计算每个连接的读取时间，并限制请求行 8 KiB、单行请求头 8 KiB、请求头总量 64 KiB；畸形、超大和空探测会被忽略。
+
+测试结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test platform::browser --lib` | 通过：`2 passed, 0 failed`。 |
+| `cargo test commands::login --lib` | 通过：`11 passed, 0 failed`。 |
+| `cargo test auth::cli_callback --lib` | 通过：`7 passed, 0 failed`（需允许回环端口监听）。 |
+| `task lint` | 通过。 |
+| `task build` | 通过。 |
+| `task format:check` | 恢复阶段 0 已记录的 `src/api/bundle.rs` 历史空行后仍按预期失败；阶段 2 文件已执行 `rustfmt`。 |
+
+阶段 2 状态：**代码实现和本机回归已完成，需在 Windows/Defender 环境完成一次真实登录验收**。
 
 提交建议：
 

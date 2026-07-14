@@ -4,6 +4,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
 
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+const MAX_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 pub enum CallbackResponse {
     Authorized {
@@ -50,15 +55,21 @@ impl CallbackListener {
 
         loop {
             match self.listener.accept() {
-                Ok((stream, _addr)) => match handle_stream(stream) {
-                    Ok(Some(response)) => return Ok(response),
-                    Ok(None) => {}
-                    // Browsers, endpoint security software, and port checks may
-                    // probe a newly opened loopback port before the real OAuth
-                    // redirect arrives. A malformed probe must not terminate
-                    // the login flow.
-                    Err(_) => {}
-                },
+                Ok((stream, _addr)) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err("Timed out waiting for browser authorization".to_string());
+                    }
+                    match handle_stream(stream, remaining) {
+                        Ok(Some(response)) => return Ok(response),
+                        Ok(None) => {}
+                        // Browsers, endpoint security software, and port checks may
+                        // probe a newly opened loopback port before the real OAuth
+                        // redirect arrives. A malformed probe must not terminate
+                        // the login flow.
+                        Err(_) => {}
+                    }
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         return Err("Timed out waiting for browser authorization".to_string());
@@ -71,17 +82,19 @@ impl CallbackListener {
     }
 }
 
-fn handle_stream(mut stream: TcpStream) -> Result<Option<CallbackResponse>, String> {
+fn handle_stream(
+    mut stream: TcpStream,
+    remaining_timeout: Duration,
+) -> Result<Option<CallbackResponse>, String> {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(remaining_timeout.min(MAX_STREAM_READ_TIMEOUT)))
         .map_err(|e| format!("Failed to configure callback connection: {}", e))?;
 
     let request_target = {
         let mut reader = BufReader::new(&mut stream);
-        let mut request_line = String::new();
-        reader
-            .read_line(&mut request_line)
-            .map_err(|e| format!("Failed to read callback request: {}", e))?;
+        let request_line =
+            read_line_limited(&mut reader, MAX_REQUEST_LINE_BYTES, "callback request")?
+                .ok_or_else(|| "Callback connection closed before request".to_string())?;
 
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or_default();
@@ -91,13 +104,15 @@ fn handle_stream(mut stream: TcpStream) -> Result<Option<CallbackResponse>, Stri
             return Err("Invalid authorization callback request".to_string());
         }
 
-        let mut header_line = String::new();
-        loop {
-            header_line.clear();
-            let bytes = reader
-                .read_line(&mut header_line)
-                .map_err(|e| format!("Failed to read callback headers: {}", e))?;
-            if bytes == 0 || header_line == "\r\n" || header_line == "\n" {
+        let mut header_bytes = 0;
+        while let Some(header_line) =
+            read_line_limited(&mut reader, MAX_HEADER_LINE_BYTES, "callback header")?
+        {
+            header_bytes += header_line.len();
+            if header_bytes > MAX_HEADER_BYTES {
+                return Err("Callback request headers exceed the size limit".to_string());
+            }
+            if header_line == "\r\n" || header_line == "\n" {
                 break;
             }
         }
@@ -144,6 +159,47 @@ fn handle_stream(mut stream: TcpStream) -> Result<Option<CallbackResponse>, Stri
     };
 
     Ok(Some(response))
+}
+
+fn read_line_limited<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+    description: &str,
+) -> Result<Option<String>, String> {
+    let mut bytes = Vec::new();
+    let mut terminated = false;
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|e| format!("Failed to read {}: {}", description, e))?;
+        if buffer.is_empty() {
+            break;
+        }
+
+        let take = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buffer.len(), |position| position + 1);
+        if bytes.len() + take > max_bytes {
+            return Err(format!("{} exceeds the size limit", description));
+        }
+        bytes.extend_from_slice(&buffer[..take]);
+        reader.consume(take);
+
+        if bytes.last() == Some(&b'\n') {
+            terminated = true;
+            break;
+        }
+    }
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if !terminated && bytes.len() == max_bytes {
+        return Err(format!("{} exceeds the size limit", description));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("{} is not valid UTF-8", description))
 }
 
 fn write_html_response(stream: &mut TcpStream, status: u16, message: &str) -> Result<(), String> {
@@ -413,6 +469,88 @@ mod tests {
         }
 
         assert!(requester.join().unwrap().contains("授权成功"));
+    }
+
+    #[test]
+    fn callback_ignores_invalid_request_before_valid_request() {
+        let listener = CallbackListener::bind().unwrap();
+        let redirect_uri = listener.redirect_uri().to_string();
+        let requester = thread::spawn(move || {
+            let parsed = Url::parse(&redirect_uri).unwrap();
+            let addr = format!("127.0.0.1:{}", parsed.port().unwrap());
+            let mut invalid = TcpStream::connect(&addr).unwrap();
+            write!(
+                invalid,
+                "POST /callback HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            )
+            .unwrap();
+            drop(invalid);
+
+            thread::sleep(Duration::from_millis(50));
+            request_callback(&redirect_uri, "/callback?code=abc123&state=state123")
+        });
+
+        let response = listener
+            .wait_for_callback(Duration::from_secs(2))
+            .expect("valid callback should arrive after an invalid request");
+        assert!(matches!(
+            response,
+            CallbackResponse::Authorized { code, state }
+                if code == "abc123" && state == "state123"
+        ));
+        assert!(requester.join().unwrap().contains("授权成功"));
+    }
+
+    #[test]
+    fn callback_ignores_oversized_request_before_valid_request() {
+        let listener = CallbackListener::bind().unwrap();
+        let redirect_uri = listener.redirect_uri().to_string();
+        let requester = thread::spawn(move || {
+            let parsed = Url::parse(&redirect_uri).unwrap();
+            let addr = format!("127.0.0.1:{}", parsed.port().unwrap());
+            let mut oversized = TcpStream::connect(&addr).unwrap();
+            let request = format!(
+                "GET /callback?{} HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                "x".repeat(MAX_REQUEST_LINE_BYTES)
+            );
+            oversized.write_all(request.as_bytes()).unwrap();
+            drop(oversized);
+
+            thread::sleep(Duration::from_millis(50));
+            request_callback(&redirect_uri, "/callback?code=abc123&state=state123")
+        });
+
+        let response = listener
+            .wait_for_callback(Duration::from_secs(2))
+            .expect("valid callback should arrive after an oversized request");
+        assert!(matches!(response, CallbackResponse::Authorized { .. }));
+        assert!(requester.join().unwrap().contains("授权成功"));
+    }
+
+    #[test]
+    fn invalid_probes_do_not_extend_total_timeout() {
+        let listener = CallbackListener::bind().unwrap();
+        let redirect_uri = listener.redirect_uri().to_string();
+        let requester = thread::spawn(move || {
+            let parsed = Url::parse(&redirect_uri).unwrap();
+            let addr = format!("127.0.0.1:{}", parsed.port().unwrap());
+            let end = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < end {
+                if let Ok(mut stream) = TcpStream::connect(&addr) {
+                    let _ = stream.write_all(b"POST /callback HTTP/1.1\r\n\r\n");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let started = Instant::now();
+        let error = listener
+            .wait_for_callback(Duration::from_millis(120))
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(error.contains("Timed out"));
+        assert!(elapsed < Duration::from_millis(500), "elapsed: {elapsed:?}");
+        requester.join().unwrap();
     }
 
     #[test]

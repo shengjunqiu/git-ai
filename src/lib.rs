@@ -12,6 +12,7 @@ pub mod http;
 pub mod mdm;
 pub mod metrics;
 pub mod observability;
+pub mod platform;
 pub mod repo_url;
 pub mod report;
 pub mod utils;

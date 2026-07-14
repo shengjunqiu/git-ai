@@ -1,6 +1,7 @@
 use crate::api::{ApiContext, ClientStatusKind, upload_client_status_with_token};
 use crate::auth::{CallbackListener, CallbackResponse, CredentialStore, OAuthClient, pkce};
 use crate::config;
+use crate::platform::browser::open_url;
 use std::time::Duration;
 use url::Url;
 
@@ -104,7 +105,7 @@ pub fn handle_login(args: &[String]) {
         eprintln!(
             "Open the authorization URL above to continue, or open the registration URL first."
         );
-    } else if open_browser(&authorization_url).is_err() {
+    } else if open_url(&authorization_url).is_err() {
         eprintln!("Could not open browser automatically. Open the URL above to continue.");
         eprintln!();
     }
@@ -189,40 +190,6 @@ pub fn handle_login(args: &[String]) {
             std::process::exit(1);
         }
     }
-}
-
-/// Attempt to open a URL in the system's default browser
-fn open_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut cmd = std::process::Command::new("open");
-        cmd.arg(url);
-        cmd
-    };
-
-    #[cfg(target_os = "linux")]
-    let mut cmd = {
-        let mut cmd = std::process::Command::new("xdg-open");
-        cmd.arg(url);
-        cmd
-    };
-
-    #[cfg(target_os = "windows")]
-    let mut cmd = windows_browser_command(url);
-
-    cmd.stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_browser_command(url: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("rundll32.exe");
-    cmd.arg("url.dll,FileProtocolHandler").arg(url);
-    cmd
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -419,22 +386,6 @@ mod tests {
             Some("S256")
         );
         assert_eq!(pairs.get("state").map(String::as_str), Some("state"));
-    }
-
-    #[test]
-    fn windows_browser_command_passes_authorization_url_as_one_argument() {
-        let url = "https://git-ai.example.com/auth/cli/authorize?client_id=git-ai-cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A12345%2Fcallback&state=state";
-        let command = windows_browser_command(url);
-        let args: Vec<_> = command.get_args().collect();
-
-        assert_eq!(command.get_program(), std::ffi::OsStr::new("rundll32.exe"));
-        assert_eq!(
-            args,
-            vec![
-                std::ffi::OsStr::new("url.dll,FileProtocolHandler"),
-                std::ffi::OsStr::new(url),
-            ]
-        );
     }
 
     #[test]
