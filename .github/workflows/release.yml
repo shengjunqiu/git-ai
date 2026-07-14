@@ -78,7 +78,7 @@ jobs:
               apt-get install -y curl build-essential pkg-config musl-tools && \
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target ${{ matrix.target }} && \
               . \$HOME/.cargo/env && \
-              cargo build --release --target ${{ matrix.target }} && \
+              cargo build --release --features keyring --target ${{ matrix.target }} && \
               strip target/${{ matrix.target }}/release/git-ai
             "
 
@@ -103,7 +103,7 @@ jobs:
       - name: Build release binary (non-Docker, non-Windows-ARM64)
         if: matrix.use_docker == false && matrix.os != 'windows-11-arm'
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --features keyring --target ${{ matrix.target }}
         env:
           CARGO_INCREMENTAL: 0
           SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
@@ -113,7 +113,7 @@ jobs:
       - name: Build release binary (Windows ARM64 with LLVM strip)
         if: matrix.os == 'windows-11-arm'
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --features keyring --target ${{ matrix.target }}
         env:
           CARGO_INCREMENTAL: 0
           SENTRY_OSS: ${{ secrets.SENTRY_OSS }}

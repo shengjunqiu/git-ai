@@ -475,6 +475,17 @@ git add Cargo.toml src/auth src/feature_flags.rs .github/workflows
 git commit -m "Secure Windows credential storage"
 ```
 
+### 阶段 3 执行记录（2026-07-15）
+
+已完成阶段 3.1 的发布配置调整：release 构建统一启用 `keyring` feature，release 默认开启 `auth_keyring`，因此 Windows x64/ARM64 发布包会编译并优先使用 Credential Manager；debug 构建仍默认关闭，避免本地测试依赖系统钥匙串。
+
+验证结果：
+
+- `cargo test feature_flags --lib`：通过，`10 passed`。
+- `cargo test --features keyring --lib auth::credentials`：因当前环境无法连接 crates.io 下载 `keyring 3.6.3`，未能完成；需在可联网环境或 Windows runner 重试。
+
+阶段 3 状态：**发布开关已完成，keyring 跨平台构建和 Credential Manager 实机验收待联网/Windows 环境继续**。
+
 ## 7. 阶段 4：加固 Windows daemon named pipe
 
 ### Task 4.1：为 named pipe 设置同用户 ACL
