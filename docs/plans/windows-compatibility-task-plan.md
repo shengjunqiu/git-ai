@@ -484,7 +484,11 @@ git commit -m "Secure Windows credential storage"
 - `cargo test feature_flags --lib`：通过，`10 passed`。
 - `cargo test --features keyring --lib auth::credentials`：因当前环境无法连接 crates.io 下载 `keyring 3.6.3`，未能完成；需在可联网环境或 Windows runner 重试。
 
-阶段 3 状态：**发布开关已完成，keyring 跨平台构建和 Credential Manager 实机验收待联网/Windows 环境继续**。
+阶段 3 状态：**发布开关和文件回退 ACL 加固已完成，keyring 跨平台构建和 Credential Manager 实机验收待联网/Windows 环境继续**。
+
+阶段 3.2 补充实现：Windows 文件回退现在通过 `whoami /user` 获取当前用户 SID，ACL 同时保留当前用户、SYSTEM 和 Administrators；`icacls` 或隐藏属性设置失败会直接返回错误，不再仅打印 warning。Linux/macOS 凭据行为保持不变。
+
+验证：`cargo test auth::credentials --lib` 通过（23 tests）；Windows 原生 ACL、域账号和 Azure AD 账号仍需在 Windows runner 手工验证。
 
 ## 7. 阶段 4：加固 Windows daemon named pipe
 

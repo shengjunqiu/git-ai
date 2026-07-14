@@ -103,28 +103,51 @@ impl FileBackend {
             .to_str()
             .ok_or_else(|| "Invalid path encoding".to_string())?;
 
-        let username = std::env::var("USERNAME")
-            .map_err(|_| "Could not determine current user".to_string())?;
+        // Use the token SID rather than the display name/USERNAME variable. This
+        // works for domain, Azure AD, localized and non-ASCII account names.
+        let identity = Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .map_err(|e| format!("Failed to determine current user SID: {}", e))?;
+        if !identity.status.success() {
+            return Err("Failed to determine current user SID".to_string());
+        }
+        let identity_output = String::from_utf8_lossy(&identity.stdout);
+        let sid = identity_output
+            .split('"')
+            .nth(3)
+            .filter(|value| value.starts_with("S-"))
+            .ok_or_else(|| "Could not parse current user SID".to_string())?;
 
         let output = Command::new("icacls")
             .args([
                 path_str,
                 "/inheritance:r",
                 "/grant:r",
-                &format!("{}:F", username),
+                &format!("{}:F", sid),
+                "/grant",
+                "*S-1-5-18:F",
+                "/grant",
+                "*S-1-5-32-544:F",
             ])
             .output()
             .map_err(|e| format!("Failed to run icacls: {}", e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!(
-                "Warning: Could not set restrictive permissions on credentials file: {}",
-                stderr
-            );
+            return Err(format!(
+                "Could not set restrictive permissions on credentials file: {}",
+                stderr.trim()
+            ));
         }
 
-        let _ = Command::new("attrib").args(["+H", path_str]).output();
+        let hidden = Command::new("attrib")
+            .args(["+H", path_str])
+            .status()
+            .map_err(|e| format!("Failed to hide credentials file: {}", e))?;
+        if !hidden.success() {
+            return Err("Failed to hide credentials file".to_string());
+        }
 
         Ok(())
     }
