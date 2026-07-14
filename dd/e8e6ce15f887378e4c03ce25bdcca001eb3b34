@@ -1,0 +1,33 @@
+docs/plans/windows-compatibility-task-plan.md
+  ff69a46c14a08471 654-655,658-664
+install.ps1
+  ff69a46c14a08471 660
+docs/user-guide.md
+  ff69a46c14a08471 73-74
+tests/windows_install_script.rs
+  ff69a46c14a08471 388-393
+docs/guides/developer-install-guide.md
+  ff69a46c14a08471 44-47
+docs/enterprise/installation-guide-zh.md
+  ff69a46c14a08471 260-261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "dde8e6ce15f887378e4c03ce25bdcca001eb3b34",
+  "prompts": {
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 3,
+      "accepted_lines": 72,
+      "overriden_lines": 0
+    }
+  }
+}
