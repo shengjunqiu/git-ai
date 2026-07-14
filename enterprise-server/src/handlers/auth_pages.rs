@@ -70,7 +70,7 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         <option value="">输入邮箱后选择组织</option>
       </select>
 
-      <label for="department_picker">部门</label>
+      <label for="department_picker">部门（仅限末级部门）</label>
       <input id="department_picker" type="search" list="department_options" placeholder="先选择组织" autocomplete="off" required disabled />
       <datalist id="department_options"></datalist>
       <input id="department_id" name="department_id" type="hidden" />
@@ -235,7 +235,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     const selected = departmentOptions.find(department => department.label === departmentPicker.value);
     departmentId.value = selected ? selected.id : '';
     departmentPicker.setCustomValidity(
-      keyword && !selected ? '请从匹配结果中选择部门' : ''
+      keyword && !selected ? '请从匹配结果中选择末级部门' : ''
     );
 
     if (selected) {
@@ -243,12 +243,12 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     } else if (keyword) {
       setHint(
         matches.length
-          ? `找到 ${matches.length} 个匹配部门，请从列表中选择。`
-          : '未找到匹配部门，请尝试其他关键词。',
+          ? `找到 ${matches.length} 个匹配的末级部门，请从列表中选择。`
+          : '未找到匹配的末级部门，请尝试其他关键词。',
         matches.length ? '' : 'error'
       );
     } else {
-      setHint('请选择你所在的部门。');
+      setHint('请选择你所在的末级部门。');
     }
     updateSubmitState();
   }
@@ -259,7 +259,8 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
 
     try {
       const response = await fetch(`/auth/organizations/${orgId}/departments`, {
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
       });
       const data = await response.json();
       if (!response.ok) {
@@ -267,25 +268,17 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
       }
 
       const departments = data.departments || [];
-      if (departments.length === 0) {
+      const leafDepartments = departments.filter(department => department.is_leaf);
+      if (leafDepartments.length === 0) {
         resetDepartmentPicker('暂无可选部门');
-        setHint('该组织还没有可选部门，请联系管理员添加部门。', 'error');
+        setHint('该组织还没有可选的末级部门，请联系管理员完善部门层级。', 'error');
         updateSubmitState();
         return;
       }
 
-      const departmentsById = new Map(departments.map(department => [department.id, department]));
-      departmentOptions = departments.map(department => {
-        const path = [];
-        const visited = new Set();
-        let current = department;
-        while (current && !visited.has(current.id)) {
-          visited.add(current.id);
-          path.push(current.name);
-          current = current.parent_id ? departmentsById.get(current.parent_id) : null;
-        }
+      departmentOptions = leafDepartments.map(department => {
         const code = department.code ? ` (${department.code})` : '';
-        const label = `${path.reverse().join(' / ')}${code}`;
+        const label = `${department.path || department.name}${code}`;
         return {
           id: department.id,
           label,
@@ -293,7 +286,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
         };
       });
       departmentPicker.disabled = false;
-      departmentPicker.placeholder = '输入部门名称或编码';
+      departmentPicker.placeholder = '输入末级部门名称或编码';
       renderDepartmentOptions();
     } catch (error) {
       resetDepartmentPicker('部门加载失败');
@@ -665,10 +658,15 @@ mod tests {
         assert!(html.contains(r#"<input id="department_id" name="department_id" type="hidden" />"#));
         assert!(!html.contains(r#"id="department_search""#));
         assert!(!html.contains(r#"<select id="department_id""#));
-        assert!(html.contains("输入部门名称或编码"));
+        assert!(html.contains("部门（仅限末级部门）"));
+        assert!(html.contains("输入末级部门名称或编码"));
+        assert!(html.contains("departments.filter(department => department.is_leaf)"));
+        assert!(html.contains("departmentOptions = leafDepartments.map(department =>"));
+        assert!(html.contains("department.path || department.name"));
+        assert!(html.contains("cache: 'no-store'"));
         assert!(html.contains("department.searchText.includes(keyword)"));
         assert!(html.contains("departmentId.value = selected ? selected.id : ''"));
-        assert!(html.contains("请从匹配结果中选择部门"));
+        assert!(html.contains("请从匹配结果中选择末级部门"));
         assert!(html.contains("/auth/organizations?email="));
         assert!(html.contains("/departments"));
         assert!(!html.contains(r#"name="org_slug" value="linewell.com""#));

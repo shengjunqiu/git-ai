@@ -10,19 +10,20 @@ pub struct OAuthClient {
     base_url: String,
 }
 
-/// Validate that a URL uses HTTPS (security requirement for OAuth)
-/// In release builds, only HTTPS is accepted — but HTTP is allowed for localhost
-/// (local development / self-hosted enterprise server).
+/// Validate that a URL uses HTTPS (security requirement for OAuth).
+/// In release builds, HTTP is only allowed for localhost and the configured
+/// enterprise server, which currently cannot terminate TLS.
 /// In debug builds, HTTP is also allowed for any host.
 #[cfg(not(debug_assertions))]
 fn validate_https_url(url: &str) -> Result<(), String> {
     if url.starts_with("https://") {
         return Ok(());
     }
-    // Allow http:// for localhost (local development / self-hosted servers)
+    // Allow HTTP for local development and the fixed enterprise deployment.
     if url.starts_with("http://localhost")
         || url.starts_with("http://127.0.0.1")
         || url.starts_with("http://[::1]")
+        || url == config::DEFAULT_API_BASE_URL
     {
         return Ok(());
     }
@@ -57,10 +58,9 @@ impl OAuthClient {
 
     /// Create an OAuthClient with a custom base URL (for install script flow)
     pub fn with_base_url(base_url: &str) -> Result<Self, String> {
-        validate_https_url(base_url)?;
-        Ok(Self {
-            base_url: config::normalize_api_base_url(base_url),
-        })
+        let base_url = config::normalize_api_base_url(base_url);
+        validate_https_url(&base_url)?;
+        Ok(Self { base_url })
     }
 
     /// Get the base URL this client is configured to use
@@ -327,6 +327,18 @@ mod tests {
         // In release mode, HTTP should be allowed for 127.0.0.1
         let result = validate_https_url("http://127.0.0.1:8080");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_https_url_enterprise_http_server_allowed() {
+        let result = validate_https_url("http://117.147.213.234:38080");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_https_url_enterprise_http_server_with_trailing_slash_allowed() {
+        let client = OAuthClient::with_base_url("http://117.147.213.234:38080/").unwrap();
+        assert_eq!(client.base_url(), "http://117.147.213.234:38080");
     }
 
     #[test]

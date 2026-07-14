@@ -724,6 +724,67 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn registration_rejects_parent_and_accepts_leaf_department() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let leaf_department_id =
+            insert_child_department(&db.state.db, scope.org_id, scope.department_id).await?;
+
+        let parent_request =
+            register_request("parent@example.com", scope.org_id, scope.department_id);
+        let parent_result = register_user(&db.state, &parent_request).await;
+
+        assert!(matches!(
+            parent_result,
+            Err(AppError::BadRequest(message))
+                if message == "Only leaf departments can be selected for registration"
+        ));
+        assert_eq!(table_count(&db.state.db, "users").await?, 0);
+
+        let leaf_request = register_request("leaf@example.com", scope.org_id, leaf_department_id);
+        let response = register_user(&db.state, &leaf_request).await?;
+
+        assert_eq!(response.default_org_id, scope.org_id);
+        assert_eq!(table_count(&db.state.db, "users").await?, 1);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn registration_department_options_only_include_leaf_nodes() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let scope = insert_registration_scope(&db.state.db).await?;
+        let leaf_department_id =
+            insert_child_department(&db.state.db, scope.org_id, scope.department_id).await?;
+
+        let Json(body) = departments(
+            axum::extract::State(db.state.clone()),
+            axum::extract::Path(scope.org_id),
+        )
+        .await?;
+        let department_options = body["departments"].as_array().unwrap();
+        assert_eq!(department_options.len(), 1);
+        assert!(department_options
+            .iter()
+            .all(|department| department["id"] != scope.department_id.to_string()));
+        let leaf = department_options
+            .iter()
+            .find(|department| department["id"] == leaf_department_id.to_string())
+            .unwrap();
+
+        assert_eq!(leaf["is_leaf"], true);
+        assert_eq!(leaf["path"], "Engineering / Platform");
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn register_rejects_email_domain_outside_org() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
@@ -909,6 +970,27 @@ mod tests {
             org_slug,
             department_slug,
         })
+    }
+
+    async fn insert_child_department(
+        pool: &sqlx::PgPool,
+        org_id: Uuid,
+        parent_id: Uuid,
+    ) -> anyhow::Result<Uuid> {
+        let department_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO departments (id, org_id, name, slug, parent_id) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(department_id)
+        .bind(org_id)
+        .bind("Platform")
+        .bind(format!("platform-{}", department_id.simple()))
+        .bind(parent_id)
+        .execute(pool)
+        .await?;
+
+        Ok(department_id)
     }
 
     async fn table_count(pool: &sqlx::PgPool, table: &str) -> anyhow::Result<i64> {

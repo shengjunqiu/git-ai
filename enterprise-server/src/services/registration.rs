@@ -20,6 +20,8 @@ pub struct RegisterableDepartment {
     pub name: String,
     pub slug: String,
     pub parent_id: Option<Uuid>,
+    pub path: String,
+    pub is_leaf: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -71,11 +73,27 @@ pub async fn list_departments_for_org(
     pool: &PgPool,
     org_id: Uuid,
 ) -> Result<Vec<RegisterableDepartment>, AppError> {
-    let rows: Vec<(Uuid, String, String, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, code, name, slug, parent_id \
-         FROM departments \
-         WHERE org_id = $1 \
-         ORDER BY code, name",
+    let rows: Vec<(Uuid, String, String, String, Option<Uuid>, String, bool)> = sqlx::query_as(
+        "WITH RECURSIVE department_paths AS ( \
+             SELECT d.id, d.org_id, d.code, d.name, d.slug, d.parent_id, d.name::text AS path \
+             FROM departments d \
+             WHERE d.org_id = $1 AND d.parent_id IS NULL \
+             UNION ALL \
+             SELECT child.id, child.org_id, child.code, child.name, child.slug, \
+                    child.parent_id, paths.path || ' / ' || child.name AS path \
+             FROM departments child \
+             JOIN department_paths paths \
+               ON paths.org_id = child.org_id AND paths.id = child.parent_id \
+             WHERE child.org_id = $1 \
+         ) \
+         SELECT d.id, d.code, d.name, d.slug, d.parent_id, d.path, true AS is_leaf \
+         FROM department_paths d \
+         WHERE NOT EXISTS( \
+             SELECT 1 \
+             FROM departments child \
+             WHERE child.org_id = d.org_id AND child.parent_id = d.id \
+         ) \
+         ORDER BY d.code, d.name",
     )
     .bind(org_id)
     .fetch_all(pool)
@@ -84,13 +102,17 @@ pub async fn list_departments_for_org(
 
     Ok(rows
         .into_iter()
-        .map(|(id, code, name, slug, parent_id)| RegisterableDepartment {
-            id,
-            code,
-            name,
-            slug,
-            parent_id,
-        })
+        .map(
+            |(id, code, name, slug, parent_id, path, is_leaf)| RegisterableDepartment {
+                id,
+                code,
+                name,
+                slug,
+                parent_id,
+                path,
+                is_leaf,
+            },
+        )
         .collect())
 }
 
@@ -117,8 +139,13 @@ pub async fn resolve_and_validate_registration_scope(
         )?)
     };
 
-    let row: (Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
-        "SELECT o.id, d.id, od.org_id \
+    let row: (Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<bool>) = sqlx::query_as(
+        "SELECT o.id, d.id, od.org_id, \
+                CASE WHEN d.id IS NULL THEN NULL ELSE NOT EXISTS( \
+                    SELECT 1 \
+                    FROM departments child \
+                    WHERE child.org_id = d.org_id AND child.parent_id = d.id \
+                ) END AS department_is_leaf \
          FROM (SELECT 1) input \
          LEFT JOIN organizations o \
            ON (($1::uuid IS NOT NULL AND o.id = $1) \
@@ -141,7 +168,7 @@ pub async fn resolve_and_validate_registration_scope(
     .await
     .map_err(AppError::Database)?;
 
-    let (resolved_org_id, resolved_department_id, verified_domain_org_id) = row;
+    let (resolved_org_id, resolved_department_id, verified_domain_org_id, department_is_leaf) = row;
 
     if resolved_org_id.is_none() {
         if let Some(org_slug) = org_slug.as_deref() {
@@ -178,6 +205,12 @@ pub async fn resolve_and_validate_registration_scope(
             "Department does not belong to the selected organization".into(),
         ));
     };
+
+    if department_is_leaf != Some(true) {
+        return Err(AppError::BadRequest(
+            "Only leaf departments can be selected for registration".into(),
+        ));
+    }
 
     Ok(RegistrationScope {
         org_id,
