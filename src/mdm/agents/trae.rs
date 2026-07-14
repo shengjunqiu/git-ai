@@ -1,18 +1,18 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{
     HookCheckResult, HookInstaller, HookInstallerParams, InstallResult,
 };
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, install_vsc_editor_extension,
     is_git_ai_checkpoint_command, is_vsc_editor_extension_installed, resolve_editor_cli,
-    to_git_bash_path, write_atomic,
+    write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const TRAE_PRE_TOOL_CMD: &str = "checkpoint trae --hook-input stdin";
-const TRAE_POST_TOOL_CMD: &str = "checkpoint trae --hook-input stdin";
+const TRAE_HOOK_ARGS: &[&str] = &["checkpoint", "trae", "--hook-input", "stdin"];
 const TRAE_CATCH_ALL_MATCHER: &str = "*";
 
 pub struct TraeInstaller;
@@ -134,9 +134,9 @@ impl TraeInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let binary_path_str = to_git_bash_path(&params.binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, TRAE_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path_str, TRAE_POST_TOOL_CMD);
+        let pre_tool_cmd =
+            render_hook_command(&params.binary_path, TRAE_HOOK_ARGS, HookShell::GitBash);
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
         if !merged.is_object() {
@@ -483,11 +483,7 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        format!(
-            "{} {}",
-            to_git_bash_path(&params().binary_path),
-            TRAE_PRE_TOOL_CMD
-        )
+        render_hook_command(&params().binary_path, TRAE_HOOK_ARGS, HookShell::GitBash)
     }
 
     fn read_settings(path: &Path) -> Value {

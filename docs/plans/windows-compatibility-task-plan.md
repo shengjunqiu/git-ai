@@ -125,6 +125,59 @@
 - [ ] 空格路径可以稳定复现 Hook 命令解析问题，或已有测试证明不存在问题。
 - [ ] `&` 路径可以稳定复现 cmd/Git Bash 解析问题，或已有测试证明不存在问题。
 
+### 阶段 0 执行记录（2026-07-14）
+
+执行环境：
+
+- 当前执行主机是 macOS 15.7.7（Darwin 24.6.0，x86_64），不是原生 Windows。
+- Rust：`rustc 1.96.1 (31fca3adb 2026-06-26)`、`cargo 1.96.1`。
+- Git：`git version 2.50.1 (Apple Git-155)`。
+- Task：`Task version: v3.50.0`。
+- 已安装 Rust targets：`x86_64-apple-darwin`、`x86_64-pc-windows-msvc`。
+- 当前环境没有 `pwsh` 或 `powershell`，因此尚未记录 Windows 版本、PowerShell 版本和 Windows CPU 架构。
+- 执行前工作区干净，HEAD 为 `689b01b`。测试过程产生的 `Cargo.lock` 项目版本机械刷新已还原，没有把它混入阶段 0 记录。
+
+Task 0.1 基线结果：
+
+| 命令 | 结果 | 记录 |
+| --- | --- | --- |
+| `task format:check` | 失败 | `src/api/bundle.rs:2` 存在两个多余空行；执行前工作区干净，判定为已有基线问题。 |
+| `task lint` | 通过 | `cargo clippy --all-targets -- -D warnings` 通过。 |
+| `task build` | 通过 | debug 构建通过。 |
+| `task test` | 未完整通过 | library 测试 `1574 passed, 0 failed, 4 ignored`；`async_mode`、`commit_tree_update_ref`、`config_fresh`、`daemon_mode` 测试二进制均通过。主 integration 测试运行至接近结束后长期无输出，累计约 1 小时 26 分钟后人工中断。 |
+
+`task test` 的失败和复现细节：
+
+1. 首次在受限沙箱内执行时有 6 个测试因不允许绑定本地回环地址失败；在允许本地 socket 的环境重跑后，这 6 个测试全部通过，判定为执行环境限制，不是项目回归。
+2. 完整测试中观察到 `diff_comprehensive::test_diff_many_files` 失败。
+3. 使用以下命令单独运行可稳定复现：
+
+   ```bash
+   task test TEST_FILTER=diff_comprehensive::test_diff_many_files EXTRA_TEST_BINARY_ARGS=--exact
+   ```
+
+4. 失败发生在测试共享 daemon 启动阶段，而不是 diff 断言阶段。子进程在 control/trace socket 就绪前以状态 0 退出，`daemon.test.stderr.log` 为空。即使把共享 daemon pool 和测试线程都限制为 1，仍可复现：
+
+   ```bash
+   GIT_AI_TEST_GIT_MODE=daemon \
+     GIT_AI_TEST_SHARED_DAEMON_POOL_SIZE=1 \
+     cargo test --test integration \
+     diff_comprehensive::test_diff_many_files \
+     -- --exact --nocapture --test-threads 1
+   ```
+
+5. 该问题应作为独立基线缺陷排查；在它修复前，不能把当前主 integration 测试标记为全绿。
+
+Task 0.2 当前结果：
+
+- 原生 Windows 特殊 HOME 复现尚未执行，Task 0.2 的两个验收项保持未完成。
+- 静态扫描已经定位到需要优先复现的 Hook 命令生成器：
+  - Git Bash 路径转换后直接拼接命令：`claude_code.rs`、`codebuddy.rs`、`qoder.rs`、`trae.rs`。
+  - 原生路径直接拼接命令：`codex.rs`、`cursor.rs`、`droid.rs`、`firebender.rs`、`gemini.rs`、`github_copilot.rs`、`windsurf.rs`。
+- 下一步必须在原生 Windows 上分别以包含空格和 `&` 的 HOME 执行本地安装，保存实际生成的配置文件和命令解释器报错；静态扫描结果不能替代这一步验收。
+
+阶段 0 状态：**部分完成**。Task 0.1 的非 Windows 基线已经保存并区分了环境失败与项目失败；Windows 环境信息和 Task 0.2 等待原生 Windows 主机或 CI runner 执行。
+
 ## 4. 阶段 1：统一 Agent Hook 命令生成
 
 ### Task 1.1：确认每个 Agent 使用的命令解释器
@@ -155,8 +208,8 @@
 
 验收标准：
 
-- [ ] Claude、Codex、Gemini、Cursor、GitHub Copilot、Droid、CodeBuddy、Qoder、Trae、Firebender、Windsurf 的命令解释器已明确。
-- [ ] Amp、OpenCode、PI 等直接使用参数数组或脚本插件的 agent 已与 shell 命令型 agent 分开处理。
+- [x] Claude、Codex、Gemini、Cursor、GitHub Copilot、Droid、CodeBuddy、Qoder、Trae、Firebender、Windsurf 的命令解释器已明确。
+- [x] Amp、OpenCode、PI 等直接使用参数数组或脚本插件的 agent 已与 shell 命令型 agent 分开处理。
 
 ### Task 1.2：实现统一 Hook 命令渲染器
 
@@ -195,10 +248,10 @@ task test
 
 验收标准：
 
-- [ ] `src/mdm/agents/` 中不再存在未审查的 `format!("{} {}", binary_path, ...)`。
-- [ ] 所有特殊路径测试通过。
+- [x] `src/mdm/agents/` 中不再存在未审查的 `format!("{} {}", binary_path, ...)`。
+- [x] 所有特殊路径测试通过。
 - [ ] 在原生 Windows 上从生成的配置中提取 Hook 命令并执行，退出码为 0。
-- [ ] 普通无空格路径生成结果保持向后兼容。
+- [x] 普通无空格路径生成结果保持向后兼容。
 
 提交建议：
 
@@ -206,6 +259,49 @@ task test
 git add src/mdm
 git commit -m "Quote Windows agent hook commands"
 ```
+
+### 阶段 1 执行记录（2026-07-14）
+
+解释器映射：
+
+| Agent | macOS/Linux | Windows | 配置方式 |
+| --- | --- | --- | --- |
+| Claude Code | POSIX shell | Git Bash | 单一 `command` 字段；Windows 盘符先转换为 `/c/...`。 |
+| CodeBuddy、Qoder、Trae | POSIX shell | Git Bash | 延续现有 Claude 兼容 Hook 模式和路径转换。 |
+| Gemini、Cursor、Droid、Firebender | POSIX shell | `cmd.exe`/原生 Windows shell | 单一 `command` 字段，安装时按当前平台渲染。 |
+| Codex | POSIX shell | PowerShell | 同时生成 `command` 和 `commandWindows`。 |
+| GitHub Copilot | Bash/POSIX shell | PowerShell | 同时生成 `command` 和 `powershell`，Windows 不再复用 POSIX 字符串。 |
+| Windsurf | `bash -c` | `powershell -Command` | 同时生成 `command` 和 `powershell`。 |
+| Amp、OpenCode、PI | JavaScript/TypeScript 插件 | JavaScript/TypeScript 插件 | 保留 executable/argv 分离，不使用 shell 命令渲染器。 |
+
+实现结果：
+
+- 新增 `src/mdm/command_line.rs`，提供 `HookShell`、`platform_hook_shell` 和 `render_hook_command`。
+- 可执行文件路径和参数逐项引用；Git Bash、POSIX shell、`cmd.exe`、PowerShell 使用独立规则。
+- PowerShell 在带空格或元字符的可执行文件路径前使用调用运算符 `&`，单引号通过双写转义。
+- Git Bash 先将 Windows 盘符路径转换为 `/c/...`，再使用 POSIX 单引号规则。
+- 已迁移 Claude、Codex、Gemini、Cursor、GitHub Copilot、Droid、CodeBuddy、Qoder、Trae、Firebender 和 Windsurf；扫描只剩 Amp、OpenCode、PI 的插件脚本路径生成逻辑。
+
+测试结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test mdm:: --lib` | 通过：`207 passed, 0 failed`。 |
+| `task lint` | 通过。 |
+| `task build` | 通过。 |
+| `task format:check` | 仍只因阶段 0 已记录的 `src/api/bundle.rs:2` 两个历史空行失败；本阶段修改的 Rust 文件均已单独执行 `rustfmt`。 |
+| `cargo check --target x86_64-pc-windows-msvc` | 未完成：macOS 主机缺少 Windows/MSVC C 工具链，`libsqlite3-sys` 编译 bundled SQLite 时找不到 `stdlib.h`。 |
+
+特殊路径测试覆盖：
+
+```text
+C:\Users\Test User\.git-ai\bin\git-ai.exe
+C:\Users\A&B\.git-ai\bin\git-ai.exe
+C:\Users\100% Dev\.git-ai\bin\git-ai.exe
+C:\Users\O'Neil\.git-ai\bin\git-ai.exe
+```
+
+阶段 1 状态：**代码实现和本机回归已完成，原生 Windows E2E 待验收**。需要在 Windows runner 上从每类 Agent 的实际配置中取出生成命令，分别交给 Git Bash、`cmd.exe` 和 PowerShell 执行并确认退出码为 0。
 
 ## 5. 阶段 2：统一浏览器和登录回调行为
 

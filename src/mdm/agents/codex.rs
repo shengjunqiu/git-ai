@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 use toml::map::Map;
 
-const CODEX_CHECKPOINT_CMD: &str = "checkpoint codex --hook-input stdin";
+const CODEX_HOOK_ARGS: &[&str] = &["checkpoint", "codex", "--hook-input", "stdin"];
 const CODEX_HOOK_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "Stop"];
 const CODEX_HOOKS_FEATURE: &str = "hooks";
 const LEGACY_CODEX_HOOKS_FEATURE: &str = "codex_hooks";
@@ -26,7 +27,11 @@ impl CodexInstaller {
     }
 
     fn desired_command(binary_path: &Path) -> String {
-        format!("{} {}", binary_path.display(), CODEX_CHECKPOINT_CMD)
+        render_hook_command(binary_path, CODEX_HOOK_ARGS, HookShell::Posix)
+    }
+
+    fn desired_windows_command(binary_path: &Path) -> String {
+        render_hook_command(binary_path, CODEX_HOOK_ARGS, HookShell::PowerShell)
     }
 
     fn parse_config_toml(content: &str) -> Result<TomlValue, GitAiError> {
@@ -194,6 +199,7 @@ impl CodexInstaller {
             GitAiError::Generic("Codex hooks field must be a JSON object".to_string())
         })?;
         let desired_command = Self::desired_command(binary_path);
+        let desired_windows_command = Self::desired_windows_command(binary_path);
 
         for event_name in CODEX_HOOK_EVENTS {
             let blocks = hooks_obj
@@ -253,7 +259,8 @@ impl CodexInstaller {
             {
                 hooks_array.push(json!({
                     "type": "command",
-                    "command": desired_command
+                    "command": desired_command,
+                    "commandWindows": desired_windows_command
                 }));
             }
 
@@ -786,6 +793,13 @@ codex_hooks = true
                                         cmd == CodexInstaller::desired_command(&test_binary_path())
                                     })
                                     .unwrap_or(false)
+                                    && hook["commandWindows"].as_str()
+                                        == Some(
+                                            CodexInstaller::desired_windows_command(
+                                                &test_binary_path(),
+                                            )
+                                            .as_str(),
+                                        )
                             })
                         })
                 }),

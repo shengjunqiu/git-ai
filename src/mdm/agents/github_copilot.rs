@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     MIN_CODE_VERSION, generate_diff, get_editor_version, home_dir, parse_version,
@@ -7,10 +8,10 @@ use crate::mdm::utils::{
 };
 use serde_json::{Value, json};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-const GITHUB_COPILOT_PRE_TOOL_CMD: &str = "checkpoint github-copilot --hook-input stdin";
-const GITHUB_COPILOT_POST_TOOL_CMD: &str = "checkpoint github-copilot --hook-input stdin";
+const GITHUB_COPILOT_HOOK_ARGS: &[&str] =
+    &["checkpoint", "github-copilot", "--hook-input", "stdin"];
 
 pub struct GitHubCopilotInstaller;
 
@@ -35,6 +36,13 @@ impl GitHubCopilotInstaller {
             || (cmd.contains("git-ai")
                 && cmd.contains("checkpoint")
                 && cmd.contains("github-copilot"))
+    }
+
+    fn desired_commands(binary_path: &Path) -> (String, String) {
+        (
+            render_hook_command(binary_path, GITHUB_COPILOT_HOOK_ARGS, HookShell::Posix),
+            render_hook_command(binary_path, GITHUB_COPILOT_HOOK_ARGS, HookShell::PowerShell),
+        )
     }
 }
 
@@ -107,16 +115,9 @@ impl HookInstaller for GitHubCopilotInstaller {
         let content = fs::read_to_string(&hooks_path)?;
         let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
 
-        let pre_desired = format!(
-            "{} {}",
-            params.binary_path.display(),
-            GITHUB_COPILOT_PRE_TOOL_CMD
-        );
-        let post_desired = format!(
-            "{} {}",
-            params.binary_path.display(),
-            GITHUB_COPILOT_POST_TOOL_CMD
-        );
+        let (pre_desired, pre_powershell) = Self::desired_commands(&params.binary_path);
+        let post_desired = pre_desired.clone();
+        let post_powershell = pre_powershell.clone();
 
         let has_pre_installed = existing
             .get("hooks")
@@ -156,6 +157,8 @@ impl HookInstaller for GitHubCopilotInstaller {
                         .and_then(|c| c.as_str())
                         .map(|cmd| cmd == pre_desired)
                         .unwrap_or(false)
+                        && hook.get("powershell").and_then(|c| c.as_str())
+                            == Some(pre_powershell.as_str())
                 })
             })
             .unwrap_or(false);
@@ -170,6 +173,8 @@ impl HookInstaller for GitHubCopilotInstaller {
                         .and_then(|c| c.as_str())
                         .map(|cmd| cmd == post_desired)
                         .unwrap_or(false)
+                        && hook.get("powershell").and_then(|c| c.as_str())
+                            == Some(post_powershell.as_str())
                 })
             })
             .unwrap_or(false);
@@ -204,29 +209,24 @@ impl HookInstaller for GitHubCopilotInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let pre_tool_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            GITHUB_COPILOT_PRE_TOOL_CMD
-        );
-        let post_tool_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            GITHUB_COPILOT_POST_TOOL_CMD
-        );
+        let (pre_tool_cmd, pre_tool_powershell) = Self::desired_commands(&params.binary_path);
+        let post_tool_cmd = pre_tool_cmd.clone();
+        let post_tool_powershell = pre_tool_powershell.clone();
 
         let desired: Value = json!({
             "hooks": {
                 "PreToolUse": [
                     {
                         "type": "command",
-                        "command": pre_tool_cmd
+                        "command": pre_tool_cmd,
+                        "powershell": pre_tool_powershell
                     }
                 ],
                 "PostToolUse": [
                     {
                         "type": "command",
-                        "command": post_tool_cmd
+                        "command": post_tool_cmd,
+                        "powershell": post_tool_powershell
                     }
                 ]
             }
@@ -258,6 +258,7 @@ impl HookInstaller for GitHubCopilotInstaller {
             let Some(desired_cmd) = desired_cmd else {
                 continue;
             };
+            let desired_powershell = desired_hook.get("powershell").and_then(|c| c.as_str());
 
             let mut existing_hooks = hooks_obj
                 .get(*hook_name)
@@ -274,7 +275,10 @@ impl HookInstaller for GitHubCopilotInstaller {
                     && found_idx.is_none()
                 {
                     found_idx = Some(idx);
-                    if existing_cmd != desired_cmd {
+                    if existing_cmd != desired_cmd
+                        || existing_hook.get("powershell").and_then(|c| c.as_str())
+                            != desired_powershell
+                    {
                         needs_update = true;
                     }
                 }
@@ -485,6 +489,10 @@ mod tests {
             assert_eq!(post.len(), 1);
             assert_eq!(
                 pre[0].get("command").and_then(|v| v.as_str()),
+                Some("/tmp/git-ai/bin/git-ai checkpoint github-copilot --hook-input stdin")
+            );
+            assert_eq!(
+                pre[0].get("powershell").and_then(|v| v.as_str()),
                 Some("/tmp/git-ai/bin/git-ai checkpoint github-copilot --hook-input stdin")
             );
         });

@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{generate_diff, home_dir, write_atomic};
 use serde_json::{Value, json};
@@ -6,8 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 const FIREBENDER_CHECKPOINT_CMD: &str = "checkpoint firebender --hook-input stdin";
-const FIREBENDER_PRE_TOOL_USE_CMD: &str = "checkpoint firebender --hook-input stdin";
-const FIREBENDER_POST_TOOL_USE_CMD: &str = "checkpoint firebender --hook-input stdin";
+const FIREBENDER_HOOK_ARGS: &[&str] = &["checkpoint", "firebender", "--hook-input", "stdin"];
 
 pub struct FirebenderInstaller;
 
@@ -112,16 +112,12 @@ impl HookInstaller for FirebenderInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let pre_tool_use_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            FIREBENDER_PRE_TOOL_USE_CMD
+        let pre_tool_use_cmd = render_hook_command(
+            &params.binary_path,
+            FIREBENDER_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
         );
-        let post_tool_use_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            FIREBENDER_POST_TOOL_USE_CMD
-        );
+        let post_tool_use_cmd = pre_tool_use_cmd.clone();
 
         let desired: Value = json!({
             "version": 1,
@@ -391,10 +387,10 @@ mod tests {
 
             let updated: Value =
                 serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();
-            let expected = format!(
-                "{} {}",
-                create_test_binary_path().display(),
-                FIREBENDER_CHECKPOINT_CMD
+            let expected = render_hook_command(
+                &create_test_binary_path(),
+                FIREBENDER_HOOK_ARGS,
+                platform_hook_shell(HookShell::Cmd),
             );
             assert_eq!(
                 updated["hooks"]["preToolUse"][0]["command"]
@@ -558,10 +554,10 @@ mod tests {
                 updated["hooks"]["postToolUse"][0].get("matcher").is_none(),
                 "matcher should be removed from postToolUse"
             );
-            let expected_cmd = format!(
-                "{} {}",
-                create_test_binary_path().display(),
-                FIREBENDER_CHECKPOINT_CMD
+            let expected_cmd = render_hook_command(
+                &create_test_binary_path(),
+                FIREBENDER_HOOK_ARGS,
+                platform_hook_shell(HookShell::Cmd),
             );
             assert_eq!(
                 updated["hooks"]["preToolUse"][0]["command"]

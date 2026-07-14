@@ -1,15 +1,14 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
-    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, to_git_bash_path,
-    write_atomic,
+    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CODEBUDDY_PRE_TOOL_CMD: &str = "checkpoint codebuddy --hook-input stdin";
-const CODEBUDDY_POST_TOOL_CMD: &str = "checkpoint codebuddy --hook-input stdin";
+const CODEBUDDY_HOOK_ARGS: &[&str] = &["checkpoint", "codebuddy", "--hook-input", "stdin"];
 const CODEBUDDY_CATCH_ALL_MATCHER: &str = "*";
 
 pub struct CodeBuddyInstaller;
@@ -89,9 +88,9 @@ impl CodeBuddyInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let binary_path_str = to_git_bash_path(&params.binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, CODEBUDDY_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path_str, CODEBUDDY_POST_TOOL_CMD);
+        let pre_tool_cmd =
+            render_hook_command(&params.binary_path, CODEBUDDY_HOOK_ARGS, HookShell::GitBash);
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
         let mut hooks_obj = merged.get("hooks").cloned().unwrap_or_else(|| json!({}));
@@ -331,10 +330,10 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        format!(
-            "{} {}",
-            to_git_bash_path(&params().binary_path),
-            CODEBUDDY_PRE_TOOL_CMD
+        render_hook_command(
+            &params().binary_path,
+            CODEBUDDY_HOOK_ARGS,
+            HookShell::GitBash,
         )
     }
 

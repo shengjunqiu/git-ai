@@ -1,4 +1,5 @@
 pub mod agents;
+pub(crate) mod command_line;
 pub mod ensure_git_symlinks;
 pub mod git_client_installer;
 pub mod git_clients;

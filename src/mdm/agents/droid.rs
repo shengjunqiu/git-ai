@@ -1,12 +1,12 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const DROID_PRE_TOOL_CMD: &str = "checkpoint droid --hook-input stdin";
-const DROID_POST_TOOL_CMD: &str = "checkpoint droid --hook-input stdin";
+const DROID_HOOK_ARGS: &[&str] = &["checkpoint", "droid", "--hook-input", "stdin"];
 const DROID_CATCH_ALL_MATCHER: &str = "*";
 
 pub struct DroidInstaller;
@@ -84,9 +84,12 @@ impl DroidInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let binary_path = params.binary_path.to_string_lossy().to_string();
-        let pre_tool_cmd = format!("{} {}", binary_path, DROID_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path, DROID_POST_TOOL_CMD);
+        let pre_tool_cmd = render_hook_command(
+            &params.binary_path,
+            DROID_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        );
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
         let mut hooks_obj = merged.get("hooks").cloned().unwrap_or_else(|| json!({}));
@@ -386,7 +389,11 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        format!("{} {}", binary_path().display(), DROID_PRE_TOOL_CMD)
+        render_hook_command(
+            &binary_path(),
+            DROID_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        )
     }
 
     fn read_settings(path: &Path) -> Value {

@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
@@ -8,8 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // Command patterns for hooks
-const GEMINI_BEFORE_TOOL_CMD: &str = "checkpoint gemini --hook-input stdin";
-const GEMINI_AFTER_TOOL_CMD: &str = "checkpoint gemini --hook-input stdin";
+const GEMINI_HOOK_ARGS: &[&str] = &["checkpoint", "gemini", "--hook-input", "stdin"];
 const GEMINI_CATCH_ALL_MATCHER: &str = "*";
 
 pub struct GeminiInstaller;
@@ -87,12 +87,12 @@ impl GeminiInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let before_tool_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            GEMINI_BEFORE_TOOL_CMD
+        let before_tool_cmd = render_hook_command(
+            &params.binary_path,
+            GEMINI_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
         );
-        let after_tool_cmd = format!("{} {}", params.binary_path.display(), GEMINI_AFTER_TOOL_CMD);
+        let after_tool_cmd = before_tool_cmd.clone();
 
         let mut merged = existing.clone();
 
@@ -396,11 +396,15 @@ mod tests {
     }
 
     fn expected_before_cmd() -> String {
-        format!("{} {}", binary_path().display(), GEMINI_BEFORE_TOOL_CMD)
+        render_hook_command(
+            &binary_path(),
+            GEMINI_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        )
     }
 
     fn expected_after_cmd() -> String {
-        format!("{} {}", binary_path().display(), GEMINI_AFTER_TOOL_CMD)
+        expected_before_cmd()
     }
 
     fn read_settings(path: &Path) -> Value {

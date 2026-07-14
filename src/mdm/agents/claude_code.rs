@@ -1,17 +1,16 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     MIN_CLAUDE_VERSION, binary_exists, claude_config_dir, generate_diff, get_binary_version,
-    is_git_ai_checkpoint_command, parse_version, to_git_bash_path, version_meets_requirement,
-    write_atomic,
+    is_git_ai_checkpoint_command, parse_version, version_meets_requirement, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 // Command patterns for hooks
-const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
-const CLAUDE_POST_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
+const CLAUDE_HOOK_ARGS: &[&str] = &["checkpoint", "claude", "--hook-input", "stdin"];
 const CLAUDE_CATCH_ALL_MATCHER: &str = "*";
 
 pub struct ClaudeCodeInstaller;
@@ -89,9 +88,9 @@ impl ClaudeCodeInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let binary_path_str = to_git_bash_path(&params.binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_POST_TOOL_CMD);
+        let pre_tool_cmd =
+            render_hook_command(&params.binary_path, CLAUDE_HOOK_ARGS, HookShell::GitBash);
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
         let mut hooks_obj = merged.get("hooks").cloned().unwrap_or_else(|| json!({}));
@@ -376,7 +375,7 @@ impl HookInstaller for ClaudeCodeInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mdm::utils::{clean_path, to_git_bash_path};
+    use crate::mdm::utils::clean_path;
     use std::fs;
     use tempfile::TempDir;
 
@@ -398,7 +397,7 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        format!("{} {}", binary_path().display(), CLAUDE_PRE_TOOL_CMD)
+        render_hook_command(&binary_path(), CLAUDE_HOOK_ARGS, HookShell::GitBash)
     }
 
     fn read_settings(path: &Path) -> Value {
@@ -1182,9 +1181,8 @@ mod tests {
         let raw_path = PathBuf::from(r"\\?\C:\Users\USERNAME\.git-ai\bin\git-ai.exe");
         let binary_path = clean_path(raw_path);
 
-        let binary_path_str = to_git_bash_path(&binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_POST_TOOL_CMD);
+        let pre_tool_cmd = render_hook_command(&binary_path, CLAUDE_HOOK_ARGS, HookShell::GitBash);
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         assert!(
             !pre_tool_cmd.contains(r"\\?\"),
@@ -1205,9 +1203,8 @@ mod tests {
     #[test]
     fn test_claude_hook_commands_use_git_bash_path_on_windows() {
         let binary_path = PathBuf::from(r"C:\Users\Administrator\.git-ai\bin\git-ai.exe");
-        let binary_path_str = to_git_bash_path(&binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_PRE_TOOL_CMD);
-        let post_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_POST_TOOL_CMD);
+        let pre_tool_cmd = render_hook_command(&binary_path, CLAUDE_HOOK_ARGS, HookShell::GitBash);
+        let post_tool_cmd = pre_tool_cmd.clone();
 
         assert_eq!(
             pre_tool_cmd,
@@ -1224,8 +1221,7 @@ mod tests {
     #[test]
     fn test_claude_hook_commands_preserve_unix_path() {
         let binary_path = PathBuf::from("/usr/local/bin/git-ai");
-        let binary_path_str = to_git_bash_path(&binary_path);
-        let pre_tool_cmd = format!("{} {}", binary_path_str, CLAUDE_PRE_TOOL_CMD);
+        let pre_tool_cmd = render_hook_command(&binary_path, CLAUDE_HOOK_ARGS, HookShell::GitBash);
 
         assert_eq!(
             pre_tool_cmd, "/usr/local/bin/git-ai checkpoint claude --hook-input stdin",

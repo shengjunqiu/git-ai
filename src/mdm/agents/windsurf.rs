@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, render_hook_command};
 use crate::mdm::hook_installer::{
     HookCheckResult, HookInstaller, HookInstallerParams, InstallResult, UninstallResult,
 };
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 
-const WINDSURF_CHECKPOINT_CMD: &str = "checkpoint windsurf --hook-input stdin";
+const WINDSURF_HOOK_ARGS: &[&str] = &["checkpoint", "windsurf", "--hook-input", "stdin"];
 
 /// The Windsurf Cascade hook events we install into.
 const HOOK_EVENTS: &[&str] = &[
@@ -41,6 +42,7 @@ impl WindsurfInstaller {
     fn install_hooks_at(
         hooks_path: &PathBuf,
         desired_cmd: &str,
+        desired_powershell: &str,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
         if let Some(dir) = hooks_path.parent() {
@@ -79,7 +81,10 @@ impl WindsurfInstaller {
                     && found_idx.is_none()
                 {
                     found_idx = Some(idx);
-                    if cmd != desired_cmd {
+                    if cmd != desired_cmd
+                        || item.get("powershell").and_then(|value| value.as_str())
+                            != Some(desired_powershell)
+                    {
                         needs_update = true;
                     }
                 }
@@ -90,6 +95,7 @@ impl WindsurfInstaller {
                     if needs_update {
                         event_array[idx] = json!({
                             "command": desired_cmd,
+                            "powershell": desired_powershell,
                             "show_output": false
                         });
                     }
@@ -113,6 +119,7 @@ impl WindsurfInstaller {
                 None => {
                     event_array.push(json!({
                         "command": desired_cmd,
+                        "powershell": desired_powershell,
                         "show_output": false
                     }));
                 }
@@ -209,7 +216,7 @@ impl HookInstaller for WindsurfInstaller {
         vec!["Windsurf", "windsurf"]
     }
 
-    fn check_hooks(&self, _params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
+    fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
         let has_cli = resolve_editor_cli("windsurf").is_some();
         let has_dotfiles = home_dir().join(".codeium").join("windsurf").exists();
 
@@ -220,6 +227,14 @@ impl HookInstaller for WindsurfInstaller {
                 hooks_up_to_date: false,
             });
         }
+
+        let desired_command =
+            render_hook_command(&params.binary_path, WINDSURF_HOOK_ARGS, HookShell::Posix);
+        let desired_powershell = render_hook_command(
+            &params.binary_path,
+            WINDSURF_HOOK_ARGS,
+            HookShell::PowerShell,
+        );
 
         // Check all hook locations
         let mut any_installed = false;
@@ -248,10 +263,26 @@ impl HookInstaller for WindsurfInstaller {
                     })
                     .unwrap_or(false)
             });
+            let hooks_up_to_date = HOOK_EVENTS.iter().all(|event| {
+                existing
+                    .get("hooks")
+                    .and_then(|h| h.get(*event))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter().any(|item| {
+                            item.get("command").and_then(|c| c.as_str())
+                                == Some(desired_command.as_str())
+                                && item.get("powershell").and_then(|c| c.as_str())
+                                    == Some(desired_powershell.as_str())
+                        })
+                    })
+                    .unwrap_or(false)
+            });
 
             if has_hooks {
                 any_installed = true;
-            } else {
+            }
+            if !hooks_up_to_date {
                 all_installed = false;
             }
         }
@@ -268,16 +299,20 @@ impl HookInstaller for WindsurfInstaller {
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        let desired_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            WINDSURF_CHECKPOINT_CMD
+        let desired_cmd =
+            render_hook_command(&params.binary_path, WINDSURF_HOOK_ARGS, HookShell::Posix);
+        let desired_powershell = render_hook_command(
+            &params.binary_path,
+            WINDSURF_HOOK_ARGS,
+            HookShell::PowerShell,
         );
 
         let mut all_diffs = Vec::new();
 
         for hooks_path in Self::hooks_paths() {
-            if let Some(diff) = Self::install_hooks_at(&hooks_path, &desired_cmd, dry_run)? {
+            if let Some(diff) =
+                Self::install_hooks_at(&hooks_path, &desired_cmd, &desired_powershell, dry_run)?
+            {
                 all_diffs.push(diff);
             }
         }

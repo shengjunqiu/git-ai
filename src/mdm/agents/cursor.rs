@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{
     HookCheckResult, HookInstaller, HookInstallerParams, InstallResult,
 };
@@ -13,8 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 
 // Command patterns for hooks
-const CURSOR_PRE_TOOL_USE_CMD: &str = "checkpoint cursor --hook-input stdin";
-const CURSOR_POST_TOOL_USE_CMD: &str = "checkpoint cursor --hook-input stdin";
+const CURSOR_HOOK_ARGS: &[&str] = &["checkpoint", "cursor", "--hook-input", "stdin"];
 
 pub struct CursorInstaller;
 
@@ -135,16 +135,12 @@ impl HookInstaller for CursorInstaller {
         };
 
         // Build commands with absolute path
-        let pre_tool_use_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            CURSOR_PRE_TOOL_USE_CMD
+        let pre_tool_use_cmd = render_hook_command(
+            &params.binary_path,
+            CURSOR_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
         );
-        let post_tool_use_cmd = format!(
-            "{} {}",
-            params.binary_path.display(),
-            CURSOR_POST_TOOL_USE_CMD
-        );
+        let post_tool_use_cmd = pre_tool_use_cmd.clone();
 
         // Desired hooks payload for Cursor
         let desired: Value = json!({
@@ -456,7 +452,11 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
 
-        let git_ai_cmd = format!("{} {}", binary_path.display(), CURSOR_PRE_TOOL_USE_CMD);
+        let git_ai_cmd = render_hook_command(
+            &binary_path,
+            CURSOR_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        );
 
         let result = json!({
             "version": 1,
@@ -529,7 +529,11 @@ mod tests {
         )
         .unwrap();
 
-        let git_ai_cmd = format!("{} {}", binary_path.display(), CURSOR_PRE_TOOL_USE_CMD);
+        let git_ai_cmd = render_hook_command(
+            &binary_path,
+            CURSOR_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        );
 
         let mut content: Value =
             serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();
@@ -601,7 +605,11 @@ mod tests {
         )
         .unwrap();
 
-        let git_ai_cmd = format!("{} {}", binary_path.display(), CURSOR_PRE_TOOL_USE_CMD);
+        let git_ai_cmd = render_hook_command(
+            &binary_path,
+            CURSOR_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        );
 
         let mut content: Value =
             serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();
@@ -656,8 +664,12 @@ mod tests {
         let raw_path = PathBuf::from(r"\\?\C:\Users\USERNAME\.git-ai\bin\git-ai.exe");
         let binary_path = clean_path(raw_path);
 
-        let pre_tool_use_cmd = format!("{} {}", binary_path.display(), CURSOR_PRE_TOOL_USE_CMD);
-        let post_tool_use_cmd = format!("{} {}", binary_path.display(), CURSOR_POST_TOOL_USE_CMD);
+        let pre_tool_use_cmd = render_hook_command(
+            &binary_path,
+            CURSOR_HOOK_ARGS,
+            platform_hook_shell(HookShell::Cmd),
+        );
+        let post_tool_use_cmd = pre_tool_use_cmd.clone();
 
         assert!(
             !pre_tool_use_cmd.contains(r"\\?\"),
