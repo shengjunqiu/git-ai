@@ -581,6 +581,13 @@ git-ai daemon shutdown
 - [ ] 合法的大型 checkpoint 不会被错误截断。
 - [ ] Windows daemon、wrapper-daemon CI 均通过。
 
+### 阶段 4.2 执行记录（进行中，2026-07-15）
+
+- control frame 上限明确为 16 MiB，为大型 checkpoint 请求保留余量。
+- trace frame 上限明确为 8 MiB；读取过程按块累计并在越界时立即断开，不再通过无限制 `read_line()` 扩张内存。
+- 已覆盖“刚好达到上限”“超过上限”“EOF 前没有换行”三类边界，`cargo test daemon_frame_tests --lib` 通过（3 tests）。
+- Windows 已连接管道读取超时、卡住连接的 shutdown 取消和 worker 耗尽恢复测试仍待下一步完成。
+
 提交建议：
 
 ```bash

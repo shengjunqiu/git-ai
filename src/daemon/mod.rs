@@ -98,6 +98,8 @@ const DAEMON_CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const DAEMON_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_CHECKPOINT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
+const MAX_CONTROL_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TRACE_FRAME_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(windows)]
 const WINDOWS_TRACE_PIPE_WORKERS: usize = 16;
 #[cfg(windows)]
@@ -3156,13 +3158,74 @@ fn apply_reset_working_log_side_effect(
     Ok(())
 }
 
-fn read_json_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, GitAiError> {
-    let mut line = String::new();
-    let read = reader.read_line(&mut line)?;
-    if read == 0 {
+fn read_json_line<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+    frame_kind: &str,
+) -> Result<Option<String>, GitAiError> {
+    let mut bytes = Vec::new();
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        let take = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buffer.len(), |position| position + 1);
+        if bytes.len().saturating_add(take) > max_bytes {
+            return Err(GitAiError::Generic(format!(
+                "{} frame exceeds {} byte limit",
+                frame_kind, max_bytes
+            )));
+        }
+        bytes.extend_from_slice(&buffer[..take]);
+        reader.consume(take);
+        if bytes.last() == Some(&b'\n') {
+            break;
+        }
+    }
+    if bytes.is_empty() {
         return Ok(None);
     }
-    Ok(Some(line))
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| GitAiError::Generic(format!("{} frame is not valid UTF-8", frame_kind)))
+}
+
+#[cfg(test)]
+mod daemon_frame_tests {
+    use super::read_json_line;
+    use std::io::{BufReader, Cursor};
+
+    #[test]
+    fn reads_frame_at_size_limit() {
+        let mut reader = BufReader::new(Cursor::new(b"1234\n"));
+        assert_eq!(
+            read_json_line(&mut reader, 5, "control").unwrap(),
+            Some("1234\n".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_frame_over_size_limit() {
+        let mut reader = BufReader::new(Cursor::new(b"12345\n"));
+        let error = read_json_line(&mut reader, 5, "trace").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("trace frame exceeds 5 byte limit")
+        );
+    }
+
+    #[test]
+    fn reads_final_frame_without_newline() {
+        let mut reader = BufReader::new(Cursor::new(b"{}"));
+        assert_eq!(
+            read_json_line(&mut reader, 2, "control").unwrap(),
+            Some("{}".to_string())
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -7110,7 +7173,7 @@ fn handle_control_connection_actor_reader<R: Read + Write>(
     coordinator: Arc<ActorDaemonCoordinator>,
     runtime_handle: tokio::runtime::Handle,
 ) -> Result<(), GitAiError> {
-    while let Some(line) = read_json_line(reader)? {
+    while let Some(line) = read_json_line(reader, MAX_CONTROL_FRAME_BYTES, "control")? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -7252,7 +7315,7 @@ fn handle_trace_connection_actor_reader<R: Read>(
     coordinator: Arc<ActorDaemonCoordinator>,
 ) -> Result<(), GitAiError> {
     let mut observed_roots = std::collections::BTreeSet::new();
-    while let Some(line) = read_json_line(reader)? {
+    while let Some(line) = read_json_line(reader, MAX_TRACE_FRAME_BYTES, "trace")? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
