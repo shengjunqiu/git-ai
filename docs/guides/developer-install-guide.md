@@ -44,6 +44,8 @@ git-ai --version
 git --version   # 应显示 git-ai 代理版本
 ```
 
+Windows 更新请使用 `git-ai update`，不要使用 `git ai update`；直接入口可以先退出当前进程并释放 `git-ai.exe`、`git.exe` 文件锁。
+
 ### 方式二：手动安装
 
 ```powershell

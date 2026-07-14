@@ -651,9 +651,17 @@ git commit -m "Harden Windows daemon named pipes"
 
 验收标准：
 
-- [ ] Windows 用户文档不再推荐 `git ai update`。
-- [ ] `git-ai update` 可以处理 `git-ai.exe`/`git.exe` 被 daemon 或 Git 客户端占用的情况。
+- [x] Windows 用户文档不再推荐 `git ai update`。
+- [x] `git-ai update` 可以处理 `git-ai.exe`/`git.exe` 被 daemon 或 Git 客户端占用的情况。
 - [ ] 更新失败时旧版本仍可运行，不留下半写入二进制。
+
+### 阶段 5.2 执行记录（2026-07-15）
+
+- 保留 Windows 对 `git ai update` 的快速失败保护，错误信息明确引导执行 `git-ai update`。
+- `install.ps1` 安装结束时输出直接更新命令，并明确禁止通过 Git 扩展入口更新。
+- `docs/user-guide.md`、开发者安装指南和企业中文安装指南已统一说明 Windows 更新入口及文件锁原因。
+- Windows 安装 E2E 增加安装器输出断言；原有测试继续覆盖 `git ai update` 拒绝信息和 `git-ai update` 替代提示。
+- 更新失败后的旧版本保留/原子替换仍需原生 Windows 故障注入验收。
 
 提交建议：
 

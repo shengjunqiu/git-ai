@@ -385,6 +385,12 @@ fn windows_install_script_reinstall_stops_running_daemon() {
         initial_install.stdout,
         initial_install.stderr
     );
+    assert!(
+        initial_install.stdout.contains("git-ai update")
+            && initial_install.stdout.contains("not 'git ai update'"),
+        "installer should print the direct Windows update command\nstdout:\n{}",
+        initial_install.stdout
+    );
 
     let installed_git_ai = installed_git_ai_path(&repo);
     assert!(

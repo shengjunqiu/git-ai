@@ -70,6 +70,8 @@ irm "https://117.147.213.234:38080/worker/releases/latest/download/install.ps1" 
 
 git-ai 会安装到 `%USERPROFILE%\.git-ai\bin\`。
 
+Windows 更新时请直接执行 `git-ai update`。不要通过 `git ai update` 更新，因为父级 `git.exe` 会占用待替换的程序文件。
+
 ## 4. 首次登录与浏览器授权
 
 安装完成后，CLI 需要通过浏览器授权获取当前账号的登录凭证。

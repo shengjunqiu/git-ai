@@ -657,6 +657,7 @@ if ($pathUpdate.MachineStatus -eq 'Updated') {
 
 Write-Success "Successfully installed git-ai into $installDir"
 Write-Success "You can now run 'git-ai' from your terminal"
+Write-Success "To update later on Windows, run 'git-ai update' (not 'git ai update')"
 
 # Configure Git Bash shell profiles so git-ai takes precedence over /mingw64/bin/git
 # Git Bash (MSYS2/MinGW) prepends its own directories to PATH, which shadows

@@ -257,6 +257,8 @@ Windows 上通常会显示 Git for Windows 的 `git.exe` 路径。
 
 Git AI 会定期检查企业服务器上是否有新版本。发现新版本后，可以执行：
 
+Windows 必须直接运行 `git-ai update`，不能使用 `git ai update`，否则父级 `git.exe` 可能持续占用需要替换的文件。
+
 ```bash
 git-ai update
 ```
@@ -410,5 +412,4 @@ git-ai debug
 ```
 
 将输出内容、操作系统版本、`git-ai --version` 结果以及报错截图一起发给管理员，可以更快定位问题。
-
 
