@@ -135,8 +135,7 @@ git-ai install-hooks
 
 当前安装器可自动检测或配置的工具包括：
 
-- 编辑器与 IDE：VS Code、Cursor、Trae、CodeBuddy、Qoder、JetBrains IDE。
-- AI 编程工具：Claude Code、Codex、GitHub Copilot、Windsurf、Gemini CLI、OpenCode、Amp、Pi、Droid、Firebender。
+
 
 ### VS Code / Cursor 推荐设置
 

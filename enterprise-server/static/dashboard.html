@@ -48,6 +48,11 @@
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
 
+            <div class="nav-section">帮助与支持</div>
+            <a class="nav-item" onclick="showSection('help')">
+                <span class="nav-icon">❓</span> 安装与使用指南
+            </a>
+
             <div class="sidebar-footer">
                 <div class="sidebar-user">
                     <div class="sidebar-user-avatar">__GITAI_USER_INITIAL__</div>
@@ -295,6 +300,203 @@
                         <tbody id="apikeys-table"><tr><td colspan="7">加载中...</td></tr></tbody>
                     </table>
                     <div id="apikeys-pagination" class="table-pagination"></div>
+                </div>
+            </div>
+
+            <!-- Help Section -->
+            <div id="section-help" class="section">
+                <div class="page-header help-page-header">
+                    <div>
+                        <div class="page-title">Git AI 安装与使用指南</div>
+                        <div class="page-subtitle">从环境检查、客户端安装到编辑器集成，一步完成企业版 Git AI 配置</div>
+                    </div>
+                    <span class="help-version-badge">企业版 CLI</span>
+                </div>
+
+                <div class="help-hero">
+                    <div>
+                        <div class="help-eyebrow">快速开始</div>
+                        <h2>让每位开发者都能正确安装并使用 Git AI</h2>
+                        <p>支持 macOS（Apple Silicon / Intel）、Windows（x64 / ARM64）和 Linux（x64 / ARM64）。安装前请确认电脑已安装 Git，并能访问企业服务器。</p>
+                    </div>
+                    <div class="help-platforms" aria-label="支持的平台">
+                        <span> macOS</span>
+                        <span>⊞ Windows</span>
+                        <span>◉ Linux</span>
+                    </div>
+                </div>
+
+                <div class="help-layout">
+                    <nav class="help-toc" aria-label="帮助页面目录">
+                        <div class="help-toc-title">本页目录</div>
+                        <a href="#help-prepare">1. 安装前准备</a>
+                        <a href="#help-install">2. 安装客户端</a>
+                        <a href="#help-login">3. 登录与授权</a>
+                        <a href="#help-check">4. 检查与更新</a>
+                        <a href="#help-editor">5. 编辑器集成</a>
+                        <a href="#help-usage">6. 日常使用</a>
+                        <a href="#help-faq">7. 常见问题</a>
+                        <a href="#help-debug">8. 获取诊断信息</a>
+                    </nav>
+
+                    <div class="help-content">
+                        <section id="help-prepare" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">01</span>
+                                <div><h2>安装前准备</h2><p>开始前完成下面三项检查。</p></div>
+                            </div>
+                            <div class="help-checklist">
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">1</span>
+                                    <div><h3>检查 Git</h3><p>在终端或 PowerShell 中运行：</p></div>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git --version</code></pre></div>
+                                    <p class="help-note">看到类似 <code>git version 2.x.x</code> 的输出即可。如果提示找不到 Git，请先安装 Git。</p>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">2</span>
+                                    <div><h3>检查服务器连接</h3><p>macOS / Linux：</p></div>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsS http://117.147.213.234:38080/health</code></pre></div>
+                                    <p>Windows PowerShell：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Invoke-RestMethod http://117.147.213.234:38080/health</code></pre></div>
+                                    <p class="help-note">服务正常时会返回 <code>status: ok</code>。</p>
+                                </div>
+                                <div class="help-check-item">
+                                    <span class="help-check-icon">3</span>
+                                    <div><h3>注册账号</h3><p>使用姓名、企业邮箱和密码注册，并选择所属组织与部门。注册后请保持浏览器登录状态。</p></div>
+                                    <a class="help-link-btn" href="http://117.147.213.234:38080/auth/register" target="_blank" rel="noreferrer">打开注册页面 ↗</a>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="help-install" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">02</span>
+                                <div><h2>安装客户端</h2><p>选择你的操作系统，安装程序会自动识别处理器架构。</p></div>
+                            </div>
+                            <div class="help-os-grid">
+                                <article class="help-os-card">
+                                    <div class="help-os-title"><span></span><h3>macOS</h3></div>
+                                    <p>打开“终端”，执行：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
+  http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
+  | bash</code></pre></div>
+                                    <p>关闭并重新打开终端，然后检查版本：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version</code></pre></div>
+                                </article>
+                                <article class="help-os-card">
+                                    <div class="help-os-title"><span>◉</span><h3>Linux</h3></div>
+                                    <p>打开终端，执行：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsSL \
+  http://117.147.213.234:38080/worker/releases/latest/download/install.sh \
+  | bash</code></pre></div>
+                                    <p>重新打开终端，或刷新当前窗口的 PATH：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
+git-ai --version</code></pre></div>
+                                </article>
+                                <article class="help-os-card">
+                                    <div class="help-os-title"><span>⊞</span><h3>Windows</h3></div>
+                                    <p>打开 PowerShell，执行：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>irm http://117.147.213.234:38080/worker/releases/latest/download/install.ps1 | iex</code></pre></div>
+                                    <p>如 PowerShell 禁止运行脚本，先为当前窗口临时放行：</p>
+                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code></pre></div>
+                                    <p class="help-note">安装后关闭并重新打开 PowerShell，再运行 <code>git-ai --version</code>。</p>
+                                </article>
+                            </div>
+                        </section>
+
+                        <section id="help-login" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">03</span>
+                                <div><h2>登录与网页授权</h2><p>安装完成后，将 CLI 与你的企业账号关联。</p></div>
+                            </div>
+                            <h3>有图形界面的电脑</h3>
+                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server http://117.147.213.234:38080</code></pre></div>
+                            <p>命令会打开浏览器。已有账号可直接登录并确认授权，也可以手动打开 <a href="http://117.147.213.234:38080/login" target="_blank" rel="noreferrer">企业登录页面 ↗</a>。</p>
+                            <h3>没有图形界面的 Linux 服务器</h3>
+                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server http://117.147.213.234:38080 --no-browser</code></pre></div>
+                            <p>复制终端显示的授权地址，在有浏览器的电脑上打开并完成授权。</p>
+                            <div class="help-command-row">
+                                <div><h3>检查登录状态</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai whoami</code></pre></div></div>
+                                <div><h3>切换账号</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai logout
+git-ai login --server http://117.147.213.234:38080</code></pre></div></div>
+                            </div>
+                        </section>
+
+                        <section id="help-check" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">04</span>
+                                <div><h2>检查安装结果与更新</h2><p>验证版本、账号、服务器地址和真实 Git 路径。</p></div>
+                            </div>
+                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version
+git-ai whoami
+git-ai config api_base_url
+git-ai git-path</code></pre></div>
+                            <div class="help-callout"><strong>预期结果</strong><p>服务器地址为 <code>http://117.147.213.234:38080</code>；<code>git-ai git-path</code> 显示真实 Git 路径，例如 macOS / Linux 上的 <code>/usr/bin/git</code>，或 Windows 上 Git for Windows 的 <code>git.exe</code>。</p></div>
+                            <h3>更新 Git AI</h3>
+                            <div class="help-command-row">
+                                <div><p>安装企业服务器上的最新版本：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai update
+git-ai --version</code></pre></div></div>
+                                <div><p>强制重新安装当前最新版：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai update --force</code></pre></div></div>
+                            </div>
+                            <p class="help-note">也可以重新运行对应系统的安装命令。安装程序会覆盖旧版本，并保留现有登录和配置。</p>
+                        </section>
+
+                        <section id="help-editor" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">05</span>
+                                <div><h2>编辑器与 AI 工具集成</h2><p>使用前请安装扩展 <strong>git-ai-0.1.22.vsix</strong>，并开启 checkpoint 与 AI Tab 追踪。</p></div>
+                            </div>
+                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>{
+  "gitai.enableCheckpointLogging": true,
+  "gitai.experiments.aiTabTracking": true
+}</code></pre></div>
+                            <div class="help-callout warning"><strong>Trae 用户注意</strong><p>在 Hooks 设置中，手动开启“已配置的 Hooks”选项。</p></div>
+                            <h3>支持的编辑器与工具</h3>
+                            <div class="help-tool-list">
+                                <span>VS Code</span><span>Cursor</span><span>Trae</span><span>CodeBuddy</span><span>Qoder</span><span>JClaude Code</span><span>Codex</span><span>GitHub Copilot</span><span>Windsurf</span><span>Gemini CLI</span><span>OpenCode</span><span>Amp</span><span>Pi</span><span>Droid</span><span>Firebender</span>
+                            </div>
+                            <p class="help-note">如果安装 CLI 后才安装新的编辑器或 AI 工具，或者 Hooks 自动配置失败，请运行 <code>git-ai install-hooks</code>。</p>
+                        </section>
+
+                        <section id="help-usage" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">06</span>
+                                <div><h2>日常使用</h2><p>无需为每个 Git 仓库单独初始化，正常使用支持的 AI 工具编辑代码并执行 Git 命令即可。</p></div>
+                            </div>
+                            <div class="help-callout success"><strong>数据如何上传</strong><p>执行 <code>git commit</code> 时，AI 与人工代码归属统计数据会上传至统计后台。</p></div>
+                            <div class="help-command-row">
+                                <div><h3>查看归属统计</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai status</code></pre></div></div>
+                                <div><h3>查看更多命令</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai help</code></pre></div></div>
+                            </div>
+                        </section>
+
+                        <section id="help-faq" class="help-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">07</span>
+                                <div><h2>常见问题</h2><p>点击问题查看处理方法。</p></div>
+                            </div>
+                            <div class="help-faq-list">
+                                <details><summary>提示 git-ai: command not found</summary><div><p>先关闭并重新打开终端。macOS / Linux 也可以临时执行：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
+git-ai --version</code></pre></div></div></details>
+                                <details><summary>提示无法找到标准 Git</summary><div><p>运行下面两条命令。macOS 系统 Git 通常位于 <code>/usr/bin/git</code>；如果仍然报错，请把输出发给管理员。</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git --version
+command -v git</code></pre></div></div></details>
+                                <details><summary>登录页面没有自动打开</summary><div><p>重新运行登录命令；如果仍未打开，使用无浏览器模式并手动复制授权地址。</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server http://117.147.213.234:38080 --no-browser</code></pre></div></div></details>
+                                <details><summary>无法连接企业服务器</summary><div><p>macOS / Linux：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -v http://117.147.213.234:38080/health</code></pre></div><p>Windows PowerShell：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Test-NetConnection 117.147.213.234 -Port 38080</code></pre></div><p>如果连接失败，请确认当前网络允许访问 <code>117.147.213.234:38080</code>，必要时联系管理员。</p></div></details>
+                                <details><summary>macOS 提示开发者或安全限制</summary><div><p>请确认安装命令来自本页企业服务器地址。安装器会尝试移除下载文件的隔离属性；如果仍被系统阻止，请将完整提示截图发给管理员。</p></div></details>
+                                <details><summary>Windows 安装后仍找不到 git-ai</summary><div><p>关闭所有 PowerShell 或命令提示符窗口，重新打开后运行 <code>git-ai --version</code>。如果仍然找不到，请确认用户 PATH 包含：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>%USERPROFILE%\.git-ai\bin</code></pre></div></div></details>
+                                <details><summary>Hooks 自动配置失败或新安装了编辑器</summary><div><p>重新执行 Hooks 安装：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai install-hooks</code></pre></div></div></details>
+                            </div>
+                        </section>
+
+                        <section id="help-debug" class="help-card help-debug-card">
+                            <div class="help-section-heading">
+                                <span class="help-step">08</span>
+                                <div><h2>获取诊断信息</h2><p>遇到问题时运行诊断命令，并将结果交给管理员。</p></div>
+                            </div>
+                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai debug</code></pre></div>
+                            <p>请同时提供操作系统版本、<code>git-ai --version</code> 输出和报错截图，以便更快定位问题。</p>
+                        </section>
+                    </div>
                 </div>
             </div>
         </main>

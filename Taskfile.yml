@@ -80,7 +80,7 @@ tasks:
     desc: Run the bats-based tests with debug build (DEPRECATED - DO NOT USE THIS UNLESS EXPLICITLY REQUESTED BY THE USER FOR TESTING PURPOSES; WILL BE REMOVED SOON)
     deps: [build]
     cmds:
-      - bats tests/e2e/user-scenarios.bats
+      - bats tests/e2e/user-scenarios.bats tests/e2e/installer-git-detection.bats tests/e2e/installer-checksum.bats
 
   lint:
     desc: Run cargo check and clippy with warnings as errors

@@ -230,6 +230,56 @@ fn run_install_script(repo: &TestRepo, timeout: Duration) -> CommandResult {
     run_command_with_timeout(&mut command, timeout)
 }
 
+fn run_install_script_with_path(
+    repo: &TestRepo,
+    path: impl AsRef<std::ffi::OsStr>,
+    timeout: Duration,
+) -> CommandResult {
+    let mut command = Command::new("powershell");
+    command
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(install_script_path())
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    configure_install_env(&mut command, repo);
+    command.env("PATH", path);
+    run_command_with_timeout(&mut command, timeout)
+}
+
+fn remove_git_path_from_config(repo: &TestRepo) {
+    let config_path = repo.test_home_path().join(".git-ai").join("config.json");
+    let raw = fs::read_to_string(&config_path).expect("failed to read test config.json");
+    let mut config: Value = serde_json::from_str(&raw).expect("failed to parse test config.json");
+    config
+        .as_object_mut()
+        .expect("config.json should contain an object")
+        .remove("git_path");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("failed to serialize test config.json"),
+    )
+    .expect("failed to update test config.json");
+}
+
+fn run_install_script_via_expression(repo: &TestRepo, timeout: Duration) -> CommandResult {
+    let mut command = Command::new("powershell");
+    command
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(
+            "$content = Get-Content -LiteralPath $env:GIT_AI_INSTALL_SCRIPT_PATH -Raw; \
+             Invoke-Expression ([string]$content)",
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    configure_install_env(&mut command, repo);
+    command.env("GIT_AI_INSTALL_SCRIPT_PATH", install_script_path());
+    run_command_with_timeout(&mut command, timeout)
+}
+
 fn run_installed_git_ai(repo: &TestRepo, args: &[&str], timeout: Duration) -> CommandResult {
     let mut command = Command::new(installed_git_ai_path(repo));
     command.args(args).current_dir(repo.test_home_path());
@@ -362,6 +412,70 @@ fn windows_install_script_reinstall_stops_running_daemon() {
         "installed git-ai should remain usable after reinstall\nstdout:\n{}\nstderr:\n{}",
         version.stdout,
         version.stderr
+    );
+
+    kill_installed_processes(&repo);
+}
+
+#[test]
+#[serial]
+fn windows_install_script_supports_invoke_expression_execution() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+
+    let result = run_install_script_via_expression(&repo, Duration::from_secs(90));
+    assert!(
+        result.status.success(),
+        "install through Invoke-Expression should succeed\nstdout:\n{}\nstderr:\n{}",
+        result.stdout,
+        result.stderr
+    );
+    assert!(
+        installed_git_ai_path(&repo).exists(),
+        "git-ai.exe should be installed after expression-based install"
+    );
+
+    kill_installed_processes(&repo);
+}
+
+#[test]
+#[serial]
+fn windows_reinstall_skips_git_ai_shim_and_finds_later_git_on_path() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+
+    let initial_install = run_install_script(&repo, Duration::from_secs(90));
+    assert!(
+        initial_install.status.success(),
+        "initial install should succeed\nstdout:\n{}\nstderr:\n{}",
+        initial_install.stdout,
+        initial_install.stderr
+    );
+
+    remove_git_path_from_config(&repo);
+    let git_og = repo
+        .test_home_path()
+        .join(".git-ai")
+        .join("bin")
+        .join("git-og.cmd");
+    fs::remove_file(&git_og).expect("failed to remove git-og.cmd test recovery path");
+
+    let real_git_dir = PathBuf::from(real_git_executable())
+        .parent()
+        .expect("real git executable should have a parent")
+        .to_path_buf();
+    let mut shim_first_path = repo
+        .test_home_path()
+        .join(".git-ai")
+        .join("bin")
+        .into_os_string();
+    shim_first_path.push(";");
+    shim_first_path.push(real_git_dir);
+
+    let reinstall = run_install_script_with_path(&repo, shim_first_path, Duration::from_secs(90));
+    assert!(
+        reinstall.status.success(),
+        "reinstall should skip git-ai's git.exe and find the later standard Git\nstdout:\n{}\nstderr:\n{}",
+        reinstall.stdout,
+        reinstall.stderr
     );
 
     kill_installed_processes(&repo);

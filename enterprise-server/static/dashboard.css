@@ -192,9 +192,112 @@ tr:hover { background: var(--bg-card-hover); }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 
+/* Help page */
+.help-page-header { margin-bottom: 1.25rem; }
+.help-version-badge { padding: 0.4rem 0.75rem; border: 1px solid rgba(129,140,248,0.3); border-radius: 999px;
+                      color: var(--accent); background: rgba(129,140,248,0.1); font-size: 0.72rem; font-weight: 700; }
+.help-hero { position: relative; display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem;
+             padding: 2rem; margin-bottom: 1.5rem; overflow: hidden; border: 1px solid rgba(129,140,248,0.25);
+             border-radius: 16px; background: radial-gradient(circle at top right, rgba(129,140,248,0.2), transparent 42%),
+             linear-gradient(135deg, rgba(99,102,241,0.14), rgba(30,41,59,0.8)); }
+.help-hero::after { content: "?"; position: absolute; right: 1.5rem; top: -3rem; color: rgba(129,140,248,0.06);
+                    font-size: 13rem; font-weight: 900; line-height: 1; pointer-events: none; }
+.help-hero > * { position: relative; z-index: 1; }
+.help-eyebrow { margin-bottom: 0.45rem; color: var(--accent); font-size: 0.72rem; font-weight: 750;
+                letter-spacing: 0.12em; text-transform: uppercase; }
+.help-hero h2 { max-width: 720px; margin-bottom: 0.7rem; font-size: 1.45rem; line-height: 1.35; }
+.help-hero p { max-width: 760px; color: var(--text-secondary); font-size: 0.86rem; line-height: 1.75; }
+.help-platforms { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; flex-shrink: 0; }
+.help-platforms span { padding: 0.45rem 0.7rem; border: 1px solid rgba(148,163,184,0.18); border-radius: 8px;
+                       background: rgba(15,23,42,0.55); color: var(--text-secondary); font-size: 0.72rem; white-space: nowrap; }
+.help-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.help-toc { position: sticky; top: 0; display: flex; flex-direction: column; gap: 0.2rem; padding: 1rem;
+            border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.help-toc-title { padding: 0.2rem 0.55rem 0.65rem; color: var(--text-primary); font-size: 0.78rem; font-weight: 700; }
+.help-toc a { padding: 0.5rem 0.55rem; border-radius: 7px; color: var(--text-muted); font-size: 0.76rem;
+              line-height: 1.3; text-decoration: none; transition: all 0.15s; }
+.help-toc a:hover { color: var(--accent); background: rgba(129,140,248,0.09); }
+.help-content { min-width: 0; }
+.help-card { scroll-margin-top: 1rem; padding: 1.6rem; margin-bottom: 1.25rem; border: 1px solid var(--border);
+             border-radius: 14px; background: var(--bg-card); }
+.help-section-heading { display: flex; align-items: flex-start; gap: 0.9rem; margin-bottom: 1.35rem; }
+.help-section-heading h2 { margin-bottom: 0.22rem; font-size: 1.15rem; line-height: 1.4; }
+.help-section-heading p { color: var(--text-muted); font-size: 0.78rem; line-height: 1.6; }
+.help-step { display: inline-flex; align-items: center; justify-content: center; width: 2.3rem; height: 2.3rem; flex-shrink: 0;
+             border: 1px solid rgba(129,140,248,0.25); border-radius: 10px; color: var(--accent);
+             background: rgba(129,140,248,0.1); font-size: 0.72rem; font-weight: 800; }
+.help-card > h3, .help-check-item h3, .help-command-row h3 { margin: 1.15rem 0 0.5rem; font-size: 0.88rem; }
+.help-card > p, .help-check-item p, .help-command-row p, .help-faq-list details > div > p { color: var(--text-secondary); font-size: 0.8rem; line-height: 1.7; }
+.help-card a { color: var(--accent); }
+.help-card p code, .help-card li code { padding: 0.1rem 0.32rem; border: 1px solid rgba(148,163,184,0.16);
+                                      border-radius: 4px; background: rgba(15,23,42,0.55); color: #c7d2fe; font-size: 0.75rem; }
+.help-checklist { display: grid; gap: 0.9rem; }
+.help-check-item { position: relative; padding: 1.1rem 1.1rem 1.1rem 3.6rem; border: 1px solid rgba(148,163,184,0.16);
+                   border-radius: 11px; background: rgba(15,23,42,0.28); }
+.help-check-item h3 { margin-top: 0; }
+.help-check-icon { position: absolute; left: 1.05rem; top: 1.05rem; display: inline-flex; align-items: center; justify-content: center;
+                   width: 1.75rem; height: 1.75rem; border-radius: 50%; color: var(--success);
+                   background: rgba(52,211,153,0.11); font-size: 0.72rem; font-weight: 800; }
+.help-link-btn { display: inline-flex; margin-top: 0.85rem; padding: 0.5rem 0.75rem; border: 1px solid rgba(129,140,248,0.3);
+                 border-radius: 8px; background: rgba(129,140,248,0.1); font-size: 0.76rem; font-weight: 650; text-decoration: none; }
+.help-link-btn:hover { background: rgba(129,140,248,0.18); }
+.help-code-block { position: relative; margin: 0.6rem 0; overflow: hidden; border: 1px solid rgba(148,163,184,0.18);
+                   border-radius: 9px; background: #0b1120; }
+.help-code-block pre { max-width: 100%; padding: 0.85rem 3.8rem 0.85rem 1rem; overflow-x: auto; }
+.help-code-block code { color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                        font-size: 0.74rem; line-height: 1.65; white-space: pre; }
+.help-code-block button { position: absolute; top: 0.45rem; right: 0.45rem; z-index: 1; padding: 0.28rem 0.48rem;
+                          border: 1px solid rgba(148,163,184,0.22); border-radius: 5px; color: var(--text-muted);
+                          background: #172033; font-size: 0.65rem; cursor: pointer; transition: all 0.15s; }
+.help-code-block button:hover { color: var(--accent); border-color: rgba(129,140,248,0.45); }
+.help-note { margin-top: 0.55rem; color: var(--text-muted) !important; font-size: 0.74rem !important; }
+.help-os-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; }
+.help-os-card { min-width: 0; padding: 1.05rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 11px;
+                background: rgba(15,23,42,0.3); }
+.help-os-card > p { color: var(--text-secondary); font-size: 0.75rem; line-height: 1.6; }
+.help-os-title { display: flex; align-items: center; gap: 0.55rem; padding-bottom: 0.8rem; margin-bottom: 0.8rem;
+                 border-bottom: 1px solid rgba(148,163,184,0.13); }
+.help-os-title span { color: var(--accent); font-size: 1.05rem; }
+.help-os-title h3 { font-size: 0.92rem; }
+.help-command-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem; margin-top: 0.9rem; }
+.help-command-row > div { min-width: 0; }
+.help-callout { margin: 1rem 0; padding: 0.85rem 1rem; border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+                background: rgba(129,140,248,0.08); }
+.help-callout strong { display: block; margin-bottom: 0.22rem; color: var(--accent); font-size: 0.76rem; }
+.help-callout p { color: var(--text-secondary); font-size: 0.76rem; line-height: 1.65; }
+.help-callout.warning { border-left-color: var(--warning); background: rgba(251,191,36,0.07); }
+.help-callout.warning strong { color: var(--warning); }
+.help-callout.success { border-left-color: var(--success); background: rgba(52,211,153,0.07); }
+.help-callout.success strong { color: var(--success); }
+.help-tool-list { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.75rem 0 1rem; }
+.help-tool-list span { padding: 0.32rem 0.58rem; border: 1px solid rgba(148,163,184,0.16); border-radius: 6px;
+                       color: var(--text-secondary); background: rgba(15,23,42,0.35); font-size: 0.7rem; }
+.help-faq-list { display: grid; gap: 0.55rem; }
+.help-faq-list details { border: 1px solid rgba(148,163,184,0.16); border-radius: 9px; background: rgba(15,23,42,0.25); }
+.help-faq-list summary { position: relative; padding: 0.85rem 2.5rem 0.85rem 1rem; color: var(--text-primary);
+                         font-size: 0.8rem; font-weight: 600; cursor: pointer; list-style: none; }
+.help-faq-list summary::-webkit-details-marker { display: none; }
+.help-faq-list summary::after { content: "+"; position: absolute; right: 1rem; color: var(--accent); font-size: 1rem; font-weight: 400; }
+.help-faq-list details[open] summary::after { content: "−"; }
+.help-faq-list details > div { padding: 0 1rem 0.9rem; border-top: 1px solid rgba(148,163,184,0.12); }
+.help-faq-list details > div > p:first-child { margin-top: 0.75rem; }
+.help-debug-card { border-color: rgba(129,140,248,0.28); background: linear-gradient(135deg, rgba(99,102,241,0.08), var(--bg-card)); }
+
 /* Responsive */
+@media (max-width: 1200px) {
+    .help-layout { grid-template-columns: 1fr; }
+    .help-toc { position: static; flex-direction: row; flex-wrap: wrap; }
+    .help-toc-title { width: 100%; }
+    .help-os-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 768px) {
     .sidebar { display: none; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .page-header { flex-direction: column; align-items: flex-start; }
+    .main { padding: 1rem; }
+    .help-hero { align-items: flex-start; flex-direction: column; padding: 1.35rem; }
+    .help-platforms { justify-content: flex-start; }
+    .help-card { padding: 1.15rem; }
+    .help-command-row { grid-template-columns: 1fr; }
+    .help-check-item { padding-left: 1.1rem; padding-top: 3.35rem; }
 }

@@ -246,42 +246,114 @@ function Get-Architecture {
     }
 }
 
-function Get-StdGitPath {
-    $cmd = Get-Command git.exe -ErrorAction SilentlyContinue
-    $gitPath = $null
-    if ($cmd -and $cmd.Path) {
-        # Ensure we never return a path for git that contains git-ai (recursive)
-        if ($cmd.Path -notmatch "git-ai") {
-            $gitPath = $cmd.Path
-        }
+function Resolve-StdGitCandidate {
+    param(
+        [Parameter(Mandatory = $false)][AllowNull()][string]$Candidate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Candidate)) {
+        return $null
     }
 
-    # If detection failed or was our own shim, try to recover from saved config
-    if (-not $gitPath) {
+    try {
+        if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+            return $null
+        }
+
+        $fullPath = (Get-Item -LiteralPath $Candidate -ErrorAction Stop).FullName
+        $blockedPaths = @(
+            (Normalize-PathString (Join-Path $HOME '.git-ai\bin\git.exe')),
+            (Normalize-PathString (Join-Path $HOME '.git-ai\bin\git-ai.exe'))
+        )
+        if ($blockedPaths -contains (Normalize-PathString $fullPath)) {
+            return $null
+        }
+        if ([IO.Path]::GetFileName($fullPath) -ieq 'git-ai.exe') {
+            return $null
+        }
+
+        & $fullPath --version *> $null
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+        return $fullPath
+    } catch {
+        return $null
+    }
+}
+
+function Get-StdGitPath {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    # A previous installation records the real Git in git-og.cmd. Recover it
+    # before inspecting PATH, where our own git.exe shim normally comes first.
+    $gitOgShim = Join-Path $HOME '.git-ai\bin\git-og.cmd'
+    if (Test-Path -LiteralPath $gitOgShim -PathType Leaf) {
         try {
-            $cfgPath = Join-Path $HOME ".git-ai\config.json"
-            if (Test-Path -LiteralPath $cfgPath) {
-                $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
-                if ($cfg -and $cfg.git_path -and ($cfg.git_path -notmatch 'git-ai') -and (Test-Path -LiteralPath $cfg.git_path)) {
-                    $gitPath = $cfg.git_path
-                }
+            $gitOgContent = Get-Content -LiteralPath $gitOgShim -Raw -ErrorAction Stop
+            $gitOgMatch = [regex]::Match($gitOgContent, '(?m)^\s*"([^"\r\n]+)"\s+%\*\s*$')
+            if ($gitOgMatch.Success) {
+                $candidates.Add($gitOgMatch.Groups[1].Value) | Out-Null
             }
         } catch { }
     }
 
-    # If still not found, fail with a clear message
-    if (-not $gitPath) {
-        Write-ErrorAndExit "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
-    }
-
+    # Recover from a persisted configuration when available.
     try {
-        & $gitPath --version | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'bad' }
-    } catch {
-        Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
+        $cfgPath = Join-Path $HOME '.git-ai\config.json'
+        if (Test-Path -LiteralPath $cfgPath -PathType Leaf) {
+            $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+            if ($cfg -and $cfg.git_path) {
+                $candidates.Add([string]$cfg.git_path) | Out-Null
+            }
+        }
+    } catch { }
+
+    # Search every Git application on PATH. Do not stop when the first result
+    # is %USERPROFILE%\.git-ai\bin\git.exe.
+    $commands = @(Get-Command git.exe -All -CommandType Application -ErrorAction SilentlyContinue)
+    foreach ($command in $commands) {
+        if ($command.Path) {
+            $candidates.Add([string]$command.Path) | Out-Null
+        }
     }
 
-    return $gitPath
+    # PATH may be minimal under MDM or enterprise deployment tools.
+    $commonRoots = @(
+        $env:ProgramW6432,
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:LOCALAPPDATA
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    foreach ($root in $commonRoots) {
+        if ($root -eq $env:LOCALAPPDATA) {
+            $candidates.Add((Join-Path $root 'Programs\Git\cmd\git.exe')) | Out-Null
+            $candidates.Add((Join-Path $root 'Programs\Git\bin\git.exe')) | Out-Null
+        } else {
+            $candidates.Add((Join-Path $root 'Git\cmd\git.exe')) | Out-Null
+            $candidates.Add((Join-Path $root 'Git\bin\git.exe')) | Out-Null
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $candidates.Add((Join-Path $HOME 'scoop\apps\git\current\cmd\git.exe')) | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ChocolateyInstall)) {
+        $candidates.Add((Join-Path $env:ChocolateyInstall 'bin\git.exe')) | Out-Null
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($candidate in $candidates) {
+        $normalized = Normalize-PathString $candidate
+        if (-not $seen.Add($normalized)) {
+            continue
+        }
+        $gitPath = Resolve-StdGitCandidate -Candidate $candidate
+        if ($gitPath) {
+            return $gitPath
+        }
+    }
+
+    Write-ErrorAndExit "Could not detect a standard Git executable. Ensure Git for Windows is installed and available on PATH, or reinstall Git for Windows."
 }
 
 # Ensure $PathToAdd is inserted before any PATH entry that contains "git" (case-insensitive)
@@ -399,7 +471,12 @@ $binaryName = "git-ai-$os-$arch"
 # Priority: 1. Local binary override, 2. Bundled binary, 3. Enterprise release
 # source, 4. Pinned GitHub version, 5. Environment override, 6. GitHub latest.
 $BundledBinary = $null
-$InstallScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$InstallScriptPath = [string]$PSCommandPath
+$InstallScriptDir = $null
+if (-not [string]::IsNullOrWhiteSpace($InstallScriptPath) -and
+    (Test-Path -LiteralPath $InstallScriptPath -PathType Leaf)) {
+    $InstallScriptDir = Split-Path -Parent $InstallScriptPath
+}
 if (-not [string]::IsNullOrWhiteSpace($InstallScriptDir)) {
     $BundledCandidate = Join-Path $InstallScriptDir $binaryName
     if (-not (Test-Path -LiteralPath $BundledCandidate)) {

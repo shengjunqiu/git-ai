@@ -121,8 +121,8 @@ verify_checksum() {
     elif command -v shasum >/dev/null 2>&1; then
         actual=$(shasum -a 256 "$file" | awk '{print $1}')
     else
-        warn "Neither sha256sum nor shasum available, skipping checksum verification"
-        return 0
+        rm -f "$file" 2>/dev/null || true
+        error "Cannot verify $binary_name: neither sha256sum nor shasum is installed. Install a SHA-256 tool and run the installer again."
     fi
 
     if [ "$expected" != "$actual" ]; then
@@ -314,7 +314,11 @@ BINARY_NAME="git-ai-${OS}-${ARCH}"
 
 # Check for bundled binary in the same directory as the install script
 _BUNDLED_BINARY=""
-_INSTALL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_INSTALL_SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+_INSTALL_SCRIPT_DIR=""
+if [ -n "$_INSTALL_SCRIPT_SOURCE" ] && [ -f "$_INSTALL_SCRIPT_SOURCE" ]; then
+    _INSTALL_SCRIPT_DIR="$(cd "$(dirname "$_INSTALL_SCRIPT_SOURCE")" && pwd)"
+fi
 if [ -n "$_INSTALL_SCRIPT_DIR" ]; then
     _BUNDLED_CANDIDATE="${_INSTALL_SCRIPT_DIR}/${BINARY_NAME}"
     if [ -f "$_BUNDLED_CANDIDATE" ]; then

@@ -78,3 +78,22 @@ canonical_path() {
     [ "$status" -eq 0 ]
     [ "$output" = "$(canonical_path "$configured_git")" ]
 }
+
+@test "install.sh supports stdin execution without BASH_SOURCE" {
+    local fake_binary="$TEST_TEMP_DIR/local-bin/git-ai"
+    local install_script="$BATS_TEST_DIRNAME/../../install.sh"
+    make_fake_git "$fake_binary"
+
+    run env \
+        HOME="$HOME" \
+        SHELL=/bin/bash \
+        PATH=/usr/bin:/bin \
+        GIT_AI_LOCAL_BINARY="$fake_binary" \
+        INSTALL_SCRIPT="$install_script" \
+        bash -c 'bash < "$INSTALL_SCRIPT"'
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Successfully installed git-ai"* ]]
+    [ -x "$HOME/.git-ai/bin/git-ai" ]
+    [ -L "$HOME/.git-ai/bin/git-og" ]
+}

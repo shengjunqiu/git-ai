@@ -6,7 +6,6 @@
 - Windows：x64 和 ARM64
 - Linux：x64 和 ARM64
 
-企业服务地址：`http://117.147.213.234:38080`
 
 ## 1. 安装前准备
 
@@ -15,6 +14,7 @@
 1. 电脑已经安装 Git。
 2. 电脑可以访问公司 Git AI 服务器。
 3. 你可以使用浏览器完成账号注册或登录授权。
+
 
 ### 检查 Git
 
@@ -47,6 +47,16 @@ Invoke-RestMethod http://117.147.213.234:38080/health
 ```
 
 服务正常时会返回 `status: ok`。
+
+### 注册账号
+
+在浏览器中打开：
+
+<http://117.147.213.234:38080/auth/register>
+
+按照页面提示填写姓名、公司企业邮箱和密码，并选择所属组织与部门。注册成功后请保持浏览器登录状态，后续 CLI 授权会直接使用当前账号
+
+
 
 ## 2. macOS 安装
 
@@ -114,7 +124,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 然后重新执行安装命令。该设置只对当前 PowerShell 窗口有效。
 
-## 5. 注册、登录和网页授权
+## 5. 登录和网页授权
 
 使用本文中的命令安装完成后，请执行以下命令开始登录授权：
 
@@ -195,9 +205,50 @@ git-ai update --force
 
 也可以直接重新运行对应系统的安装命令，安装程序会覆盖旧版本并保留现有登录和配置。
 
-## 8. 常见问题
 
-### 8.1 提示 `git-ai: command not found`
+## 8. 使用方法
+
+### 8.1 编辑器与 AI 工具集成
+
+
+本工具支持：VS Code、Cursor、Trae、CodeBuddy、Qoder、JClaude Code、Codex、GitHub Copilot、Windsurf、Gemini CLI、OpenCode、Amp、Pi、Droid、Firebender。
+
+**使用之前编辑器必须安装拓展：git-ai-0.1.22.vsix**
+
+安装成功后设置拓展：
+
+```json
+{
+  "gitai.enableCheckpointLogging": true,
+  "gitai.experiments.aiTabTracking": true
+}
+```
+
+**注意：Trae 需要设置找到 hooks 设置，然后手动将“已配置的 Hooks”这个选项开启。**
+
+### 8.2 使用命令
+
+安装和授权完成后，无需为每个 Git 仓库单独初始化。正常使用支持的 AI 工具编辑代码并执行 Git 命令即可。执行 git commit 会将 AI 与人工代码归属统计数据上传至统计后台。
+
+常用命令：
+
+* 查看 AI 与人工代码归属统计
+
+```bash
+git-ai status
+```
+
+* 更多命令
+
+```bash
+git-ai help
+```
+
+
+
+## 9. 常见问题
+
+### 9.1 提示 `git-ai: command not found`
 
 先关闭并重新打开终端。
 
@@ -213,7 +264,7 @@ export PATH="$HOME/.git-ai/bin:$PATH"
 git-ai --version
 ```
 
-### 8.2 提示无法找到标准 Git
+### 9.2 提示无法找到标准 Git
 
 先检查：
 
@@ -224,7 +275,7 @@ command -v git
 
 macOS 系统 Git 通常位于 `/usr/bin/git`。如果 Git 已安装但仍然报错，请把以上两条命令的输出发给管理员。
 
-### 8.3 登录页面没有自动打开
+### 9.3 登录页面没有自动打开
 
 执行：
 
@@ -238,7 +289,7 @@ git-ai login --server http://117.147.213.234:38080
 git-ai login --server http://117.147.213.234:38080 --no-browser
 ```
 
-### 8.4 无法连接企业服务器
+### 9.4 无法连接企业服务器
 
 macOS/Linux：
 
@@ -254,11 +305,11 @@ Test-NetConnection 117.147.213.234 -Port 38080
 
 如果连接失败，请确认当前网络允许访问 `117.147.213.234:38080`，必要时联系管理员。
 
-### 8.5 macOS 提示开发者或安全限制
+### 9.5 macOS 提示开发者或安全限制
 
 请先确认安装命令来自本文中的企业服务器地址。安装器会尝试移除下载文件的隔离属性；如果仍被系统阻止，请把完整提示截图发给管理员处理。
 
-### 8.6 Windows 安装后仍找不到 `git-ai`
+### 9.6 Windows 安装后仍找不到 `git-ai`
 
 关闭所有 PowerShell 或命令提示符窗口，重新打开后再执行：
 
@@ -272,7 +323,13 @@ git-ai --version
 %USERPROFILE%\.git-ai\bin
 ```
 
-## 9. 获取诊断信息
+### 9.7 如果安装 CLI 后才安装新的编辑器或 AI 工具，或者 hooks 自动配置失败，请重新执行：
+
+```bash
+git-ai install-hooks
+```
+
+## 10. 获取诊断信息
 
 遇到问题时，可以执行：
 
@@ -280,4 +337,7 @@ git-ai --version
 git-ai debug
 ```
 
-将输出内容、操作系统版本、`git-ai --version` 结果以及报错截图一起发给管理员，可以更快定位问题。分享诊断信息前，请注意不要公开其中可能包含的公司内部路径或账号信息。
+将输出内容、操作系统版本、`git-ai --version` 结果以及报错截图一起发给管理员，可以更快定位问题。
+
+
+

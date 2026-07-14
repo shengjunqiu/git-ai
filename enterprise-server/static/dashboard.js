@@ -222,6 +222,7 @@ function loadSection(id) {
         case 'users': loadUsers(); break;
         case 'departments': loadDepartments(); break;
         case 'apikeys': loadApiKeys(); break;
+        case 'help': break;
     }
 }
 
@@ -234,6 +235,39 @@ function showToast(message, type = 'info') {
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
+}
+
+async function copyHelpCommand(button) {
+    const code = button.parentElement.querySelector('code');
+    if (!code) return;
+
+    try {
+        await copyHelpText(code.textContent.trim());
+        const originalLabel = button.textContent;
+        button.textContent = '已复制';
+        setTimeout(() => { button.textContent = originalLabel; }, 1600);
+        showToast('命令已复制', 'success');
+    } catch (error) {
+        showToast('复制失败，请手动选择命令', 'error');
+    }
+}
+
+async function copyHelpText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    if (!copied) throw new Error('Copy command was rejected');
 }
 
 // --- Time range helper ---
