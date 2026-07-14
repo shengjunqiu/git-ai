@@ -94,6 +94,9 @@ docker compose ps
 docker compose logs -f api          # API 日志
 docker compose logs -f postgres     # 数据库日志
 
+# 最近 200 行 API 日志（隐藏 Compose 服务名前缀）
+docker compose logs -f --tail=200 --no-log-prefix api
+
 # 重启服务
 docker compose restart api
 
@@ -102,6 +105,36 @@ docker compose down
 
 # 停止并清除数据 (危险!)
 docker compose down -v
+```
+
+### 日志格式与保留
+
+API 日志默认使用适合终端阅读的紧凑单行格式。每个 HTTP 请求的完成日志包含
+`request_id`、`method`、`path`、`status` 和 `elapsed_ms`；响应中的
+`X-Request-Id` 与日志一致，便于定位一次请求的全部记录。查询字符串不会写入日志。
+
+通过 `.env` 调整格式和级别：
+
+```dotenv
+# compact（默认）适合 docker compose logs；json 适合 Loki/ELK 等采集系统
+LOG_FORMAT=compact
+RUST_LOG=git_ai_enterprise_server=info,tower_http=warn
+
+# Docker json-file 日志轮转
+DOCKER_LOG_MAX_SIZE=20m
+DOCKER_LOG_MAX_FILES=5
+```
+
+修改后重新创建 API 容器：
+
+```bash
+docker compose up -d --force-recreate api
+```
+
+使用 JSON 格式时，可通过 `jq` 在终端美化：
+
+```bash
+docker compose logs -f --no-log-prefix api | jq -RrC 'fromjson? // .'
 ```
 
 ## 升级部署

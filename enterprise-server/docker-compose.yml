@@ -38,7 +38,8 @@ services:
       - SENTRY_DSN=${SENTRY_DSN:-}
       - POSTHOG_HOST=${POSTHOG_HOST:-}
       - POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
-      - RUST_LOG=git_ai_enterprise_server=info,tower_http=warn
+      - RUST_LOG=${RUST_LOG:-git_ai_enterprise_server=info,tower_http=warn}
+      - LOG_FORMAT=${LOG_FORMAT:-compact}
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +48,11 @@ services:
       minio:
         condition: service_started
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILES:-5}"
 
   # PostgreSQL Database
   postgres:

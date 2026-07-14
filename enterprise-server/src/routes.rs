@@ -392,8 +392,9 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             crate::services::rate_limit::rate_limit_middleware,
         ))
-        .layer(middleware::from_fn(request_id_middleware))
         .layer(TraceLayer::new_for_http())
+        // Keep the request span outside TraceLayer so all downstream logs share its request ID.
+        .layer(middleware::from_fn(request_id_middleware))
         .layer(cors)
         .with_state(state)
 }

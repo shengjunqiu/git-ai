@@ -2,6 +2,8 @@ use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::Response;
+use std::time::Instant;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -418,10 +420,80 @@ fn cookie_value(parts: &Parts, name: &str) -> Option<String> {
 
 /// Middleware to add request ID for tracing
 pub async fn request_id_middleware(request: Request, next: Next) -> Response {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let mut response = next.run(request).await;
+    let request_id = Uuid::new_v4().to_string();
+    let span = tracing::info_span!(
+        "http_request",
+        request_id = %request_id,
+        method = %request.method(),
+        path = %request.uri().path(),
+    );
+    let started_at = Instant::now();
+    let mut response = next.run(request).instrument(span.clone()).await;
+    let status = response.status();
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+
+    if status.is_server_error() {
+        tracing::error!(
+            parent: &span,
+            status = status.as_u16(),
+            elapsed_ms,
+            "request completed"
+        );
+    } else if status.is_client_error() {
+        tracing::warn!(
+            parent: &span,
+            status = status.as_u16(),
+            elapsed_ms,
+            "request completed"
+        );
+    } else {
+        tracing::info!(
+            parent: &span,
+            status = status.as_u16(),
+            elapsed_ms,
+            "request completed"
+        );
+    }
+
     response
         .headers_mut()
         .insert("X-Request-Id", request_id.parse().unwrap());
     response
+}
+
+#[cfg(test)]
+mod request_id_tests {
+    use super::request_id_middleware;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::middleware;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn adds_valid_request_id_to_response() {
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .layer(middleware::from_fn(request_id_middleware));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health?token=must-not-be-logged")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let request_id = response
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(Uuid::parse_str(request_id).is_ok());
+    }
 }

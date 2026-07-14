@@ -59,6 +59,7 @@ WORKDIR /data
 
 # Default environment
 ENV RUST_LOG=git_ai_enterprise_server=info,tower_http=warn
+ENV LOG_FORMAT=compact
 ENV LISTEN_ADDR=0.0.0.0:8080
 
 EXPOSE 8080

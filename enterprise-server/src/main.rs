@@ -1,9 +1,56 @@
 // 引入命令行参数解析库 clap，用于定义和解析启动参数
 use clap::Parser;
+use std::env;
 // 引入标准库的时间Duration类型，用于设置各类超时与间隔
 use std::time::Duration;
 // 引入 tracing 的日志过滤工具，用于根据环境变量控制日志级别
 use tracing_subscriber::EnvFilter;
+
+const DEFAULT_LOG_FILTER: &str = "git_ai_enterprise_server=debug,tower_http=debug";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum LogFormat {
+    #[default]
+    Compact,
+    Json,
+}
+
+impl LogFormat {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "compact" | "text" => Some(Self::Compact),
+            "json" => Some(Self::Json),
+            _ => None,
+        }
+    }
+}
+
+fn init_logging() {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+    let configured_format = env::var("LOG_FORMAT").unwrap_or_else(|_| "compact".to_string());
+    let format = LogFormat::parse(&configured_format).unwrap_or_else(|| {
+        eprintln!(
+            "Unsupported LOG_FORMAT={configured_format:?}; falling back to compact (supported: compact, json)"
+        );
+        LogFormat::Compact
+    });
+
+    match format {
+        LogFormat::Compact => tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_env_filter(filter)
+            .init(),
+        LogFormat::Json => tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_current_span(true)
+            .with_ansi(false)
+            .with_env_filter(filter)
+            .init(),
+    }
+}
 
 // 以下 `mod` 声明引入本服务各功能模块；模块源码位于同目录下的对应 .rs 文件
 mod auth; // 认证相关（JWT、OAuth、登录等）
@@ -41,16 +88,8 @@ async fn main() -> anyhow::Result<()> {
     // `.ok()` 表示即使不存在 .env 文件也不报错（生产环境通常用真实环境变量）。
     dotenvy::dotenv().ok();
 
-    // 初始化日志（tracing）订阅器：
-    // 1. 优先使用环境变量 `RUST_LOG`（try_from_default_env）控制日志级别；
-    // 2. 若未设置，则回退到默认过滤规则：本服务 crate 与 tower_http 均输出 debug 级别日志。
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new("git_ai_enterprise_server=debug,tower_http=debug")
-            }),
-        )
-        .init();
+    // `RUST_LOG` 控制级别；`LOG_FORMAT=compact|json` 控制人读或机器采集格式。
+    init_logging();
 
     // 解析命令行参数（含来自环境变量的 listen_addr）
     let args = Args::parse();
@@ -164,4 +203,21 @@ async fn shutdown_signal() {
         .await
         .expect("Failed to install CTRL+C handler");
     tracing::info!("Shutdown signal received, gracefully stopping...");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogFormat;
+
+    #[test]
+    fn parses_supported_log_formats_case_insensitively() {
+        assert_eq!(LogFormat::parse("compact"), Some(LogFormat::Compact));
+        assert_eq!(LogFormat::parse(" TEXT "), Some(LogFormat::Compact));
+        assert_eq!(LogFormat::parse("JSON"), Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn rejects_unknown_log_format() {
+        assert_eq!(LogFormat::parse("pretty"), None);
+    }
 }
