@@ -658,8 +658,8 @@ mod tests {
         assert!(html.contains(r#"<input id="department_id" name="department_id" type="hidden" />"#));
         assert!(!html.contains(r#"id="department_search""#));
         assert!(!html.contains(r#"<select id="department_id""#));
-        assert!(html.contains("部门（仅限末级部门）"));
-        assert!(html.contains("输入末级部门名称或编码"));
+        assert!(html.contains("部门"));
+        assert!(html.contains("输入部门名称或编码"));
         assert!(html.contains("departments.filter(department => department.is_leaf)"));
         assert!(html.contains("departmentOptions = leafDepartments.map(department =>"));
         assert!(html.contains("department.path || department.name"));
