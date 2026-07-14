@@ -70,7 +70,7 @@ fn auth_page(title: &str, action: &str, return_to: &Option<String>, is_register:
         <option value="">输入邮箱后选择组织</option>
       </select>
 
-      <label for="department_picker">部门（仅限末级部门）</label>
+      <label for="department_picker">部门</label>
       <input id="department_picker" type="search" list="department_options" placeholder="先选择组织" autocomplete="off" required disabled />
       <datalist id="department_options"></datalist>
       <input id="department_id" name="department_id" type="hidden" />
@@ -286,7 +286,7 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
         };
       });
       departmentPicker.disabled = false;
-      departmentPicker.placeholder = '输入末级部门名称或编码';
+      departmentPicker.placeholder = '输入部门名称或编码';
       renderDepartmentOptions();
     } catch (error) {
       resetDepartmentPicker('部门加载失败');
