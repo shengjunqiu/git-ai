@@ -60,7 +60,7 @@ jobs:
           override: true
 
       - name: Build git-ai
-        run: cargo build --release --bin git-ai
+        run: cargo build --release --features keyring --bin git-ai
 
       - uses: actions/setup-node@v6
         with:
@@ -211,7 +211,7 @@ jobs:
           override: true
 
       - name: Build git-ai
-        run: cargo build --release --bin git-ai
+        run: cargo build --release --features keyring --bin git-ai
 
       - uses: actions/setup-node@v6
         with:

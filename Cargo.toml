@@ -53,6 +53,7 @@ named_pipe = "0.4.1"
 widestring = "1"
 
 [features]
+default = ["keyring"]
 test-support = ["git2"]
 keyring = ["dep:keyring"]
 

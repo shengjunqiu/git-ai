@@ -234,7 +234,7 @@ jobs:
 
       - name: Build release binary
         run: |
-          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --features keyring --target x86_64-apple-darwin
         env:
           CARGO_INCREMENTAL: 0
           SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
