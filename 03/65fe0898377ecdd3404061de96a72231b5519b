@@ -1,0 +1,24 @@
+src/auth/credentials.rs
+  ff69a46c14a08471 22-56,76-91,183-193,232-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.6",
+  "base_commit_sha": "0365fe0898377ecdd3404061de96a72231b5519b",
+  "prompts": {
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 103,
+      "total_deletions": 3,
+      "accepted_lines": 152,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/bda828768d235e730a4b7eee0434655779dda81b52c5e7ec0888417539958456"
+    }
+  }
+}
