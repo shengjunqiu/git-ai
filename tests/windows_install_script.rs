@@ -280,6 +280,36 @@ fn run_install_script_via_expression(repo: &TestRepo, timeout: Duration) -> Comm
     run_command_with_timeout(&mut command, timeout)
 }
 
+fn run_install_script_without_git_via_expression(
+    repo: &TestRepo,
+    timeout: Duration,
+) -> CommandResult {
+    let empty_system_root = repo.test_home_path().join("empty-system-root");
+    fs::create_dir_all(&empty_system_root).expect("failed to create empty system root");
+
+    let mut command = Command::new("powershell");
+    command
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(
+            "$content = Get-Content -LiteralPath $env:GIT_AI_INSTALL_SCRIPT_PATH -Raw; \
+             try { Invoke-Expression ([string]$content) } \
+             catch { Write-Output ('INSTALL_ERROR: ' + $_.Exception.Message) }; \
+             Write-Output 'POWERSHELL_SESSION_SURVIVED'",
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    configure_install_env(&mut command, repo);
+    command.env("GIT_AI_INSTALL_SCRIPT_PATH", install_script_path());
+    command.env("PATH", &empty_system_root);
+    command.env("ProgramW6432", &empty_system_root);
+    command.env("ProgramFiles", &empty_system_root);
+    command.env("ProgramFiles(x86)", &empty_system_root);
+    command.env_remove("ChocolateyInstall");
+    run_command_with_timeout(&mut command, timeout)
+}
+
 fn run_installed_git_ai(repo: &TestRepo, args: &[&str], timeout: Duration) -> CommandResult {
     let mut command = Command::new(installed_git_ai_path(repo));
     command.args(args).current_dir(repo.test_home_path());
@@ -465,6 +495,38 @@ fn windows_install_script_supports_invoke_expression_execution() {
     );
 
     kill_installed_processes(&repo);
+}
+
+#[test]
+#[serial]
+fn windows_missing_git_preserves_invoking_powershell_session() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+
+    let result = run_install_script_without_git_via_expression(&repo, Duration::from_secs(30));
+    let combined = format!("{}{}", result.stdout, result.stderr);
+
+    assert!(
+        result.status.success(),
+        "the outer PowerShell session should survive the installer error\nstdout:\n{}\nstderr:\n{}",
+        result.stdout,
+        result.stderr
+    );
+    assert!(
+        combined.contains("POWERSHELL_SESSION_SURVIVED"),
+        "installer must return control to the invoking PowerShell session\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("Git for Windows is required")
+            && combined.contains("winget install --id Git.Git")
+            && combined.contains("https://git-scm.com/download/win"),
+        "missing-Git error should contain actionable installation choices\n{}",
+        combined
+    );
+    assert!(
+        !installed_git_ai_path(&repo).exists(),
+        "installer should stop before installing git-ai when Git is unavailable"
+    );
 }
 
 #[test]

@@ -6,7 +6,11 @@ function Write-ErrorAndExit {
         [Parameter(Mandatory = $true)][string]$Message
     )
     Write-Host "Error: $Message" -ForegroundColor Red
-    exit 1
+    # This installer is commonly invoked with `irm ... | iex`. Calling `exit`
+    # here would terminate the user's PowerShell host and make prerequisite
+    # failures look like a window crash. A terminating error stops the install
+    # while returning control to the existing PowerShell session.
+    throw [System.InvalidOperationException]::new($Message)
 }
 
 function Write-Success {
@@ -353,7 +357,18 @@ function Get-StdGitPath {
         }
     }
 
-    Write-ErrorAndExit "Could not detect a standard Git executable. Ensure Git for Windows is installed and available on PATH, or reinstall Git for Windows."
+    $missingGitMessage = @'
+Git for Windows is required but was not found.
+
+Install it with Windows Package Manager:
+  winget install --id Git.Git -e --source winget
+
+Or download it from:
+  https://git-scm.com/download/win
+
+After Git is installed, open a new PowerShell window and run the git-ai installer again.
+'@
+    Write-ErrorAndExit $missingGitMessage
 }
 
 # Ensure $PathToAdd is inserted before any PATH entry that contains "git" (case-insensitive)
