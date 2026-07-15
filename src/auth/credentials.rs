@@ -19,6 +19,41 @@ pub struct CredentialStore {
     backend: Box<dyn CredentialBackend>,
 }
 
+/// Move credentials from the file fallback into the system keyring. The source
+/// is only deleted after the destination has accepted the value, so an upgrade
+/// from a build without keyring support does not silently log the user out.
+fn prepare_keyring_backend(
+    file_backend: &dyn CredentialBackend,
+    keyring_backend: &dyn CredentialBackend,
+) -> bool {
+    match keyring_backend.load() {
+        Ok(Some(_)) => {
+            // The keyring is already authoritative. Remove any stale plaintext
+            // fallback left by an older binary on a best-effort basis.
+            let _ = file_backend.clear();
+            true
+        }
+        Ok(None) => match file_backend.load() {
+            Ok(Some(credentials)) => {
+                if keyring_backend.store(&credentials).is_err() {
+                    return false;
+                }
+
+                if file_backend.clear().is_err() {
+                    // Avoid maintaining two active copies if cleanup failed.
+                    let _ = keyring_backend.clear();
+                    return false;
+                }
+
+                true
+            }
+            Ok(None) => true,
+            Err(_) => false,
+        },
+        Err(_) => false,
+    }
+}
+
 impl CredentialStore {
     /// Create a new credential store, testing keyring availability
     pub fn new() -> Self {
@@ -38,8 +73,22 @@ impl CredentialStore {
             let use_keyring = Config::fresh().get_feature_flags().auth_keyring;
 
             if use_keyring && KeyringBackend::is_available(SERVICE_NAME) {
-                Self {
-                    backend: Box::new(KeyringBackend::new(SERVICE_NAME, USERNAME)),
+                let keyring_backend = KeyringBackend::new(SERVICE_NAME, USERNAME);
+                let file_backend = FileBackend::new(Self::default_production_path());
+
+                if prepare_keyring_backend(&file_backend, &keyring_backend) {
+                    Self {
+                        backend: Box::new(keyring_backend),
+                    }
+                } else {
+                    KEYRING_FALLBACK_WARNING.call_once(|| {
+                        eprintln!(
+                            "Note: Credentials could not be migrated to the system keyring. Using file-based storage."
+                        );
+                    });
+                    Self {
+                        backend: Box::new(file_backend),
+                    }
                 }
             } else {
                 if use_keyring {
@@ -131,7 +180,17 @@ impl CredentialStore {
 
     /// Clear stored credentials
     pub fn clear(&self) -> Result<(), String> {
-        self.backend.clear()
+        self.backend.clear()?;
+
+        // A user upgrading from file storage may still have a stale fallback
+        // if an earlier cleanup was interrupted. Logout must clear both copies
+        // so that the next process cannot migrate old credentials back.
+        #[cfg(all(not(test), feature = "keyring"))]
+        if self.backend.name() == "keyring" {
+            FileBackend::new(Self::default_production_path()).clear()?;
+        }
+
+        Ok(())
     }
 
     /// Check if credentials are stored
@@ -168,6 +227,47 @@ mod tests {
             access_token_expires_at: chrono::Utc::now().timestamp() + 3600,
             refresh_token_expires_at: chrono::Utc::now().timestamp() + 86400 * 90,
         }
+    }
+
+    #[test]
+    fn test_prepare_keyring_backend_migrates_file_credentials() {
+        let file_backend = MockBackend::new();
+        file_backend.store("legacy-credentials").unwrap();
+        let keyring_backend = MockBackend::new();
+
+        assert!(prepare_keyring_backend(&file_backend, &keyring_backend));
+        assert_eq!(file_backend.load().unwrap(), None);
+        assert_eq!(
+            keyring_backend.load().unwrap(),
+            Some("legacy-credentials".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prepare_keyring_backend_preserves_file_when_store_fails() {
+        let file_backend = MockBackend::new();
+        file_backend.store("legacy-credentials").unwrap();
+        let keyring_backend = MockBackend::new().fail_store("keyring unavailable");
+
+        assert!(!prepare_keyring_backend(&file_backend, &keyring_backend));
+        assert_eq!(
+            file_backend.load().unwrap(),
+            Some("legacy-credentials".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prepare_keyring_backend_rolls_back_when_file_cleanup_fails() {
+        let file_backend = MockBackend::new().fail_clear("file is locked");
+        file_backend.store("legacy-credentials").unwrap();
+        let keyring_backend = MockBackend::new();
+
+        assert!(!prepare_keyring_backend(&file_backend, &keyring_backend));
+        assert_eq!(
+            file_backend.load().unwrap(),
+            Some("legacy-credentials".to_string())
+        );
+        assert_eq!(keyring_backend.load().unwrap(), None);
     }
 
     // ============= Mock Backend Tests =============
