@@ -1,0 +1,27 @@
+install.ps1
+  ff69a46c14a08471 107,109
+tests/windows_install_script.rs
+  ff69a46c14a08471 320-332,417-419,428-434,437
+docs/plans/windows-compatibility-task-plan.md
+  ff69a46c14a08471 777-799
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.5",
+  "base_commit_sha": "c08d626ad2e6661de5b931baa47dcae6f7a281a5",
+  "prompts": {
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 49,
+      "total_deletions": 2,
+      "accepted_lines": 97,
+      "overriden_lines": 0
+    }
+  }
+}
