@@ -83,22 +83,24 @@ fn handle_start(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn daemon_startup_timeout() -> Duration {
-    #[cfg(windows)]
-    {
-        if std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
-            || std::env::var_os("GITAI_TEST_DB_PATH").is_some()
-            || std::env::var_os("CI").is_some()
-        {
-            return Duration::from_secs(12);
-        }
+pub(crate) fn daemon_startup_timeout() -> Duration {
+    let extended_windows_timeout = std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
+        || std::env::var_os("GITAI_TEST_DB_PATH").is_some()
+        || std::env::var_os("CI").is_some();
+    daemon_startup_timeout_for(cfg!(windows), extended_windows_timeout)
+}
 
-        Duration::from_secs(5)
+fn daemon_startup_timeout_for(windows: bool, extended_windows_timeout: bool) -> Duration {
+    if !windows {
+        return Duration::from_secs(2);
     }
 
-    #[cfg(not(windows))]
-    {
-        Duration::from_secs(2)
+    if extended_windows_timeout {
+        Duration::from_secs(12)
+    } else {
+        // PowerShell Start-Process, Windows Defender and named-pipe creation can
+        // make a healthy cold start take several seconds on user machines.
+        Duration::from_secs(10)
     }
 }
 
@@ -796,7 +798,24 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::tasklist_image_name;
+    use super::{daemon_startup_timeout_for, tasklist_image_name};
+    use std::time::Duration;
+
+    #[test]
+    fn daemon_startup_timeout_accounts_for_slow_windows_cold_starts() {
+        assert_eq!(
+            daemon_startup_timeout_for(true, false),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            daemon_startup_timeout_for(true, true),
+            Duration::from_secs(12)
+        );
+        assert_eq!(
+            daemon_startup_timeout_for(false, false),
+            Duration::from_secs(2)
+        );
+    }
 
     #[test]
     fn parses_tasklist_csv_image_name() {

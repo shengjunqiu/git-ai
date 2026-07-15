@@ -22,10 +22,6 @@ use std::time::Duration;
 /// Prevents indefinite blocking if the daemon becomes unresponsive.
 const DAEMON_SOCKET_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Maximum time to wait for the daemon socket on process start.
-#[cfg(not(any(test, feature = "test-support")))]
-const DAEMON_TELEMETRY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-
 /// Global handle to the daemon control socket for telemetry submission.
 static DAEMON_TELEMETRY_HANDLE: OnceLock<Mutex<Option<DaemonTelemetryHandle>>> = OnceLock::new();
 
@@ -109,8 +105,8 @@ pub enum DaemonTelemetryInitResult {
 ///
 /// Should be called once on process start when `async_mode` is enabled.
 /// Attempts to connect to the daemon control socket (starting the daemon if needed)
-/// with a 2-second timeout. The connection is kept open and reused for all
-/// subsequent telemetry and CAS submissions.
+/// with the platform startup timeout. The connection is kept open and reused
+/// for all subsequent telemetry and CAS submissions.
 ///
 /// Returns the result indicating success, failure, or skip.
 pub fn init_daemon_telemetry_handle() -> DaemonTelemetryInitResult {
@@ -157,10 +153,9 @@ pub fn init_daemon_telemetry_handle() -> DaemonTelemetryInitResult {
 
     #[cfg(not(any(test, feature = "test-support")))]
     {
+        let connect_timeout = crate::commands::daemon::daemon_startup_timeout();
         // Try to ensure daemon is running and connect
-        let config = match crate::commands::daemon::ensure_daemon_running(
-            DAEMON_TELEMETRY_CONNECT_TIMEOUT,
-        ) {
+        let config = match crate::commands::daemon::ensure_daemon_running(connect_timeout) {
             Ok(config) => config,
             Err(e) => {
                 let _ = DAEMON_TELEMETRY_HANDLE.get_or_init(|| Mutex::new(None));
@@ -169,10 +164,7 @@ pub fn init_daemon_telemetry_handle() -> DaemonTelemetryInitResult {
         };
 
         // Open a persistent connection to the control socket
-        match open_local_socket_stream_with_timeout(
-            &config.control_socket_path,
-            DAEMON_TELEMETRY_CONNECT_TIMEOUT,
-        ) {
+        match open_local_socket_stream_with_timeout(&config.control_socket_path, connect_timeout) {
             Ok(mut stream) => {
                 DaemonTelemetryHandle::apply_socket_timeouts(
                     &mut stream,

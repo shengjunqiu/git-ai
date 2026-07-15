@@ -250,6 +250,7 @@ fn command_needs_daemon(command: &str) -> bool {
             | "--version"
             | "-v"
             | "config"
+            | "status"
             | "bg"
             | "d"
             | "daemon"
@@ -2394,8 +2395,8 @@ mod tests {
     use super::command_needs_daemon;
 
     #[test]
-    fn authentication_commands_do_not_require_daemon() {
-        for command in ["login", "logout", "whoami", "exchange-nonce"] {
+    fn recovery_and_local_status_commands_do_not_require_daemon() {
+        for command in ["login", "logout", "whoami", "exchange-nonce", "status"] {
             assert!(
                 !command_needs_daemon(command),
                 "{command} must remain usable while the daemon is unhealthy"
@@ -2405,7 +2406,7 @@ mod tests {
 
     #[test]
     fn operational_commands_still_require_daemon() {
-        for command in ["checkpoint", "status", "report", "search"] {
+        for command in ["checkpoint", "report", "search"] {
             assert!(command_needs_daemon(command));
         }
     }
