@@ -1,9 +1,10 @@
 #![cfg(windows)]
 
 use serde_json::{Value, json};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,7 +40,18 @@ fn configure_isolated_home(command: &mut Command, home: &Path) {
         .env("HOMEDRIVE", drive)
         .env("HOMEPATH", home_path)
         .env("GIT_AI_AUTH_KEYRING", "false")
-        .env("GIT_AI_ASYNC_MODE", "false");
+        .env("GIT_AI_ASYNC_MODE", "true");
+}
+
+fn hold_daemon_lock(home: &Path) -> File {
+    let daemon_dir = home.join(".git-ai").join("internal").join("daemon");
+    fs::create_dir_all(&daemon_dir).unwrap();
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .share_mode(0)
+        .open(daemon_dir.join("daemon.lock"))
+        .expect("test should hold the Windows daemon lock")
 }
 
 fn read_file(path: &Path) -> String {
@@ -239,6 +251,9 @@ fn run_command(home: &Path, args: &[&str]) -> CommandOutput {
 #[test]
 fn windows_cli_oauth_login_round_trip() {
     let home = TempDir::new().unwrap();
+    // Authentication commands must remain usable even when async mode is on
+    // and an unhealthy daemon process owns the Windows lock.
+    let _daemon_lock = hold_daemon_lock(home.path());
     let (base_url, stop, requests, server) = spawn_mock_server();
     let stdout_path = home.path().join("login.stdout.log");
     let stderr_path = home.path().join("login.stderr.log");

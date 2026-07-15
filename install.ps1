@@ -766,6 +766,30 @@ try {
     Write-ErrorAndExit "Failed to configure enterprise API server $EnterpriseApiBaseUrl`: $($_.Exception.Message)"
 }
 
+# Confirm the newly installed binary can provide the background service before
+# returning control to the user. `bg start` is a no-op when the service is
+# healthy and automatically repairs an unhealthy Windows lock holder in current
+# releases. The fallback handles upgrades from older releases that cannot
+# perform that recovery themselves.
+if (-not $env:GIT_AI_TEST_DB_PATH -and -not $env:GITAI_TEST_DB_PATH) {
+    try {
+        & $finalExe bg start | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            [void](Stop-GitAiManagedProcesses -InstallDir $installDir)
+            $daemonDir = Join-Path $HOME '.git-ai\internal\daemon'
+            Remove-Item -LiteralPath (Join-Path $daemonDir 'daemon.lock') -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $daemonDir 'daemon.pid.json') -Force -ErrorAction SilentlyContinue
+            & $finalExe bg start | Out-Host
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "git-ai bg start exited with code $LASTEXITCODE"
+        }
+        Write-Success 'Background service is ready'
+    } catch {
+        Write-Warning "Warning: Background service did not start during installation: $($_.Exception.Message)"
+    }
+}
+
 Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow
 
 # If nonce exchange failed, run interactive login

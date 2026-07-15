@@ -197,6 +197,34 @@ pub(crate) fn ensure_daemon_running(timeout: Duration) -> Result<DaemonConfig, S
     }
 
     if daemon_startup_is_blocked(&config) {
+        // Another process may have acquired the lock but still be creating its
+        // named pipes. Give that startup the same readiness window before
+        // treating the lock holder as unhealthy.
+        if wait_for_daemon_up(&config, timeout) {
+            return Ok(config);
+        }
+
+        #[cfg(windows)]
+        {
+            // Windows release builds rely on the background service for most
+            // commands. Recover a process that still owns daemon.lock but no
+            // longer serves either named pipe, then start a fresh instance.
+            recover_unhealthy_windows_daemon(&config)?;
+            if daemon_is_up(&config) {
+                return Ok(config);
+            }
+            if daemon_startup_is_blocked(&config) {
+                if wait_for_daemon_up(&config, timeout) {
+                    return Ok(config);
+                }
+                return Err(format!(
+                    "daemon startup blocked after automatic recovery: lock held at {}",
+                    config.lock_path.display()
+                ));
+            }
+        }
+
+        #[cfg(not(windows))]
         return Err(format!(
             "daemon startup blocked: lock held at {}",
             config.lock_path.display()
@@ -214,6 +242,63 @@ pub(crate) fn ensure_daemon_running(timeout: Duration) -> Result<DaemonConfig, S
         config.control_socket_path.display(),
         config.trace_socket_path.display()
     ))
+}
+
+#[cfg(windows)]
+fn recover_unhealthy_windows_daemon(config: &DaemonConfig) -> Result<(), String> {
+    if daemon_is_up(config) || !daemon_startup_is_blocked(config) {
+        return Ok(());
+    }
+
+    let pid = read_daemon_pid(config).map_err(|error| {
+        format!(
+            "background service owns {} but its PID metadata cannot be read: {}",
+            config.lock_path.display(),
+            error
+        )
+    })?;
+    if !windows_pid_is_git_ai(pid)? {
+        return Err(format!(
+            "background service owns {} but PID {} is not git-ai.exe; refusing automatic termination",
+            config.lock_path.display(),
+            pid
+        ));
+    }
+
+    hard_kill_daemon(config).map_err(|error| {
+        format!(
+            "background service owns {} but its named pipes are unavailable; automatic recovery failed: {}",
+            config.lock_path.display(),
+            error
+        )
+    })
+}
+
+#[cfg(windows)]
+fn windows_pid_is_git_ai(pid: u32) -> Result<bool, String> {
+    let filter = format!("PID eq {}", pid);
+    let output = Command::new("tasklist")
+        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .output()
+        .map_err(|error| format!("failed to run tasklist: {}", error))?;
+    if !output.status.success() {
+        return Err(format!("tasklist failed with {}", output.status));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(tasklist_image_name(&stdout).is_some_and(|name| name.eq_ignore_ascii_case("git-ai.exe")))
+}
+
+#[cfg(any(windows, test))]
+fn tasklist_image_name(output: &str) -> Option<&str> {
+    let first_field = output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .split(',')
+        .next()?
+        .trim();
+    Some(first_field.trim_matches('"'))
 }
 
 fn daemon_startup_is_blocked(config: &DaemonConfig) -> bool {
@@ -589,24 +674,31 @@ fn hard_kill_daemon(config: &DaemonConfig) -> Result<(), String> {
 
 #[cfg(windows)]
 fn hard_kill_daemon(config: &DaemonConfig) -> Result<(), String> {
-    let pid = read_daemon_pid(config).map_err(|e| format!("cannot read daemon pid: {}", e))?;
+    let pid = match read_daemon_pid(config) {
+        Ok(pid) => pid,
+        Err(_) if !daemon_startup_is_blocked(config) || daemon_is_up(config) => return Ok(()),
+        Err(error) => return Err(format!("cannot read daemon pid: {}", error)),
+    };
     let output = Command::new("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .output()
         .map_err(|e| format!("failed to run taskkill: {}", e))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Process already dead is not an error.
-        if !stderr.contains("not found") {
-            return Err(format!(
-                "taskkill /F /T /PID {} failed: {}",
-                pid,
-                stderr.trim()
-            ));
-        }
+
+    // Do not parse taskkill's localized output. The authoritative result is
+    // whether the pipes are down and the OS-level file lock was released.
+    if wait_for_daemon_dead(config, Duration::from_secs(2)) {
+        return Ok(());
     }
-    let _ = wait_for_daemon_dead(config, Duration::from_secs(2));
-    Ok(())
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "taskkill /F /T /PID {} did not release the daemon lock (status {}; stdout: {}; stderr: {})",
+        pid,
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    ))
 }
 
 fn wait_for_daemon_dead(config: &DaemonConfig, timeout: Duration) -> bool {
@@ -700,4 +792,20 @@ fn print_help() {
     eprintln!("  git-ai bg shutdown [--hard]");
     eprintln!("  git-ai bg restart [--hard]");
     eprintln!("  git-ai bg tail [-n <lines>] [--full]");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tasklist_image_name;
+
+    #[test]
+    fn parses_tasklist_csv_image_name() {
+        let output = "\"git-ai.exe\",\"4242\",\"Console\",\"1\",\"12,345 K\"\r\n";
+        assert_eq!(tasklist_image_name(output), Some("git-ai.exe"));
+    }
+
+    #[test]
+    fn empty_tasklist_output_has_no_image_name() {
+        assert_eq!(tasklist_image_name("\r\n"), None);
+    }
 }

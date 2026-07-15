@@ -43,28 +43,11 @@ pub fn handle_git_ai(args: &[String]) {
     // of being written to per-PID log files.
     //
     // Skip for commands that must work without a running background service
-    // (help, version, config, d management, debug, update/upgrade) so users can
-    // always diagnose and recover from a broken state.
+    // (help, version, config, daemon management, authentication, debug,
+    // update/upgrade) so users can always diagnose, authenticate, and recover
+    // from a broken background service.
     if config::Config::get().feature_flags().async_mode {
-        let needs_daemon = !matches!(
-            args[0].as_str(),
-            "help"
-                | "--help"
-                | "-h"
-                | "version"
-                | "--version"
-                | "-v"
-                | "config"
-                | "bg"
-                | "d"
-                | "daemon"
-                | "debug"
-                | "update"
-                | "upgrade"
-                | "install-hooks"
-                | "install"
-                | "uninstall-hooks"
-        );
+        let needs_daemon = command_needs_daemon(args[0].as_str());
         if needs_daemon {
             use crate::daemon::telemetry_handle::{
                 DaemonTelemetryInitResult, init_daemon_telemetry_handle,
@@ -255,6 +238,32 @@ pub fn handle_git_ai(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+fn command_needs_daemon(command: &str) -> bool {
+    !matches!(
+        command,
+        "help"
+            | "--help"
+            | "-h"
+            | "version"
+            | "--version"
+            | "-v"
+            | "config"
+            | "bg"
+            | "d"
+            | "daemon"
+            | "debug"
+            | "update"
+            | "upgrade"
+            | "login"
+            | "logout"
+            | "whoami"
+            | "exchange-nonce"
+            | "install-hooks"
+            | "install"
+            | "uninstall-hooks"
+    )
 }
 
 fn print_help() {
@@ -2378,4 +2387,26 @@ fn exit_with_log_status(status: std::process::ExitStatus) -> ! {
         }
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_needs_daemon;
+
+    #[test]
+    fn authentication_commands_do_not_require_daemon() {
+        for command in ["login", "logout", "whoami", "exchange-nonce"] {
+            assert!(
+                !command_needs_daemon(command),
+                "{command} must remain usable while the daemon is unhealthy"
+            );
+        }
+    }
+
+    #[test]
+    fn operational_commands_still_require_daemon() {
+        for command in ["checkpoint", "status", "report", "search"] {
+            assert!(command_needs_daemon(command));
+        }
+    }
 }
