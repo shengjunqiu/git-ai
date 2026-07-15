@@ -774,6 +774,29 @@ git add .github/workflows tests scripts
 git commit -m "Expand native Windows compatibility CI"
 ```
 
+### Task 6.4：安装后自动恢复 Windows daemon 锁故障
+
+问题场景：Windows 用户执行 `git-ai login` 时，旧 daemon 仍持有
+`daemon.lock`，但 control/trace named pipe 尚未就绪或已经失效，导致认证流程在
+打开浏览器前被阻断。
+
+实现结果（2026-07-15）：
+
+- `login`、`logout`、`whoami` 和 `exchange-nonce` 不再依赖 daemon，可在后台服务异常时独立完成认证和恢复。
+- Windows 启动 daemon 时先等待持锁进程完成 pipe 初始化；超时后验证 PID 对应进程确为 `git-ai.exe`，再自动结束异常进程并拉起新实例。
+- 不再解析本地化的 `taskkill` 文本，而是以 named pipe 下线且 OS 文件锁释放作为结束成功标准。
+- `install.ps1` 修复了 `$pid` 与 PowerShell 只读 `$PID` 冲突；安装结束前确认后台服务已就绪，失败时按安装路径清理遗留进程并重试。
+- Windows OAuth E2E 现在显式开启 async mode 并持有 `daemon.lock`，验证登录、`whoami` 和 logout 不会被异常 daemon 阻断。
+- Windows 重装测试增加长期运行的 `git-ai bg tail` 进程，确保安装器实际进入强制进程清理回退路径。
+
+验收标准：
+
+- [x] 认证命令的 daemon 独立策略有跨平台单元测试。
+- [x] Windows OAuth E2E 覆盖 async mode 与被占用的 `daemon.lock`。
+- [x] 安装器强制清理回退由 Windows 安装 E2E 覆盖。
+- [ ] 在原生 Windows runner 上确认安装完成后输出 `Background service is ready`。
+- [ ] 在已存在异常旧 daemon 的真实 Windows 主机上验证直接升级后无需手工命令即可登录。
+
 ## 10. 最终回归与发布检查
 
 按以下顺序执行，任何一步失败都不要发布：

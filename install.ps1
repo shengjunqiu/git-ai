@@ -104,9 +104,9 @@ function Stop-GitAiManagedProcesses {
     $pids = @($processes | Sort-Object ProcessId -Unique | Select-Object -ExpandProperty ProcessId)
     Write-Warning ("Stopping lingering git-ai processes: {0}" -f ($pids -join ', '))
 
-    foreach ($pid in $pids) {
+    foreach ($processId in $pids) {
         try {
-            Stop-Process -Id $pid -Force -ErrorAction Stop
+            Stop-Process -Id $processId -Force -ErrorAction Stop
         } catch { }
     }
 

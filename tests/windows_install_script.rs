@@ -317,6 +317,19 @@ fn spawn_installed_daemon(repo: &TestRepo) -> Child {
     command.spawn().expect("failed to spawn installed daemon")
 }
 
+fn spawn_installed_daemon_tail(repo: &TestRepo) -> Child {
+    let mut command = Command::new(installed_git_ai_path(repo));
+    command
+        .args(["bg", "tail", "--full"])
+        .current_dir(repo.test_home_path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_install_env(&mut command, repo);
+    command
+        .spawn()
+        .expect("failed to spawn installed daemon tail")
+}
+
 fn kill_installed_processes(repo: &TestRepo) {
     let script = format!(
         "$targets = @('{}','{}'); \
@@ -401,6 +414,9 @@ fn windows_install_script_reinstall_stops_running_daemon() {
 
     let mut daemon = spawn_installed_daemon(&repo);
     wait_for_child_to_stay_alive(&repo, &mut daemon, Duration::from_secs(2));
+    let _ = wait_for_daemon_log_file(&repo, Duration::from_secs(15));
+    let mut daemon_tail = spawn_installed_daemon_tail(&repo);
+    wait_for_child_to_stay_alive(&repo, &mut daemon_tail, Duration::from_secs(1));
 
     let reinstall = run_install_script(&repo, Duration::from_secs(90));
     assert!(
@@ -409,8 +425,16 @@ fn windows_install_script_reinstall_stops_running_daemon() {
         reinstall.stdout,
         reinstall.stderr
     );
+    assert!(
+        reinstall
+            .stdout
+            .contains("Stopping lingering git-ai processes"),
+        "reinstall should exercise the forced process cleanup fallback\nstdout:\n{}",
+        reinstall.stdout
+    );
 
     wait_for_child_exit(&repo, &mut daemon, Duration::from_secs(20));
+    wait_for_child_exit(&repo, &mut daemon_tail, Duration::from_secs(30));
 
     let version = run_installed_git_ai(&repo, &["--version"], Duration::from_secs(15));
     assert!(
