@@ -332,6 +332,11 @@ fn maybe_ensure_daemon(dry_run: bool) {
     }
 }
 
+fn installer_defers_daemon_start() -> bool {
+    std::env::var_os("GIT_AI_INSTALLER_DEFER_DAEMON_START")
+        .is_some_and(|value| value.to_string_lossy() == "1")
+}
+
 /// Main entry point for install-hooks command
 pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
     // Parse flags
@@ -345,6 +350,7 @@ pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
             verbose = true;
         }
     }
+    let defer_daemon_start = installer_defers_daemon_start();
 
     // In async mode, daemon trace2 config must be in place before any install work starts.
     // If async mode was disabled, tear down any leftover daemon and trace2 config.
@@ -352,12 +358,14 @@ pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
     if let Err(e) = maybe_configure_async_mode_daemon_trace2(dry_run) {
         eprintln!("Warning: could not configure trace2 (non-fatal): {e}");
     }
-    maybe_teardown_async_mode(dry_run);
-    maybe_ensure_daemon(dry_run);
+    if !defer_daemon_start {
+        maybe_teardown_async_mode(dry_run);
+        maybe_ensure_daemon(dry_run);
+    }
 
     // Now that the daemon is (re)started, initialize the telemetry handle so
     // that install-hooks metrics and observability events route through it.
-    if config::Config::get().feature_flags().async_mode && !dry_run {
+    if config::Config::get().feature_flags().async_mode && !dry_run && !defer_daemon_start {
         let _ = crate::daemon::telemetry_handle::init_daemon_telemetry_handle();
     }
 
@@ -1083,6 +1091,23 @@ mod tests {
         {
             std::os::unix::fs::symlink(git_path, install_dir.join("git-og")).unwrap();
         }
+    }
+
+    #[test]
+    #[serial]
+    fn installer_can_defer_daemon_management_until_install_finishes() {
+        {
+            let _defer = EnvVarGuard::set("GIT_AI_INSTALLER_DEFER_DAEMON_START", "1");
+            assert!(installer_defers_daemon_start());
+        }
+
+        {
+            let _defer = EnvVarGuard::set("GIT_AI_INSTALLER_DEFER_DAEMON_START", "0");
+            assert!(!installer_defers_daemon_start());
+        }
+
+        let _defer = EnvVarGuard::remove("GIT_AI_INSTALLER_DEFER_DAEMON_START");
+        assert!(!installer_defers_daemon_start());
     }
 
     #[test]

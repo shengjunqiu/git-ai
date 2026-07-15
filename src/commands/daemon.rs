@@ -754,7 +754,8 @@ pub(crate) fn restart_daemon(config: &DaemonConfig) -> Result<(), String> {
     if was_running {
         stop_daemon(config, GRACEFUL_SHUTDOWN_TIMEOUT)?;
     }
-    ensure_daemon_running(Duration::from_secs(5)).map(|_| ())
+    let restart_timeout = std::cmp::max(Duration::from_secs(5), daemon_startup_timeout());
+    ensure_daemon_running(restart_timeout).map(|_| ())
 }
 
 fn parse_repo_arg(args: &[String]) -> Option<String> {

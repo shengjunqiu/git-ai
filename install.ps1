@@ -1,6 +1,15 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Native git-ai output is UTF-8. Windows PowerShell commonly inherits a legacy
+# console code page, which otherwise renders symbols such as ✓ and ⚠ as mojibake.
+try {
+    $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
+    [Console]::InputEncoding = $utf8Encoding
+    [Console]::OutputEncoding = $utf8Encoding
+    $OutputEncoding = $utf8Encoding
+} catch { }
+
 function Write-ErrorAndExit {
     param(
         [Parameter(Mandatory = $true)][string]$Message
@@ -440,21 +449,9 @@ function Set-PathPrependBeforeGit {
             $machineStatus = 'AlreadyPresent'
         }
     } catch {
-        # Access denied or not elevated; do NOT modify User PATH. Print big red error with instructions.
-        $origGit = $null
-        try { $origGit = Get-StdGitPath } catch { }
-        $origGitDir = if ($origGit) { (Split-Path $origGit -Parent) } else { 'your Git installation directory' }
-        Write-Host ''
-        Write-Host 'ERROR: Unable to update the SYSTEM PATH (administrator rights required).' -ForegroundColor Red
-        Write-Host 'Your PATH was NOT changed. To ensure git-ai takes precedence over Git:' -ForegroundColor Red
-        Write-Host ("  1) Run PowerShell as Administrator and re-run this installer; OR") -ForegroundColor Red
-        Write-Host ("  2) Manually edit the SYSTEM Path and move '{0}' before any entries containing 'Git' (e.g. '{1}')." -f $PathToAdd, $origGitDir) -ForegroundColor Red
-        Write-Host "     Steps: Start -> type 'Environment Variables' -> 'Edit the system environment variables' -> Environment Variables ->" -ForegroundColor Red
-        Write-Host ("            Under 'System variables', select 'Path' -> Edit -> Move '{0}' to the top (before Git) -> OK." -f $PathToAdd) -ForegroundColor Red
-        Write-Host ''
-        if ($userStatus -eq 'Updated' -or $userStatus -eq 'AlreadyPresent') {
-            Write-Host 'User PATH was updated successfully, so git-ai will still take precedence for this account.' -ForegroundColor Yellow
-        }
+        # A non-elevated per-user install is supported. Machine PATH is optional,
+        # but users should verify precedence because Windows can place machine
+        # Git entries before the user PATH when creating a new process.
         $machineStatus = 'Error'
     }
 
@@ -636,11 +633,25 @@ if ($env:INSTALL_NONCE -and $env:API_BASE) {
 
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
+$previousDeferDaemonStart = $env:GIT_AI_INSTALLER_DEFER_DAEMON_START
 try {
+    # install-hooks normally restarts the daemon after writing trace2 config.
+    # During installation the script owns startup and recovery, so defer it to
+    # the single verified start near the end of this script.
+    $env:GIT_AI_INSTALLER_DEFER_DAEMON_START = '1'
     & $finalExe install-hooks | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "git-ai install-hooks exited with code $LASTEXITCODE"
+    }
     Write-Success 'Successfully set up IDE/agent hooks'
 } catch {
-    Write-Warning "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
+    Write-Warning "Failed to set up IDE/agent hooks: $($_.Exception.Message)"
+} finally {
+    if ($null -eq $previousDeferDaemonStart) {
+        Remove-Item Env:GIT_AI_INSTALLER_DEFER_DAEMON_START -ErrorAction SilentlyContinue
+    } else {
+        $env:GIT_AI_INSTALLER_DEFER_DAEMON_START = $previousDeferDaemonStart
+    }
 }
 
 # Update PATH so our shim takes precedence over any Git entries
@@ -667,7 +678,10 @@ if ($pathUpdate.MachineStatus -eq 'Updated') {
 } elseif ($pathUpdate.MachineStatus -eq 'AlreadyPresent') {
     Write-Success 'git-ai already present in the system PATH.'
 } elseif ($pathUpdate.MachineStatus -eq 'Error') {
-    Write-Host 'PATH update failed: system PATH unchanged.' -ForegroundColor Red
+    Write-Warning 'System PATH was not updated (administrator rights or system policy may prevent it).'
+    if ($pathUpdate.UserStatus -eq 'Updated' -or $pathUpdate.UserStatus -eq 'AlreadyPresent') {
+        Write-Warning "User PATH is configured. After reopening PowerShell, run 'where.exe git' and confirm '$installDir\git.exe' is listed first. If it is not, re-run this installer as Administrator."
+    }
 }
 
 Write-Success "Successfully installed git-ai into $installDir"
@@ -788,16 +802,21 @@ try {
 # perform that recovery themselves.
 if (-not $env:GIT_AI_TEST_DB_PATH -and -not $env:GITAI_TEST_DB_PATH) {
     try {
-        & $finalExe bg start | Out-Host
-        if ($LASTEXITCODE -ne 0) {
+        $firstStartOutput = @(& $finalExe bg start 2>&1)
+        $firstStartExitCode = $LASTEXITCODE
+        if ($firstStartExitCode -ne 0) {
             [void](Stop-GitAiManagedProcesses -InstallDir $installDir)
             $daemonDir = Join-Path $HOME '.git-ai\internal\daemon'
             Remove-Item -LiteralPath (Join-Path $daemonDir 'daemon.lock') -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $daemonDir 'daemon.pid.json') -Force -ErrorAction SilentlyContinue
-            & $finalExe bg start | Out-Host
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw "git-ai bg start exited with code $LASTEXITCODE"
+            $retryStartOutput = @(& $finalExe bg start 2>&1)
+            $retryStartExitCode = $LASTEXITCODE
+            if ($retryStartExitCode -ne 0) {
+                $firstStartOutput | Out-Host
+                $retryStartOutput | Out-Host
+                throw "git-ai bg start exited with code $retryStartExitCode"
+            }
+            Write-Warning 'Recovered the background service after its first startup attempt did not become ready.'
         }
         Write-Success 'Background service is ready'
     } catch {
