@@ -1,0 +1,24 @@
+.github/workflows/release.yml
+  872d604e9308f6cc 29,69-70,75-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1af9c268f665ca97bab39be19cd730288a3ac53f",
+  "prompts": {
+    "872d604e9308f6cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f636c-123c-7732-aee8-ff3734bbed7f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 1,
+      "accepted_lines": 8,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/e067af50d91cfa8e147a5d6293e37eac23f5a5ea2fbe8d5a78000e7774fbbc44"
+    }
+  }
+}
