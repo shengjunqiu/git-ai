@@ -26,6 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.get-version.outputs.version }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
@@ -65,10 +66,16 @@ jobs:
       - name: Build in Docker (Linux)
         if: matrix.use_docker == true
         run: |
+          # musl-tools exposes musl-gcc rather than target-prefixed compiler names.
+          # Map both native Linux targets for vendored C dependencies such as D-Bus.
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e DEBIAN_FRONTEND=noninteractive \
+            -e CC_x86_64_unknown_linux_musl=musl-gcc \
+            -e CC_aarch64_unknown_linux_musl=musl-gcc \
+            -e AR_x86_64_unknown_linux_musl=ar \
+            -e AR_aarch64_unknown_linux_musl=ar \
             -e SENTRY_OSS="${{ secrets.SENTRY_OSS }}" \
             -e POSTHOG_API_KEY="${{ secrets.POSTHOG_API_KEY }}" \
             -e OSS_BUILD="1" \
