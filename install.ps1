@@ -680,8 +680,65 @@ if ($pathUpdate.MachineStatus -eq 'Updated') {
 } elseif ($pathUpdate.MachineStatus -eq 'Error') {
     Write-Warning 'System PATH was not updated (administrator rights or system policy may prevent it).'
     if ($pathUpdate.UserStatus -eq 'Updated' -or $pathUpdate.UserStatus -eq 'AlreadyPresent') {
-        Write-Warning "User PATH is configured. After reopening PowerShell, run 'where.exe git' and confirm '$installDir\git.exe' is listed first. If it is not, re-run this installer as Administrator."
+        Write-Warning 'User PATH is configured; PowerShell profile precedence will be configured automatically below.'
     }
+}
+
+# Windows merges Machine PATH before User PATH in new processes, so a system
+# Git installation can still shadow the per-user git-ai shim. Configure both
+# Windows PowerShell and PowerShell 7 user profiles to enforce precedence
+# without requiring administrator rights.
+$powerShellProfilesConfigured = New-Object System.Collections.Generic.List[string]
+if (-not $skipPathUpdate) {
+try {
+    $profileCandidates = New-Object System.Collections.Generic.List[string]
+    if ($PROFILE -and $PROFILE.CurrentUserAllHosts) {
+        $profileCandidates.Add([string]$PROFILE.CurrentUserAllHosts) | Out-Null
+    }
+    $documentsDir = [Environment]::GetFolderPath('MyDocuments')
+    if (-not [string]::IsNullOrWhiteSpace($documentsDir)) {
+        $profileCandidates.Add((Join-Path $documentsDir 'WindowsPowerShell\profile.ps1')) | Out-Null
+        $profileCandidates.Add((Join-Path $documentsDir 'PowerShell\profile.ps1')) | Out-Null
+    }
+
+    $profileMarker = '# >>> git-ai managed PATH >>>'
+    $profileBlock = @'
+
+# >>> git-ai managed PATH >>>
+$gitAiBin = Join-Path $HOME '.git-ai\bin'
+if (Test-Path -LiteralPath $gitAiBin) {
+    $normalizedGitAiBin = $gitAiBin.Trim().TrimEnd('\')
+    $gitAiPathEntries = @($env:Path -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_.Trim().TrimEnd('\') -ine $normalizedGitAiBin
+    })
+    $env:Path = (@($gitAiBin) + $gitAiPathEntries) -join ';'
+}
+# <<< git-ai managed PATH <<<
+'@
+    $seenProfiles = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($profilePath in $profileCandidates) {
+        if ([string]::IsNullOrWhiteSpace($profilePath) -or -not $seenProfiles.Add($profilePath)) {
+            continue
+        }
+        $existingProfile = ''
+        if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
+            $existingProfile = Get-Content -LiteralPath $profilePath -Raw -ErrorAction Stop
+        }
+        if ($existingProfile -and $existingProfile.Contains($profileMarker)) {
+            continue
+        }
+        $profileDir = Split-Path -Parent $profilePath
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($profilePath, $profileBlock, $utf8NoBom)
+        $powerShellProfilesConfigured.Add($profilePath) | Out-Null
+    }
+} catch {
+    Write-Warning "Unable to configure PowerShell PATH precedence automatically: $($_.Exception.Message)"
+}
+}
+if ($powerShellProfilesConfigured.Count -gt 0) {
+    Write-Success 'Successfully configured PowerShell PATH precedence for git-ai.'
 }
 
 Write-Success "Successfully installed git-ai into $installDir"
@@ -821,6 +878,17 @@ if (-not $env:GIT_AI_TEST_DB_PATH -and -not $env:GITAI_TEST_DB_PATH) {
         Write-Success 'Background service is ready'
     } catch {
         Write-Warning "Warning: Background service did not start during installation: $($_.Exception.Message)"
+        try {
+            & $finalExe config set feature_flags.async_mode false | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "git-ai config exited with code $LASTEXITCODE"
+            }
+            # Do not leave Git writing Trace2 events to unavailable named pipes.
+            & $stdGitPath config --global --remove-section trace2 2>$null
+            Write-Warning 'Background mode was disabled automatically. Local AI and human code tracking remains enabled.'
+        } catch {
+            Write-Warning "Failed to enable local tracking fallback automatically: $($_.Exception.Message)"
+        }
     }
 }
 

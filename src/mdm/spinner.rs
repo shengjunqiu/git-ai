@@ -1,4 +1,36 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
+
+pub fn output_supports_ansi() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        crossterm::ansi_support::supports_ansi()
+    }
+
+    #[cfg(not(windows))]
+    {
+        match std::env::var("TERM") {
+            Ok(term) => term != "dumb",
+            Err(_) => true,
+        }
+    }
+}
+
+pub fn styled_text(ansi_code: &str, text: &str) -> String {
+    format_styled_text(output_supports_ansi(), ansi_code, text)
+}
+
+fn format_styled_text(enabled: bool, ansi_code: &str, text: &str) -> String {
+    if enabled {
+        format!("\x1b[{ansi_code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
 
 /// Spinner UI component for showing progress
 pub struct Spinner {
@@ -37,26 +69,26 @@ impl Spinner {
     pub fn success(&self, message: &str) {
         // Clear spinner and show success with green checkmark and bold green text
         self.pb.finish_and_clear();
-        println!("\x1b[1;32m✓ {}\x1b[0m", message);
+        println!("{}", styled_text("1;32", &format!("✓ {message}")));
     }
 
     pub fn pending(&self, message: &str) {
         // Clear spinner and show pending with yellow warning triangle and bold yellow text
         self.pb.finish_and_clear();
-        println!("\x1b[1;33m⚠ {}\x1b[0m", message);
+        println!("{}", styled_text("1;33", &format!("⚠ {message}")));
     }
 
     pub fn error(&self, message: &str) {
         // Clear spinner and show error with red X and bold red text
         self.pb.finish_and_clear();
-        println!("\x1b[1;31m✗ {}\x1b[0m", message);
+        println!("{}", styled_text("1;31", &format!("✗ {message}")));
     }
 
     #[allow(dead_code)]
     pub fn skipped(&self, message: &str) {
         // Clear spinner and show skipped with gray circle and gray text
         self.pb.finish_and_clear();
-        println!("\x1b[90m○ {}\x1b[0m", message);
+        println!("{}", styled_text("90", &format!("○ {message}")));
     }
 }
 
@@ -66,16 +98,16 @@ pub fn print_diff(diff_text: &str) {
     for line in diff_text.lines() {
         if line.starts_with("+++") || line.starts_with("---") {
             // File headers in bold
-            println!("\x1b[1m{}\x1b[0m", line);
+            println!("{}", styled_text("1", line));
         } else if line.starts_with('+') {
             // Additions in green
-            println!("\x1b[32m{}\x1b[0m", line);
+            println!("{}", styled_text("32", line));
         } else if line.starts_with('-') {
             // Deletions in red
-            println!("\x1b[31m{}\x1b[0m", line);
+            println!("{}", styled_text("31", line));
         } else if line.starts_with("@@") {
             // Hunk headers in cyan
-            println!("\x1b[36m{}\x1b[0m", line);
+            println!("{}", styled_text("36", line));
         } else {
             // Context lines normal
             println!("{}", line);
@@ -93,6 +125,19 @@ mod tests {
         let spinner = Spinner::new("Testing spinner");
         // Just verify it doesn't panic
         spinner.start();
+    }
+
+    #[test]
+    fn styled_text_is_plain_when_ansi_is_disabled() {
+        assert_eq!(format_styled_text(false, "1;32", "✓ done"), "✓ done");
+    }
+
+    #[test]
+    fn styled_text_includes_ansi_when_enabled() {
+        assert_eq!(
+            format_styled_text(true, "1;32", "✓ done"),
+            "\x1b[1;32m✓ done\x1b[0m"
+        );
     }
 
     #[test]

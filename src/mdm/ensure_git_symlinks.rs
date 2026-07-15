@@ -161,13 +161,7 @@ fn ensure_libexec_symlink_for_binary(exe_path: &Path) -> Result<(), GitAiError> 
         // On Windows, junctions are directories, so use remove_dir
         #[cfg(windows)]
         {
-            if junction::exists(&symlink_path).map_err(|e| {
-                GitAiError::Generic(format!(
-                    "Failed to inspect existing libexec junction {}: {}",
-                    symlink_path.display(),
-                    e
-                ))
-            })? {
+            if windows_junction_exists(&symlink_path)? {
                 junction::delete(&symlink_path).map_err(|e| {
                     GitAiError::Generic(format!(
                         "Failed to remove existing libexec junction {}: {}",
@@ -177,17 +171,31 @@ fn ensure_libexec_symlink_for_binary(exe_path: &Path) -> Result<(), GitAiError> 
                 })?;
             } else {
                 let metadata = symlink_path.symlink_metadata()?;
-                if !metadata.file_type().is_symlink() {
+                if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+                    // Older/failed installers can leave an ordinary empty
+                    // directory here. It is safe to migrate, but never delete
+                    // a non-empty directory that may contain user files.
+                    if fs::read_dir(&symlink_path)?.next().is_none() {
+                        fs::remove_dir(&symlink_path)?;
+                    } else {
+                        return Err(GitAiError::Generic(format!(
+                            "Refusing to replace non-empty libexec directory {}",
+                            symlink_path.display()
+                        )));
+                    }
+                } else if !metadata.file_type().is_symlink() {
                     return Err(GitAiError::Generic(format!(
                         "Refusing to replace non-link libexec path {}",
                         symlink_path.display()
                     )));
-                }
-                // Windows uses remove_dir for directory symlinks. Broken links
-                // cannot be followed to determine their kind, so keep the safe
-                // remove_file fallback after verifying this is a reparse link.
-                if std::fs::remove_dir(&symlink_path).is_err() {
-                    std::fs::remove_file(&symlink_path)?;
+                } else {
+                    // Windows uses remove_dir for directory symlinks. Broken
+                    // links cannot be followed to determine their kind, so
+                    // keep the safe remove_file fallback after verifying this
+                    // is a reparse link.
+                    if fs::remove_dir(&symlink_path).is_err() {
+                        fs::remove_file(&symlink_path)?;
+                    }
                 }
             }
         }
@@ -202,6 +210,21 @@ fn ensure_libexec_symlink_for_binary(exe_path: &Path) -> Result<(), GitAiError> 
     create_junction(&symlink_path, libexec_target)?;
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_junction_exists(path: &Path) -> Result<bool, GitAiError> {
+    match junction::exists(path) {
+        Ok(exists) => Ok(exists),
+        // ERROR_NOT_A_REPARSE_POINT means the path exists but is an ordinary
+        // file/directory. Treat it as "not a junction" and inspect it safely.
+        Err(error) if error.raw_os_error() == Some(4390) => Ok(false),
+        Err(error) => Err(GitAiError::Generic(format!(
+            "Failed to inspect existing libexec junction {}: {}",
+            path.display(),
+            error
+        ))),
+    }
 }
 
 /// Create a directory junction on Windows (doesn't require admin privileges)
@@ -257,6 +280,16 @@ mod tests {
 
     fn test_binary_path(home: &Path) -> PathBuf {
         home.join(".git-ai").join("bin").join(git_ai_binary_name())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_check_treats_plain_directory_as_non_junction() {
+        let temp = tempdir().unwrap();
+        let plain_dir = temp.path().join("libexec");
+        fs::create_dir(&plain_dir).unwrap();
+
+        assert!(!windows_junction_exists(&plain_dir).unwrap());
     }
 
     #[test]

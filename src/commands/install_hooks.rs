@@ -6,7 +6,7 @@ use crate::mdm::git_client_installer::GitClientInstallerParams;
 use crate::mdm::git_clients::get_all_git_client_installers;
 use crate::mdm::hook_installer::HookInstallerParams;
 use crate::mdm::skills_installer;
-use crate::mdm::spinner::{Spinner, print_diff};
+use crate::mdm::spinner::{Spinner, print_diff, styled_text};
 use crate::mdm::utils::{get_current_binary_path, git_shim_path};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -238,6 +238,37 @@ fn remove_global_git_config_section(git_cmd: &str, section: &str) -> Result<(), 
     }
 }
 
+fn set_file_config_async_mode(file_config: &mut config::FileConfig, enabled: bool) {
+    let flags = file_config
+        .feature_flags
+        .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !flags.is_object() {
+        *flags = serde_json::Value::Object(serde_json::Map::new());
+    }
+    flags
+        .as_object_mut()
+        .expect("feature_flags was normalized to an object")
+        .insert("async_mode".to_string(), serde_json::Value::Bool(enabled));
+}
+
+fn activate_local_tracking_fallback(reason: &str) -> Result<(), GitAiError> {
+    let mut file_config = config::load_file_config_public().map_err(GitAiError::Generic)?;
+    set_file_config_async_mode(&mut file_config, false);
+    config::save_file_config(&file_config).map_err(GitAiError::Generic)?;
+
+    // Git must not keep writing Trace2 events to a named pipe that never
+    // became available. Future git/git-ai processes will now use the existing
+    // synchronous wrapper and local checkpoint implementation.
+    let runtime_config = config::Config::fresh();
+    let _ = remove_global_git_config_section(runtime_config.git_cmd(), "trace2");
+
+    eprintln!(
+        "[git-ai] background service unavailable; switched to local tracking automatically: {}",
+        reason
+    );
+    Ok(())
+}
+
 fn maybe_configure_async_mode_daemon_trace2(dry_run: bool) -> Result<(), GitAiError> {
     let runtime_config = config::Config::fresh();
 
@@ -329,6 +360,12 @@ fn maybe_ensure_daemon(dry_run: bool) {
             "[git-ai] warning: failed to restart background service: {}",
             e
         );
+        if let Err(fallback_error) = activate_local_tracking_fallback(&e) {
+            eprintln!(
+                "[git-ai] warning: failed to enable local tracking fallback: {}",
+                fallback_error
+            );
+        }
     }
 }
 
@@ -492,7 +529,7 @@ async fn async_run_install(
     }
 
     // === Coding Agents ===
-    println!("\n\x1b[1mCoding Agents\x1b[0m");
+    println!("\n{}", styled_text("1", "Coding Agents"));
 
     let installers = get_all_installers();
     let mut installed_tools: HashSet<String> = HashSet::new();
@@ -666,7 +703,7 @@ async fn async_run_install(
     // === Git Clients ===
     let git_client_installers = get_all_git_client_installers();
     if !git_client_installers.is_empty() {
-        println!("\n\x1b[1mGit Clients\x1b[0m");
+        println!("\n{}", styled_text("1", "Git Clients"));
 
         let git_client_params = GitClientInstallerParams {
             git_shim_path: git_shim_path(),
@@ -737,9 +774,15 @@ async fn async_run_install(
     if !any_checked {
         println!("No compatible IDEs or agent configurations detected. Nothing to install.");
     } else if has_changes && dry_run {
-        println!("\n\x1b[33m⚠ Dry-run mode (default). No changes were made.\x1b[0m");
+        println!(
+            "\n{}",
+            styled_text("33", "⚠ Dry-run mode (default). No changes were made.")
+        );
         println!("To apply these changes, run:");
-        println!("\x1b[1m  git-ai install-hooks --dry-run=false\x1b[0m");
+        println!(
+            "{}",
+            styled_text("1", "  git-ai install-hooks --dry-run=false")
+        );
     }
 
     // Check for running agents that had hooks updated and warn about restart
@@ -752,14 +795,18 @@ async fn async_run_install(
             if !pids.is_empty() {
                 if !any_running {
                     println!(
-                        "\n\x1b[33m⚠ The following agents are currently running and must be restarted:\x1b[0m"
+                        "\n{}",
+                        styled_text(
+                            "33",
+                            "⚠ The following agents are currently running and must be restarted:"
+                        )
                     );
                     any_running = true;
                 }
                 let pid_list: Vec<String> = pids.iter().map(|(pid, _)| pid.to_string()).collect();
                 println!(
-                    "  \x1b[1m{}\x1b[0m (PID: {})",
-                    agent_name,
+                    "  {} (PID: {})",
+                    styled_text("1", agent_name),
                     pid_list.join(", ")
                 );
             }
@@ -768,7 +815,11 @@ async fn async_run_install(
         if any_running {
             println!();
             println!(
-                "\x1b[33mRestart the agents listed above for git-ai attribution to take effect.\x1b[0m"
+                "{}",
+                styled_text(
+                    "33",
+                    "Restart the agents listed above for git-ai attribution to take effect."
+                )
             );
             println!(
                 "Any work done before installing git-ai (or before restarting) will be attributed as human."
@@ -831,7 +882,7 @@ async fn async_run_uninstall(
     }
 
     // === Coding Agents ===
-    println!("\n\x1b[1mCoding Agents\x1b[0m");
+    println!("\n{}", styled_text("1", "Coding Agents"));
 
     let installers = get_all_installers();
 
@@ -920,7 +971,7 @@ async fn async_run_uninstall(
     // === Git Clients ===
     let git_client_installers = get_all_git_client_installers();
     if !git_client_installers.is_empty() {
-        println!("\n\x1b[1mGit Clients\x1b[0m");
+        println!("\n{}", styled_text("1", "Git Clients"));
 
         let git_client_params = GitClientInstallerParams {
             git_shim_path: git_shim_path(),
@@ -987,9 +1038,15 @@ async fn async_run_uninstall(
     if !any_checked {
         println!("No git-ai hooks found to uninstall.");
     } else if has_changes && dry_run {
-        println!("\n\x1b[33m⚠ Dry-run mode (default). No changes were made.\x1b[0m");
+        println!(
+            "\n{}",
+            styled_text("33", "⚠ Dry-run mode (default). No changes were made.")
+        );
         println!("To apply these changes, run:");
-        println!("\x1b[1m  git-ai uninstall-hooks --dry-run=false\x1b[0m");
+        println!(
+            "{}",
+            styled_text("1", "  git-ai uninstall-hooks --dry-run=false")
+        );
     } else if !has_changes {
         println!("All git-ai hooks have been removed.");
     }
@@ -1108,6 +1165,29 @@ mod tests {
 
         let _defer = EnvVarGuard::remove("GIT_AI_INSTALLER_DEFER_DAEMON_START");
         assert!(!installer_defers_daemon_start());
+    }
+
+    #[test]
+    fn local_tracking_fallback_preserves_other_feature_flags() {
+        let mut file_config = crate::config::FileConfig {
+            feature_flags: Some(serde_json::json!({
+                "async_mode": true,
+                "auth_keyring": true,
+                "custom_future_flag": false
+            })),
+            ..Default::default()
+        };
+
+        set_file_config_async_mode(&mut file_config, false);
+
+        assert_eq!(
+            file_config.feature_flags,
+            Some(serde_json::json!({
+                "async_mode": false,
+                "auth_keyring": true,
+                "custom_future_flag": false
+            }))
+        );
     }
 
     #[test]
