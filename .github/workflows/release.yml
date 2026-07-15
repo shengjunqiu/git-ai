@@ -68,12 +68,14 @@ jobs:
         run: |
           # musl-tools exposes musl-gcc rather than target-prefixed compiler names.
           # Map both native Linux targets for vendored C dependencies such as D-Bus.
+          # Avoid libgcc outline-atomic helpers in rustc's self-contained ARM64 musl link.
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e DEBIAN_FRONTEND=noninteractive \
             -e CC_x86_64_unknown_linux_musl=musl-gcc \
             -e CC_aarch64_unknown_linux_musl=musl-gcc \
+            -e CFLAGS_aarch64_unknown_linux_musl=-mno-outline-atomics \
             -e AR_x86_64_unknown_linux_musl=ar \
             -e AR_aarch64_unknown_linux_musl=ar \
             -e SENTRY_OSS="${{ secrets.SENTRY_OSS }}" \
