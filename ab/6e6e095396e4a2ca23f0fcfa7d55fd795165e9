@@ -1,0 +1,28 @@
+.github/workflows/install-scripts-local.yml
+  ff69a46c14a08471 63,214
+Cargo.toml
+  ff69a46c14a08471 56
+.github/workflows/release.yml
+  ff69a46c14a08471 237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.6",
+  "base_commit_sha": "ab6e6e095396e4a2ca23f0fcfa7d55fd795165e9",
+  "prompts": {
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 3,
+      "accepted_lines": 53,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/d721e8fb0e251f3c97f4a8d2d888eb0b99727a0842ba1fbcae25d7f9e0dd5d07"
+    }
+  }
+}
