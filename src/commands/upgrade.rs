@@ -59,6 +59,36 @@ const ENV_BACKGROUND_UPGRADE_WORKER: &str = "GIT_AI_BACKGROUND_UPGRADE_WORKER";
 static UPDATE_NOTICE_EMITTED: AtomicBool = AtomicBool::new(false);
 static LAST_BACKGROUND_SPAWN: AtomicU64 = AtomicU64::new(0);
 
+fn update_output_supports_ansi() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        // PowerShell hosts do not all enable virtual-terminal processing by
+        // default. Crossterm enables it when possible and reports whether
+        // escape sequences can be rendered safely.
+        crossterm::ansi_support::supports_ansi()
+    }
+
+    #[cfg(not(windows))]
+    {
+        match std::env::var("TERM") {
+            Ok(term) => term != "dumb",
+            Err(_) => true,
+        }
+    }
+}
+
+fn styled_update_text(enabled: bool, ansi_code: &str, text: &str) -> String {
+    if enabled {
+        format!("\x1b[{ansi_code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum UpgradeAction {
     UpgradeAvailable,
@@ -560,7 +590,12 @@ fn run_install_script(script_content: &str, tag: &str, silent: bool) -> Result<(
             Ok(_) => {
                 if !silent {
                     println!(
-                        "\x1b[1;33mNote: The installation is running in the background on Windows.\x1b[0m"
+                        "{}",
+                        styled_update_text(
+                            update_output_supports_ansi(),
+                            "1;33",
+                            "Note: The installation is running in the background on Windows."
+                        )
                     );
                     println!(
                         "This allows the current git-ai process to exit and release file locks."
@@ -666,6 +701,7 @@ fn run_impl_with_url(
     skip_install: bool,
 ) -> UpgradeAction {
     let current_version = env!("CARGO_PKG_VERSION");
+    let use_ansi = update_output_supports_ansi();
 
     println!("Checking for updates (channel: {})...", channel.as_str());
 
@@ -706,7 +742,10 @@ fn run_impl_with_url(
             println!("You are already on the latest version!");
             println!();
             println!("To reinstall anyway, run:");
-            println!("  \x1b[1;36mgit-ai update --force\x1b[0m");
+            println!(
+                "  {}",
+                styled_update_text(use_ansi, "1;36", "git-ai update --force")
+            );
             return action;
         }
         UpgradeAction::RunningNewerVersion => {
@@ -714,17 +753,27 @@ fn run_impl_with_url(
             println!("(This usually means you're running a development build)");
             println!();
             println!("To reinstall the selected release anyway, run:");
-            println!("  \x1b[1;36mgit-ai update --force\x1b[0m");
+            println!(
+                "  {}",
+                styled_update_text(use_ansi, "1;36", "git-ai update --force")
+            );
             return action;
         }
         UpgradeAction::ForceReinstall => {
             println!(
-                "\x1b[1;33mForce mode enabled - reinstalling {}\x1b[0m",
-                release.tag
+                "{}",
+                styled_update_text(
+                    use_ansi,
+                    "1;33",
+                    &format!("Force mode enabled - reinstalling {}", release.tag)
+                )
             );
         }
         UpgradeAction::UpgradeAvailable => {
-            println!("\x1b[1;33mA new version is available!\x1b[0m");
+            println!(
+                "{}",
+                styled_update_text(use_ansi, "1;33", "A new version is available!")
+            );
         }
     }
     println!();
@@ -739,7 +788,10 @@ fn run_impl_with_url(
     let checksums =
         match fetch_and_verify_checksums(api_base_url, channel.as_str(), &release.checksum) {
             Ok(checksums) => {
-                println!("\x1b[1;32m✓\x1b[0m SHA256SUMS verified");
+                println!(
+                    "{} SHA256SUMS verified",
+                    styled_update_text(use_ansi, "1;32", "✓")
+                );
                 checksums
             }
             Err(err) => {
@@ -753,9 +805,15 @@ fn run_impl_with_url(
         match fetch_and_verify_install_script(api_base_url, channel.as_str(), &checksums) {
             Ok(content) => {
                 #[cfg(windows)]
-                println!("\x1b[1;32m✓\x1b[0m install.ps1 verified");
+                println!(
+                    "{} install.ps1 verified",
+                    styled_update_text(use_ansi, "1;32", "✓")
+                );
                 #[cfg(not(windows))]
-                println!("\x1b[1;32m✓\x1b[0m install.sh verified");
+                println!(
+                    "{} install.sh verified",
+                    styled_update_text(use_ansi, "1;32", "✓")
+                );
                 content
             }
             Err(err) => {
@@ -773,7 +831,11 @@ fn run_impl_with_url(
             // On Windows, we spawn the installer in the background and can't verify success
             #[cfg(not(windows))]
             {
-                println!("\x1b[1;32m✓\x1b[0m Successfully installed {}!", release.tag);
+                println!(
+                    "{} Successfully installed {}!",
+                    styled_update_text(use_ansi, "1;32", "✓"),
+                    release.tag
+                );
             }
 
             log_message(
@@ -815,14 +877,20 @@ fn print_cached_notice(cache: &UpdateCache) {
 
     let current_version = env!("CARGO_PKG_VERSION");
     let available_version = cache.available_semver.as_deref().unwrap_or("");
+    let use_ansi = update_output_supports_ansi();
 
     eprintln!();
     eprintln!(
-        "\x1b[1;33mA new version of git-ai is available: \x1b[1;32mv{}\x1b[0m → \x1b[1;32mv{}\x1b[0m",
-        current_version, available_version
+        "{} {} → {}",
+        styled_update_text(use_ansi, "1;33", "A new version of git-ai is available:"),
+        styled_update_text(use_ansi, "1;32", &format!("v{current_version}")),
+        styled_update_text(use_ansi, "1;32", &format!("v{available_version}"))
     );
     eprintln!(
-        "\x1b[1;33mRun \x1b[1;36mgit-ai update\x1b[0m \x1b[1;33mto install the latest version.\x1b[0m"
+        "{} {} {}",
+        styled_update_text(use_ansi, "1;33", "Run"),
+        styled_update_text(use_ansi, "1;36", "git-ai update"),
+        styled_update_text(use_ansi, "1;33", "to install the latest version.")
     );
     eprintln!();
 }
@@ -1031,6 +1099,22 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn test_styled_update_text_omits_ansi_when_disabled() {
+        assert_eq!(
+            styled_update_text(false, "1;33", "A new version is available!"),
+            "A new version is available!"
+        );
+    }
+
+    #[test]
+    fn test_styled_update_text_adds_ansi_when_enabled() {
+        assert_eq!(
+            styled_update_text(true, "1;33", "A new version is available!"),
+            "\x1b[1;33mA new version is available!\x1b[0m"
+        );
+    }
 
     fn set_test_cache_dir(dir: &tempfile::TempDir) {
         unsafe {

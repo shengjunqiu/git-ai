@@ -14,6 +14,8 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 #[derive(Serialize)]
 struct CheckpointInfo {
     time_ago: String,
@@ -53,10 +55,16 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
 
     let default_user_name = repo.git_author_identity().name_or_unknown();
 
+    // A newly initialized repository has a symbolic HEAD such as
+    // refs/heads/master or refs/heads/main, but that ref does not exist until
+    // the first commit. Checkpoint storage already uses "initial" for this
+    // unborn state, so status must use the same base instead of rev-parsing a
+    // ref that has no target yet.
     let head = repo.head()?;
-    let head_sha = head.target()?;
+    let head_sha = head.target().ok();
+    let base_commit = head_sha.as_deref().unwrap_or("initial");
 
-    let working_log = repo.storage.working_log_for_base_commit(&head_sha)?;
+    let working_log = repo.storage.working_log_for_base_commit(base_commit)?;
     let checkpoints = working_log.read_all_checkpoints()?;
 
     if checkpoints.is_empty() {
@@ -68,10 +76,14 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
             let json_str = serde_json::to_string(&output)?;
             println!("{}", json_str);
         } else {
-            eprintln!(
-                "No checkpoints recorded since last commit ({})",
-                &head_sha[..7]
-            );
+            if let Some(head_sha) = &head_sha {
+                eprintln!(
+                    "No checkpoints recorded since last commit ({})",
+                    &head_sha[..7]
+                );
+            } else {
+                eprintln!("No checkpoints recorded; repository has no commits yet.");
+            }
             eprintln!();
 
             eprintln!(
@@ -86,7 +98,7 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
 
     let working_va = VirtualAttributions::from_just_working_log(
         repo.clone(),
-        head_sha.clone(),
+        base_commit.to_string(),
         Some(default_user_name.clone()),
     )?;
 
@@ -96,17 +108,21 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
         .filter(|file| !should_ignore_file_with_matcher(file, &ignore_matcher))
         .collect();
 
+    // There is no commit object before the initial commit. Use Git's empty
+    // tree as the comparison target while retaining "initial" as the working
+    // log storage key.
+    let attribution_commit = head_sha.as_deref().unwrap_or(EMPTY_TREE_HASH);
     let (authorship_log, initial) = working_va.to_authorship_log_and_initial_working_log(
         &repo,
-        &head_sha,
-        &head_sha,
+        base_commit,
+        attribution_commit,
         Some(&pathspecs),
         None,
     )?;
 
     // Get actual git diff stats between HEAD and working directory (like post_commit does)
     let (total_additions, total_deletions) =
-        get_working_dir_diff_stats(&repo, Some(&pathspecs), &ignore_matcher)?;
+        get_working_dir_diff_stats(&repo, attribution_commit, Some(&pathspecs), &ignore_matcher)?;
 
     // For status (uncommitted changes), the AI attributions are in `initial` (uncommitted),
     // not in authorship_log.attestations (which is for committed changes).
@@ -307,13 +323,14 @@ fn capitalize(s: &str) -> String {
 /// This mirrors the logic in stats.rs get_git_diff_stats but for uncommitted changes
 fn get_working_dir_diff_stats(
     repo: &Repository,
+    diff_base: &str,
     pathspecs: Option<&HashSet<String>>,
     ignore_matcher: &IgnoreMatcher,
 ) -> Result<(u32, u32), GitAiError> {
     let mut args = repo.global_args_for_exec();
     args.push("diff".to_string());
     args.push("--numstat".to_string());
-    args.push("HEAD".to_string());
+    args.push(diff_base.to_string());
 
     // Add pathspecs if provided to scope the diff to specific files
     // Only pass as CLI args when under threshold to avoid E2BIG
@@ -467,12 +484,12 @@ mod tests {
         // Small pathspec (CLI-arg path) - only a.txt
         let small: HashSet<String> = ["a.txt".to_string()].into_iter().collect();
         let (added_small, _deleted_small) =
-            get_working_dir_diff_stats(gitai_repo, Some(&small), &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", Some(&small), &ignore_matcher).unwrap();
 
         // Padded pathspec (post-filter path) - only a.txt + padding
         let large = padded_pathspecs(&["a.txt"]);
         let (added_large, _deleted_large) =
-            get_working_dir_diff_stats(gitai_repo, Some(&large), &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", Some(&large), &ignore_matcher).unwrap();
 
         assert_eq!(added_small, 2, "small pathspec: a.txt adds 2 lines");
         assert_eq!(
@@ -498,7 +515,7 @@ mod tests {
         // Padded pathspec containing only "a.txt"
         let large = padded_pathspecs(&["a.txt"]);
         let (added, _deleted) =
-            get_working_dir_diff_stats(gitai_repo, Some(&large), &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", Some(&large), &ignore_matcher).unwrap();
 
         // a.txt adds 2 lines; b.txt adds 1 line but should be excluded
         assert_eq!(added, 2, "should only count a.txt additions, not b.txt");
@@ -520,7 +537,7 @@ mod tests {
 
         // None pathspecs = all lines counted
         let (added, _deleted) =
-            get_working_dir_diff_stats(gitai_repo, None, &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", None, &ignore_matcher).unwrap();
 
         // a.txt adds 2 lines + b.txt adds 1 line = 3 total
         assert_eq!(added, 3, "None pathspecs should count all additions");
@@ -537,7 +554,7 @@ mod tests {
         let ignore_matcher = build_ignore_matcher(&[]);
         let empty: HashSet<String> = HashSet::new();
         let (added, deleted) =
-            get_working_dir_diff_stats(gitai_repo, Some(&empty), &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", Some(&empty), &ignore_matcher).unwrap();
         assert_eq!(added, 0);
         assert_eq!(deleted, 0);
     }
@@ -567,7 +584,7 @@ mod tests {
         // so "new_name.txt" matches cleanly against parts[2].
         let large = padded_pathspecs(&["new_name.txt"]);
         let (added, _deleted) =
-            get_working_dir_diff_stats(gitai_repo, Some(&large), &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(gitai_repo, "HEAD", Some(&large), &ignore_matcher).unwrap();
 
         // new_name.txt has 4 lines (all added since it's a new file after --no-renames)
         // other.txt should be excluded
@@ -598,7 +615,7 @@ mod tests {
 
         let ignore_matcher = build_ignore_matcher(&["Cargo.lock".to_string()]);
         let (added, _deleted) =
-            get_working_dir_diff_stats(repo.gitai_repo(), None, &ignore_matcher).unwrap();
+            get_working_dir_diff_stats(repo.gitai_repo(), "HEAD", None, &ignore_matcher).unwrap();
         assert_eq!(added, 1, "Cargo.lock additions should be ignored");
     }
 

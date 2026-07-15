@@ -77,6 +77,37 @@ fn configure_hostile_diff_settings(repo: &TestRepo) {
 }
 
 #[test]
+fn test_status_succeeds_before_initial_commit() {
+    let repo = TestRepo::new();
+
+    let output = repo
+        .git_ai(&["status"])
+        .expect("status should support an unborn repository");
+    assert!(
+        output.contains("repository has no commits yet"),
+        "unexpected unborn status output: {output}"
+    );
+
+    let status = status_from_args(&repo, &["status", "--json"]);
+    assert!(status.checkpoints.is_empty());
+}
+
+#[test]
+fn test_status_reports_checkpoints_before_initial_commit() {
+    let repo = TestRepo::new();
+
+    write_file(&repo, "unborn.txt", "first AI line\n");
+    repo.git_ai(&["checkpoint", "mock_ai", "unborn.txt"])
+        .expect("checkpoint should support an unborn repository");
+
+    let status = status_from_args(&repo, &["status", "--json"]);
+    assert!(
+        !status.checkpoints.is_empty(),
+        "status should report checkpoints before the first commit"
+    );
+}
+
+#[test]
 fn test_checkpoint_ignores_default_lockfiles_integration() {
     let repo = TestRepo::new();
 
@@ -400,6 +431,8 @@ fn test_status_numstat_is_stable_under_hostile_diff_config() {
     assert_eq!(status.stats.ai_accepted, 1);
 }
 crate::reuse_tests_in_worktree!(
+    test_status_succeeds_before_initial_commit,
+    test_status_reports_checkpoints_before_initial_commit,
     test_checkpoint_ignores_default_lockfiles_integration,
     test_checkpoint_honors_uncommitted_root_gitattributes_linguist_generated_integration,
     test_status_default_ignores_affect_git_diff_and_ai_accepted,
