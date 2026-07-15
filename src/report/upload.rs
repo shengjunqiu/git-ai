@@ -509,8 +509,8 @@ mod tests {
                 let headers = String::from_utf8_lossy(&request[..header_end]);
                 let content_length = headers
                     .lines()
-                    .find_map(|line| line.split_once(':'))
-                    .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
                     .and_then(|(_, value)| value.trim().parse::<usize>().ok())
                     .unwrap_or(0);
                 let expected_len = header_end + header_marker.len() + content_length;
