@@ -10,6 +10,8 @@ use std::path::PathBuf;
 const SERVICE_NAME: &str = "git-ai";
 #[cfg(all(not(test), feature = "keyring"))]
 const USERNAME: &str = "oauth-tokens";
+#[cfg(not(test))]
+static KEYRING_FALLBACK_WARNING: std::sync::Once = std::sync::Once::new();
 
 /// Cross-platform credential storage
 /// Uses system keyring when available, falls back to file storage
@@ -42,9 +44,11 @@ impl CredentialStore {
             } else {
                 if use_keyring {
                     // User wanted keyring but it's not available
-                    eprintln!(
-                        "Note: System keyring not available, credentials will be stored in file"
-                    );
+                    KEYRING_FALLBACK_WARNING.call_once(|| {
+                        eprintln!(
+                            "Note: System keyring not available, credentials will be stored in file"
+                        );
+                    });
                 }
                 Self {
                     backend: Box::new(FileBackend::new(Self::default_production_path())),
@@ -62,9 +66,11 @@ impl CredentialStore {
                 // User wanted keyring but binary was built without keyring support
                 use std::io::IsTerminal;
                 if std::io::stderr().is_terminal() {
-                    eprintln!(
-                        "Note: auth_keyring is enabled but this binary was built without keyring support. Using file-based storage."
-                    );
+                    KEYRING_FALLBACK_WARNING.call_once(|| {
+                        eprintln!(
+                            "Note: auth_keyring is enabled but this binary was built without keyring support. Using file-based storage."
+                        );
+                    });
                 }
             }
             Self {

@@ -117,9 +117,9 @@ if ($needsInstall) {
 # Build the binary
 Write-Host "Building $BuildType binary..."
 if ($BuildType -eq 'release') {
-    cargo build --release
+    cargo build --release --features keyring
 } else {
-    cargo build
+    cargo build --features keyring
 }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

@@ -54,9 +54,9 @@ fi
 # Build the binary
 echo "Building $BUILD_TYPE binary..."
 if [[ "$BUILD_TYPE" == "release" ]]; then
-    cargo build --release
+    cargo build --release --features keyring
 else
-    cargo build
+    cargo build --features keyring
 fi
 
 # Install binary via temp file + atomic mv to avoid macOS code signature cache
