@@ -1625,6 +1625,14 @@ fn run_checkpoint_via_daemon_or_local(
                         kind,
                         &e,
                     );
+                    if let Err(fallback_error) =
+                        crate::commands::install_hooks::activate_local_tracking_fallback(&e)
+                    {
+                        eprintln!(
+                            "[git-ai] warning: could not persist local tracking fallback: {}",
+                            fallback_error
+                        );
+                    }
                 }
             }
         }

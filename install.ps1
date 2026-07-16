@@ -702,6 +702,7 @@ try {
     }
 
     $profileMarker = '# >>> git-ai managed PATH >>>'
+    $profileEndMarker = '# <<< git-ai managed PATH <<<'
     $profileBlock = @'
 
 # >>> git-ai managed PATH >>>
@@ -712,6 +713,10 @@ if (Test-Path -LiteralPath $gitAiBin) {
         -not [string]::IsNullOrWhiteSpace($_) -and $_.Trim().TrimEnd('\') -ine $normalizedGitAiBin
     })
     $env:Path = (@($gitAiBin) + $gitAiPathEntries) -join ';'
+    $gitAiGit = Join-Path $gitAiBin 'git.exe'
+    if (Test-Path -LiteralPath $gitAiGit -PathType Leaf) {
+        Set-Alias -Name git -Value $gitAiGit -Scope Global -Force
+    }
 }
 # <<< git-ai managed PATH <<<
 '@
@@ -724,13 +729,20 @@ if (Test-Path -LiteralPath $gitAiBin) {
         if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
             $existingProfile = Get-Content -LiteralPath $profilePath -Raw -ErrorAction Stop
         }
-        if ($existingProfile -and $existingProfile.Contains($profileMarker)) {
-            continue
-        }
         $profileDir = Split-Path -Parent $profilePath
         New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::AppendAllText($profilePath, $profileBlock, $utf8NoBom)
+        if ($existingProfile -and $existingProfile.Contains($profileMarker)) {
+            $managedPattern = '(?s)' + [regex]::Escape($profileMarker) + '.*?' + [regex]::Escape($profileEndMarker)
+            $managedRegex = New-Object System.Text.RegularExpressions.Regex($managedPattern)
+            $updatedProfile = $managedRegex.Replace($existingProfile, $profileBlock.Trim(), 1)
+            if ($updatedProfile -eq $existingProfile) {
+                continue
+            }
+            [System.IO.File]::WriteAllText($profilePath, $updatedProfile, $utf8NoBom)
+        } else {
+            [System.IO.File]::AppendAllText($profilePath, $profileBlock, $utf8NoBom)
+        }
         $powerShellProfilesConfigured.Add($profilePath) | Out-Null
     }
 } catch {
@@ -739,6 +751,28 @@ if (Test-Path -LiteralPath $gitAiBin) {
 }
 if ($powerShellProfilesConfigured.Count -gt 0) {
     Write-Success 'Successfully configured PowerShell PATH precedence for git-ai.'
+}
+try {
+    # Make the shim effective immediately for direct `irm ... | iex` installs.
+    # Background self-updates cannot modify their parent shell, but the profile
+    # block above applies the alias when the next PowerShell starts.
+    if (Test-Path -LiteralPath $gitShim -PathType Leaf) {
+        Set-Alias -Name git -Value $gitShim -Scope Global -Force
+    }
+} catch {
+    Write-Warning "Unable to activate the git-ai PowerShell alias in this session: $($_.Exception.Message)"
+}
+
+try {
+    $resolvedGit = Get-Command git -ErrorAction Stop
+    $resolvedGitPath = [string]$resolvedGit.Definition
+    if ((Normalize-PathString $resolvedGitPath) -ne (Normalize-PathString $gitShim)) {
+        throw "PowerShell resolves 'git' to '$resolvedGitPath' instead of '$gitShim'."
+    }
+    Write-Success "PowerShell resolves 'git' through the git-ai shim."
+} catch {
+    Write-Warning "Unable to verify PowerShell git precedence: $($_.Exception.Message)"
+    Write-Warning "Close and reopen PowerShell, then run: Get-Command git -All"
 }
 
 Write-Success "Successfully installed git-ai into $installDir"

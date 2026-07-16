@@ -251,16 +251,18 @@ fn set_file_config_async_mode(file_config: &mut config::FileConfig, enabled: boo
         .insert("async_mode".to_string(), serde_json::Value::Bool(enabled));
 }
 
-fn activate_local_tracking_fallback(reason: &str) -> Result<(), GitAiError> {
+pub(crate) fn activate_local_tracking_fallback(reason: &str) -> Result<(), GitAiError> {
+    // Remove the dead Trace2 target first so the current Git invocation can
+    // safely continue through the synchronous wrapper even if persisting the
+    // config change later fails.
+    let runtime_config = config::Config::fresh();
+    let trace2_result = remove_global_git_config_section(runtime_config.git_cmd(), "trace2");
+
     let mut file_config = config::load_file_config_public().map_err(GitAiError::Generic)?;
     set_file_config_async_mode(&mut file_config, false);
     config::save_file_config(&file_config).map_err(GitAiError::Generic)?;
 
-    // Git must not keep writing Trace2 events to a named pipe that never
-    // became available. Future git/git-ai processes will now use the existing
-    // synchronous wrapper and local checkpoint implementation.
-    let runtime_config = config::Config::fresh();
-    let _ = remove_global_git_config_section(runtime_config.git_cmd(), "trace2");
+    trace2_result?;
 
     eprintln!(
         "[git-ai] background service unavailable; switched to local tracking automatically: {}",

@@ -272,7 +272,8 @@ fn run_install_script_via_expression(repo: &TestRepo, timeout: Duration) -> Comm
         .arg("-Command")
         .arg(
             "$content = Get-Content -LiteralPath $env:GIT_AI_INSTALL_SCRIPT_PATH -Raw; \
-             Invoke-Expression ([string]$content)",
+             Invoke-Expression ([string]$content); \
+             Write-Output ('RESOLVED_GIT=' + [string](Get-Command git -ErrorAction Stop).Definition)",
         )
         .current_dir(env!("CARGO_MANIFEST_DIR"));
     configure_install_env(&mut command, repo);
@@ -492,6 +493,14 @@ fn windows_install_script_supports_invoke_expression_execution() {
     assert!(
         installed_git_ai_path(&repo).exists(),
         "git-ai.exe should be installed after expression-based install"
+    );
+    assert!(
+        result.stdout.contains(&format!(
+            "RESOLVED_GIT={}",
+            installed_git_wrapper_path(&repo).display()
+        )),
+        "the invoking PowerShell session should resolve git through the installed shim\nstdout:\n{}",
+        result.stdout
     );
 
     kill_installed_processes(&repo);

@@ -247,6 +247,82 @@ fn async_mode_wrapper_commit_passthrough_skips_git_ai_side_effects() {
 }
 
 #[test]
+fn async_mode_wrapper_falls_back_to_local_tracking_when_daemon_is_unavailable() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+    write_async_mode_config(&repo);
+
+    // Leave a dead Trace2 target behind, matching the Windows failure mode
+    // where config says async_mode=true but no daemon is serving the pipe.
+    let mut trace_config = Command::new(real_git_executable());
+    trace_config.args([
+        "config",
+        "--global",
+        "trace2.eventTarget",
+        daemon_trace_socket_path(&repo).to_string_lossy().as_ref(),
+    ]);
+    trace_config.current_dir(repo.path());
+    configure_test_home_env(&mut trace_config, &repo);
+    assert!(
+        trace_config
+            .status()
+            .expect("set dead Trace2 target")
+            .success()
+    );
+
+    // In test builds an existing non-socket control path makes telemetry
+    // initialization fail deterministically without starting a real daemon.
+    let dead_control = daemon_control_socket_path(&repo);
+    fs::create_dir_all(dead_control.parent().expect("control socket parent"))
+        .expect("create dead control parent");
+    fs::write(&dead_control, b"not a socket").expect("create dead control endpoint");
+
+    let daemon_home = repo.daemon_home_path().to_string_lossy().to_string();
+    let control = dead_control.to_string_lossy().to_string();
+    let trace = daemon_trace_socket_path(&repo)
+        .to_string_lossy()
+        .to_string();
+    repo.git_with_env(
+        &["config", "--local", "git-ai.fallback-test", "true"],
+        &[
+            ("GIT_AI_DAEMON_HOME", daemon_home.as_str()),
+            ("GIT_AI_DAEMON_CONTROL_SOCKET", control.as_str()),
+            ("GIT_AI_DAEMON_TRACE_SOCKET", trace.as_str()),
+        ],
+        None,
+    )
+    .expect("mutating Git command should fall back and run exactly once");
+
+    let config: Value = serde_json::from_slice(
+        &fs::read(repo.test_home_path().join(".git-ai").join("config.json"))
+            .expect("read fallback config"),
+    )
+    .expect("parse fallback config");
+    assert_eq!(
+        config
+            .pointer("/feature_flags/async_mode")
+            .and_then(Value::as_bool),
+        Some(false),
+        "daemon failure should persist synchronous local tracking"
+    );
+    assert!(
+        read_global_git_config(&repo, "trace2.eventTarget").is_none(),
+        "dead Trace2 target should be removed before running Git"
+    );
+
+    // AI checkpointing and commit authorship must work without a daemon after
+    // the automatic fallback.
+    fs::write(repo.path().join("fallback.txt"), "AI line\n").expect("write fallback file");
+    repo.git_ai(&["checkpoint", "mock_ai", "fallback.txt"])
+        .expect("AI checkpoint should run locally after fallback");
+    repo.git(&["add", "fallback.txt"])
+        .expect("stage through synchronous wrapper");
+    repo.git(&["commit", "-m", "fallback tracking"])
+        .expect("commit through synchronous wrapper");
+    repo.git_og(&["notes", "--ref=ai", "show", "HEAD"])
+        .expect("synchronous fallback should write an authorship note");
+}
+
+#[test]
 fn install_hooks_async_mode_sets_daemon_trace2_global_config() {
     let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
 
