@@ -1,0 +1,36 @@
+src/commands/git_ai_handlers.rs
+  ff69a46c14a08471 1628-1635
+install.ps1
+  ff69a46c14a08471 705,716-719,735-745,755-776
+tests/async_mode.rs
+  ff69a46c14a08471 250-324
+Cargo.toml
+  ff69a46c14a08471 3
+src/commands/git_handlers.rs
+  ff69a46c14a08471 114,158-195,197-210,212-213,215-217,219-248,298-300,866-870,872,876,883-884,886,889,893
+tests/windows_install_script.rs
+  ff69a46c14a08471 275-276,497-503
+src/commands/install_hooks.rs
+  ff69a46c14a08471 254-260,265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.6",
+  "base_commit_sha": "0043f5a7b9bbe6a26eab7fc7c70da72e99c7c48a",
+  "prompts": {
+    "ff69a46c14a08471": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f3d-1385-7b12-9506-2d375019e4d5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 282,
+      "total_deletions": 105,
+      "accepted_lines": 297,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/dcfe2d76460db58d73db54dd0e7859447c91609f11d26526c273cb8731bdee56"
+    }
+  }
+}
