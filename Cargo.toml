@@ -83,3 +83,10 @@ opt-level = 2                      # Optimize proc macros and build scripts
 name = "integration"
 path = "tests/integration/main.rs"
 harness = true
+
+[[bin]]
+name = "git-ai-hook-test-recorder"
+path = "tests/support/hook_command_recorder.rs"
+required-features = ["test-support"]
+test = false
+bench = false

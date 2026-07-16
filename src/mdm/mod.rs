@@ -9,4 +9,6 @@ pub mod skills_installer;
 pub mod spinner;
 pub mod utils;
 
+#[cfg(feature = "test-support")]
+pub use command_line::test_support as command_line_test_support;
 pub use ensure_git_symlinks::ensure_git_symlinks;

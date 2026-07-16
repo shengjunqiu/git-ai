@@ -107,6 +107,8 @@ mod tls_native_certs;
 mod trae;
 mod utf8_filenames;
 mod virtual_attribution_merge;
+#[cfg(windows)]
+mod windows_hook_commands;
 mod windsurf;
 mod worktrees;
 mod wrapper_performance_targets;

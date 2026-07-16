@@ -128,6 +128,28 @@ fn quote_powershell_token(value: &str) -> String {
     }
 }
 
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use super::{HookShell, render_hook_command};
+    use std::path::Path;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum TestHookShell {
+        GitBash,
+        Cmd,
+        PowerShell,
+    }
+
+    pub fn render_for_shell(binary_path: &Path, args: &[&str], shell: TestHookShell) -> String {
+        let shell = match shell {
+            TestHookShell::GitBash => HookShell::GitBash,
+            TestHookShell::Cmd => HookShell::Cmd,
+            TestHookShell::PowerShell => HookShell::PowerShell,
+        };
+        render_hook_command(binary_path, args, shell)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,12 +157,13 @@ mod tests {
 
     const ARGS: &[&str] = &["checkpoint", "test-agent", "--hook-input", "stdin"];
 
-    fn special_paths() -> [PathBuf; 4] {
+    fn special_paths() -> [PathBuf; 5] {
         [
             PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
             PathBuf::from(r"C:\Users\A&B\.git-ai\bin\git-ai.exe"),
             PathBuf::from(r"C:\Users\100% Dev\.git-ai\bin\git-ai.exe"),
             PathBuf::from(r"C:\Users\O'Neil\.git-ai\bin\git-ai.exe"),
+            PathBuf::from(r"D:\Tools\git ai\git-ai.exe"),
         ]
     }
 
@@ -158,6 +181,7 @@ mod tests {
                 r#"'/c/Users/A&B/.git-ai/bin/git-ai.exe' checkpoint test-agent --hook-input stdin"#,
                 r#"'/c/Users/100% Dev/.git-ai/bin/git-ai.exe' checkpoint test-agent --hook-input stdin"#,
                 r#"'/c/Users/O'"'"'Neil/.git-ai/bin/git-ai.exe' checkpoint test-agent --hook-input stdin"#,
+                r#"'/d/Tools/git ai/git-ai.exe' checkpoint test-agent --hook-input stdin"#,
             ]
         );
     }

@@ -153,10 +153,10 @@ Agent 修改文件
 
 验收标准：
 
-- [ ] 每种声明支持的 shell 都真实启动了测试二进制。
-- [ ] argv、stdin 和 cwd 与输入完全一致。
-- [ ] 测试能够在修复前捕获 Trae 和 CodeBuddy IDE 的 `/c/...` 启动失败。
-- [ ] Windows CI 缺少声明为必需的 shell 时直接失败，不静默跳过。
+- [x] 每种声明支持的 shell 都真实启动了测试二进制。
+- [x] argv、stdin 和 cwd 与输入完全一致。
+- [x] 测试能够在修复前捕获 Trae 和 CodeBuddy IDE 的 `/c/...` 启动失败。
+- [x] Windows CI 缺少声明为必需的 shell 时直接失败，不静默跳过。
 
 ## 7. 阶段 2：修复 Trae Windows Hook
 
@@ -646,3 +646,44 @@ C:\Users\admin\AppData\Local\Temp\1\git-ai-20260716-stage0-agent-configs
 编译阶段观察到两条既有 Windows warning：`src/config.rs` 的未使用 import，以及 `src/mdm/ensure_git_symlinks.rs` 的未使用函数；它们不由本阶段改动引入。
 
 Task 0.2 和阶段 0 已满足验收条件。Taskfile 的 Windows CPU 数量探测问题不阻塞本阶段 fixture 验收，但会阻塞后续按 Taskfile 运行完整质量检查，必须在阶段 1 或独立任务中处理。
+
+## 16. 阶段 1 执行记录：2026-07-16
+
+阶段状态：**已完成**。Task 1.1 已建立原生 Windows PowerShell、Cmd 和 Git Bash 的 Hook 命令真实执行测试。
+
+### Task 1.1 执行记录：2026-07-16
+
+实现内容：
+
+- 新增仅在 `test-support` feature 下构建的 `git-ai-hook-test-recorder`，普通发布构建不会构建该目标。
+- recorder 记录实际收到的 argv、stdin 和 cwd；测试进程单独断言 shell 退出码。
+- 新增 `command_line_test_support`，只在 `test-support` feature 下暴露现有 renderer，不扩大普通生产 API。
+- 新增 Windows integration 模块，分别通过以下真实解释器执行 renderer 输出：
+  - `powershell.exe -NoLogo -NoProfile -NonInteractive -Command`
+  - `cmd.exe /D /S /C`
+  - Git for Windows 的 `bash.exe -c`
+- Cmd harness 使用 Windows `CommandExt::raw_arg` 传递 `/C` 后的完整命令，避免 Rust `Command` 为 Cmd 不兼容地二次转义引号。
+- Git Bash 可以通过 `GIT_AI_TEST_GIT_BASH` 显式指定；否则检查标准 Git for Windows 安装目录。找不到时测试直接失败。
+
+真实执行覆盖：
+
+- 可执行文件目录：`Test User`、`A&B`、`100% Dev`、`O'Neil` 和 `Tools`。
+- 静态 renderer 额外覆盖 `D:\Tools\git ai\git-ai.exe`，验证非 C 盘的 Git Bash 路径转换。
+- argv：普通参数、空格、`&`、`%` 和单引号。
+- cwd：包含空格和 `&`。
+- stdin：完整的 `PostToolUse` JSON，并保留末尾换行。
+- 负向场景：把 Git Bash `/c/...` 命令交给 PowerShell 和 Cmd，二者都返回失败且 recorder 没有运行，复现当前 Trae 和 CodeBuddy IDE 问题。
+
+测试结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test mdm::command_line::tests --lib -- --test-threads 1` | 通过：5 passed，0 failed。 |
+| `cargo test --test integration windows_hook_commands:: -- --test-threads 1` | 通过：4 passed，0 failed，3125 filtered out。 |
+| `cargo build --bin git-ai` | 通过；确认普通生产二进制不依赖 recorder。 |
+| `cargo clippy --bin git-ai-hook-test-recorder --features test-support -- -D warnings` | 未通过：Clippy 同时检查 library，失败列表仅涉及仓库既有文件中的 11 条基线告警；recorder 目标没有产生诊断。 |
+| `git diff --check` | 通过，仅有 Git 的 LF/CRLF 提示。 |
+
+首次运行 Cmd 测试时，Rust `Command::arg` 把嵌套引号编码为 Cmd 无法识别的 `\"...\"`，导致一条 harness 假失败。改用 `raw_arg` 模拟宿主向 `/C` 传递完整命令后，Cmd 的所有特殊路径和参数均通过；生产 renderer 未因此修改。
+
+普通构建仍显示阶段 0 已记录的两条既有 Windows warning，未新增 warning。严格 Clippy 检查还发现 11 条既有 library 基线告警，涉及 `config`、`authorship`、`commands`、`git` 和 `mdm` 中未由本阶段修改的文件；本阶段不扩大范围修复这些告警。
