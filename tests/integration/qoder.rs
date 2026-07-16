@@ -10,6 +10,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
+use crate::repos::test_file::ExpectedLineExt;
+use crate::repos::test_repo::TestRepo;
+
 struct EnvVarGuard {
     key: &'static str,
     original: Option<OsString>,
@@ -327,4 +330,179 @@ fn test_qoder_preset_skips_read_without_path() {
             .to_string()
             .contains("Skipping Qoder PreToolUse without mutating tool/path")
     );
+}
+
+#[test]
+fn test_qoder_create_and_edit_attribution_flow() {
+    let repo = TestRepo::new();
+    let repo_root = repo.path().clone();
+    let main_path = repo_root.join("src").join("main.rs");
+    let generated_path = repo_root.join("src").join("generated.rs");
+    fs::create_dir_all(main_path.parent().unwrap()).unwrap();
+    fs::write(&main_path, "// human baseline\n").unwrap();
+    repo.stage_all_and_commit("Add human baseline").unwrap();
+
+    let repo_root_string = repo_root.to_string_lossy().to_string();
+    let main_path_string = main_path.to_string_lossy().to_string();
+    let generated_path_string = generated_path.to_string_lossy().to_string();
+    let session_id = "qoder-file-attribution-session";
+
+    let edit_pre = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "search_replace",
+        "tool_input": {
+            "file_path": main_path_string,
+            "old_string": "// human baseline\n",
+            "new_string": "// human baseline\n// edited by Qoder\n"
+        }
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        edit_pre.as_bytes(),
+    )
+    .expect("Qoder edit pre-hook should succeed");
+    fs::write(&main_path, "// human baseline\n// edited by Qoder\n").unwrap();
+    let edit_post = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "search_replace",
+        "tool_input": {
+            "file_path": main_path_string,
+            "old_string": "// human baseline\n",
+            "new_string": "// human baseline\n// edited by Qoder\n"
+        },
+        "tool_response": "File edited successfully"
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        edit_post.as_bytes(),
+    )
+    .expect("Qoder edit post-hook should succeed");
+
+    let create_pre = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "create_file",
+        "tool_input": {
+            "file_path": generated_path_string,
+            "content": "// created by Qoder\n"
+        }
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        create_pre.as_bytes(),
+    )
+    .expect("Qoder create pre-hook should succeed");
+    fs::write(&generated_path, "// created by Qoder\n").unwrap();
+    let create_post = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "create_file",
+        "tool_input": {
+            "file_path": generated_path_string,
+            "content": "// created by Qoder\n"
+        },
+        "tool_response": "File written successfully"
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        create_post.as_bytes(),
+    )
+    .expect("Qoder create post-hook should succeed");
+
+    let checkpoints = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("Qoder working log should be readable");
+    for expected_path in ["src/main.rs", "src/generated.rs"] {
+        assert!(
+            checkpoints.iter().any(|checkpoint| {
+                matches!(checkpoint.kind, CheckpointKind::AiAgent)
+                    && checkpoint
+                        .entries
+                        .iter()
+                        .any(|entry| entry.file == expected_path)
+            }),
+            "missing Qoder AI checkpoint for {expected_path}: {checkpoints:#?}"
+        );
+    }
+
+    repo.stage_all_and_commit("Add Qoder changes").unwrap();
+    let mut main_file = repo.filename("src/main.rs");
+    main_file.assert_lines_and_blame(crate::lines![
+        "// human baseline".human(),
+        "// edited by Qoder".ai(),
+    ]);
+    let mut generated_file = repo.filename("src/generated.rs");
+    generated_file.assert_lines_and_blame(crate::lines!["// created by Qoder".ai(),]);
+}
+
+#[test]
+fn test_qoder_terminal_sidecar_attribution_flow() {
+    let repo = TestRepo::new();
+    let repo_root = repo.path().clone();
+    let generated_path = repo_root.join("generated.txt");
+    fs::write(repo_root.join("README.md"), "human baseline\n").unwrap();
+    repo.stage_all_and_commit("Initialize repository").unwrap();
+
+    let repo_root_string = repo_root.to_string_lossy().to_string();
+    let session_id = "qoder-terminal-attribution-session";
+    let pre = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_in_terminal",
+        "tool_input": { "command": "write generated.txt" }
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        pre.as_bytes(),
+    )
+    .expect("Qoder terminal pre-hook should succeed");
+
+    fs::write(&generated_path, "generated by Qoder\n").unwrap();
+    let post = json!({
+        "session_id": session_id,
+        "cwd": repo_root_string,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_in_terminal",
+        "tool_input": { "command": "write generated.txt" },
+        "tool_response": { "exit_code": 0, "stdout": "" }
+    })
+    .to_string();
+    repo.git_ai_with_stdin(
+        &["checkpoint", "qoder", "--hook-input", "stdin"],
+        post.as_bytes(),
+    )
+    .expect("Qoder terminal post-hook should succeed");
+
+    let checkpoints = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("Qoder terminal working log should be readable");
+    assert!(
+        checkpoints.iter().any(|checkpoint| {
+            matches!(checkpoint.kind, CheckpointKind::AiAgent)
+                && checkpoint
+                    .entries
+                    .iter()
+                    .any(|entry| entry.file == "generated.txt")
+        }),
+        "terminal post-hook did not create a Qoder AI checkpoint: {checkpoints:#?}"
+    );
+
+    repo.stage_all_and_commit("Add terminal-generated file")
+        .unwrap();
+    let mut generated = repo.filename("generated.txt");
+    generated.assert_lines_and_blame(crate::lines!["generated by Qoder".ai(),]);
 }

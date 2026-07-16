@@ -96,6 +96,13 @@ impl AgentCheckpointPreset for QoderPreset {
                 }
             });
         let is_bash_tool = tool_class == ToolClass::Bash;
+        let tool_use_id = if is_bash_tool && tool_use_id == "qoder-tool" {
+            // Native Qoder payloads do not always include a unique tool_use_id.
+            // The bash handler correlates this fallback through its per-session sidecar.
+            "bash"
+        } else {
+            tool_use_id
+        };
 
         if Self::is_pre_tool_use(hook_event_name) {
             if tool_class == ToolClass::Skip {

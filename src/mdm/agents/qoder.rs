@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::mdm::command_line::{HookShell, render_hook_command};
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
@@ -14,6 +14,18 @@ const QODER_CATCH_ALL_MATCHER: &str = "*";
 pub struct QoderInstaller;
 
 impl QoderInstaller {
+    fn hook_command(binary_path: &Path) -> String {
+        render_hook_command(
+            binary_path,
+            QODER_HOOK_ARGS,
+            platform_hook_shell(HookShell::GitBash),
+        )
+    }
+
+    fn is_qoder_checkpoint_command(command: &str) -> bool {
+        is_git_ai_checkpoint_command(command) && command.contains("checkpoint qoder")
+    }
+
     fn settings_path() -> PathBuf {
         Self::config_dir().join("settings.json")
     }
@@ -49,6 +61,7 @@ impl QoderInstaller {
             Self::windows_app_candidates(&home, &roots)
                 .iter()
                 .any(|path| path.exists())
+                || Self::windows_path_binary_exists()
                 || Self::windows_process_exists()
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -59,26 +72,42 @@ impl QoderInstaller {
 
     #[cfg(any(test, target_os = "windows"))]
     fn windows_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
-        let mut candidates = vec![
-            home.join(".qoder").join("Qoder.exe"),
-            home.join("AppData")
-                .join("Local")
-                .join("Programs")
-                .join("Qoder")
-                .join("Qoder.exe"),
-        ];
+        let mut candidates = Vec::new();
+        let executable_names = ["Qoder.exe", "QoderCN.exe"];
+        let install_dir_names = ["Qoder", "Qoder IDE", "QoderCN", "Qoder CN"];
+
+        for executable in executable_names {
+            candidates.push(home.join(".qoder").join(executable));
+            for install_dir in install_dir_names {
+                candidates.push(
+                    home.join("AppData")
+                        .join("Local")
+                        .join("Programs")
+                        .join(install_dir)
+                        .join(executable),
+                );
+            }
+        }
 
         for root in roots {
-            candidates.extend([
-                root.join("Programs").join("Qoder").join("Qoder.exe"),
-                root.join("Qoder").join("Qoder.exe"),
-                root.join("Qoder IDE").join("Qoder.exe"),
-            ]);
+            for executable in executable_names {
+                for install_dir in install_dir_names {
+                    candidates.push(root.join("Programs").join(install_dir).join(executable));
+                    candidates.push(root.join(install_dir).join(executable));
+                }
+            }
         }
 
         candidates.sort();
         candidates.dedup();
         candidates
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_path_binary_exists() -> bool {
+        ["qoder", "Qoder", "qoder-cn", "QoderCN"]
+            .iter()
+            .any(|name| binary_exists(name))
     }
 
     #[cfg(target_os = "windows")]
@@ -98,23 +127,32 @@ impl QoderInstaller {
                 .next()
                 .map(|image| image.trim().trim_matches('"'))
                 .is_some_and(|image| {
-                    image.eq_ignore_ascii_case("qoder") || image.eq_ignore_ascii_case("qoder.exe")
+                    [
+                        "qoder",
+                        "qoder.exe",
+                        "qodercn",
+                        "qodercn.exe",
+                        "qoder-cn",
+                        "qoder-cn.exe",
+                    ]
+                    .iter()
+                    .any(|candidate| image.eq_ignore_ascii_case(candidate))
                 })
         })
     }
 
-    fn hook_status(settings: &Value) -> (bool, bool) {
+    fn hook_status(settings: &Value, desired_cmd: &str) -> (bool, bool) {
         let hooks_installed = ["PreToolUse", "PostToolUse"]
             .iter()
-            .any(|event| Self::event_has_git_ai(settings, event, false));
+            .any(|event| Self::event_has_qoder_hook(settings, event));
         let hooks_up_to_date = ["PreToolUse", "PostToolUse"]
             .iter()
-            .all(|event| Self::event_has_git_ai(settings, event, true));
+            .all(|event| Self::event_hook_is_up_to_date(settings, event, desired_cmd));
 
         (hooks_installed, hooks_up_to_date)
     }
 
-    fn event_has_git_ai(settings: &Value, event: &str, catch_all_only: bool) -> bool {
+    fn event_has_qoder_hook(settings: &Value, event: &str) -> bool {
         let Some(blocks) = settings
             .get("hooks")
             .and_then(|hooks| hooks.get(event))
@@ -124,16 +162,6 @@ impl QoderInstaller {
         };
 
         blocks.iter().any(|block| {
-            let is_catch_all = block
-                .get("matcher")
-                .and_then(|matcher| matcher.as_str())
-                .map(|matcher| matcher == QODER_CATCH_ALL_MATCHER)
-                .unwrap_or(false);
-
-            if catch_all_only && !is_catch_all {
-                return false;
-            }
-
             block
                 .get("hooks")
                 .and_then(|hooks| hooks.as_array())
@@ -141,7 +169,7 @@ impl QoderInstaller {
                     hooks.iter().any(|hook| {
                         hook.get("command")
                             .and_then(|command| command.as_str())
-                            .map(is_git_ai_checkpoint_command)
+                            .map(Self::is_qoder_checkpoint_command)
                             .unwrap_or(false)
                     })
                 })
@@ -149,12 +177,45 @@ impl QoderInstaller {
         })
     }
 
+    fn event_hook_is_up_to_date(settings: &Value, event: &str, desired_cmd: &str) -> bool {
+        let Some(blocks) = settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(Value::as_array)
+        else {
+            return false;
+        };
+
+        let mut qoder_hook_count = 0;
+        let mut desired_catch_all_count = 0;
+        for block in blocks {
+            let is_catch_all =
+                block.get("matcher").and_then(Value::as_str) == Some(QODER_CATCH_ALL_MATCHER);
+            let Some(hooks) = block.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+            for hook in hooks {
+                let Some(command) = hook.get("command").and_then(Value::as_str) else {
+                    continue;
+                };
+                if Self::is_qoder_checkpoint_command(command) {
+                    qoder_hook_count += 1;
+                    if is_catch_all && command == desired_cmd {
+                        desired_catch_all_count += 1;
+                    }
+                }
+            }
+        }
+
+        qoder_hook_count == 1 && desired_catch_all_count == 1
+    }
+
     fn install_hooks_at(
         settings_path: &Path,
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        if let Some(dir) = settings_path.parent() {
+        if !dry_run && let Some(dir) = settings_path.parent() {
             fs::create_dir_all(dir)?;
         }
 
@@ -169,8 +230,7 @@ impl QoderInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let pre_tool_cmd =
-            render_hook_command(&params.binary_path, QODER_HOOK_ARGS, HookShell::GitBash);
+        let pre_tool_cmd = Self::hook_command(&params.binary_path);
         let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
@@ -225,7 +285,7 @@ impl QoderInstaller {
                 hooks.retain(|hook| {
                     hook.get("command")
                         .and_then(|command| command.as_str())
-                        .map(|command| !is_git_ai_checkpoint_command(command))
+                        .map(|command| !Self::is_qoder_checkpoint_command(command))
                         .unwrap_or(true)
                 });
                 if before > 0 && hooks.is_empty() {
@@ -306,7 +366,7 @@ impl QoderInstaller {
                         hooks.retain(|hook| {
                             hook.get("command")
                                 .and_then(|command| command.as_str())
-                                .map(|command| !is_git_ai_checkpoint_command(command))
+                                .map(|command| !Self::is_qoder_checkpoint_command(command))
                                 .unwrap_or(true)
                         });
                         changed |= hooks.len() != before;
@@ -339,7 +399,10 @@ impl HookInstaller for QoderInstaller {
         "qoder"
     }
 
-    fn check_hooks(&self, _params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
+    fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
+        #[cfg(target_os = "windows")]
+        let has_binary = Self::windows_path_binary_exists();
+        #[cfg(not(target_os = "windows"))]
         let has_binary = binary_exists("qoder");
         let has_dotfiles = Self::config_dir().exists();
         let has_app = Self::app_exists();
@@ -363,7 +426,8 @@ impl HookInstaller for QoderInstaller {
 
         let content = fs::read_to_string(&settings_path)?;
         let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
-        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing);
+        let desired_cmd = Self::hook_command(&params.binary_path);
+        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing, &desired_cmd);
 
         Ok(HookCheckResult {
             tool_installed: true,
@@ -373,7 +437,7 @@ impl HookInstaller for QoderInstaller {
     }
 
     fn process_names(&self) -> Vec<&str> {
-        vec!["qoder", "Qoder"]
+        vec!["qoder", "Qoder", "QoderCN", "Qoder CN"]
     }
 
     fn install_hooks(
@@ -391,6 +455,11 @@ impl HookInstaller for QoderInstaller {
     ) -> Result<Option<String>, GitAiError> {
         Self::uninstall_hooks_at(&Self::settings_path(), dry_run)
     }
+}
+
+#[cfg(feature = "test-support")]
+pub fn render_qoder_hook_command_for_test(binary_path: &Path) -> String {
+    QoderInstaller::hook_command(binary_path)
 }
 
 #[cfg(test)]
@@ -412,7 +481,7 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        render_hook_command(&params().binary_path, QODER_HOOK_ARGS, HookShell::GitBash)
+        QoderInstaller::hook_command(&params().binary_path)
     }
 
     fn read_settings(path: &Path) -> Value {
@@ -438,10 +507,44 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn event_commands<'a>(settings: &'a Value, event: &str) -> Vec<&'a str> {
+        settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block.get("hooks").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+            .collect()
+    }
+
+    #[test]
+    fn hook_command_uses_the_platform_runtime() {
+        let binary = Path::new(r"C:\Users\Test User\.git-ai\bin\git-ai.exe");
+        let expected_shell = if cfg!(windows) {
+            HookShell::GitBash
+        } else {
+            HookShell::Posix
+        };
+
+        assert_eq!(
+            QoderInstaller::hook_command(binary),
+            render_hook_command(binary, QODER_HOOK_ARGS, expected_shell)
+        );
+    }
+
+    #[test]
+    fn process_names_include_qoder_cn() {
+        assert!(QoderInstaller.process_names().contains(&"QoderCN"));
+    }
+
     #[test]
     fn fresh_install_creates_pre_and_post_catch_all_hooks() {
-        let (_temp_dir, settings_path) = setup_test_env();
-        fs::remove_file(&settings_path).ok();
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join(".qoder").join("settings.json");
+        assert!(!settings_path.parent().unwrap().exists());
 
         let diff = QoderInstaller::install_hooks_at(&settings_path, &params(), false).unwrap();
         assert!(diff.is_some());
@@ -458,6 +561,18 @@ mod tests {
     }
 
     #[test]
+    fn fresh_install_dry_run_does_not_create_config_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join(".qoder").join("settings.json");
+
+        let diff = QoderInstaller::install_hooks_at(&settings_path, &params(), true).unwrap();
+
+        assert!(diff.is_some());
+        assert!(!settings_path.parent().unwrap().exists());
+        assert!(!settings_path.exists());
+    }
+
+    #[test]
     fn hook_status_requires_pre_and_post_catch_all() {
         let settings = json!({
             "hooks": {
@@ -468,7 +583,10 @@ mod tests {
             }
         });
 
-        assert_eq!(QoderInstaller::hook_status(&settings), (true, false));
+        assert_eq!(
+            QoderInstaller::hook_status(&settings, &expected_cmd()),
+            (true, false)
+        );
     }
 
     #[test]
@@ -484,16 +602,145 @@ mod tests {
             "/Users/admin/AppData/Local/Programs/Qoder/Qoder.exe"
         )));
         assert!(candidates.contains(&PathBuf::from("/Program Files/Qoder/Qoder.exe")));
+        assert!(candidates.contains(&PathBuf::from(
+            "/Users/admin/AppData/Local/Programs/QoderCN/QoderCN.exe"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/Program Files/Qoder CN/QoderCN.exe")));
         assert!(candidates.contains(&PathBuf::from("/Users/admin/.qoder/Qoder.exe")));
     }
 
     #[test]
     fn tasklist_detection_recognizes_qoder_process() {
         let output = br#""Qoder.exe","1234","Console","1","100,000 K"
+"QoderCN.exe","2345","Console","1","100,000 K"
+"qoder-cn","3456","Console","1","100,000 K"
 "powershell.exe","5678","Console","1","50,000 K""#;
         assert!(QoderInstaller::tasklist_contains_qoder(output));
+        assert!(QoderInstaller::tasklist_contains_qoder(
+            br#""QoderCN","2345","Console","1","100,000 K""#
+        ));
         assert!(!QoderInstaller::tasklist_contains_qoder(
             br#""powershell.exe","5678","Console","1","50,000 K""#
         ));
+    }
+
+    #[test]
+    fn legacy_hooks_migrate_once_and_preserve_other_hooks() {
+        let (_temp_dir, settings_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let legacy_cmd = render_hook_command(&params.binary_path, QODER_HOOK_ARGS, HookShell::Cmd);
+        let desired_cmd = QoderInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "hooks": {} });
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([
+                {
+                    "matcher": "Write",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "echo user hook"}
+                    ]
+                },
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                    ]
+                }
+            ]);
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            QoderInstaller::hook_status(&settings, &desired_cmd),
+            (true, false)
+        );
+        assert!(
+            QoderInstaller::install_hooks_at(&settings_path, &params, false)
+                .unwrap()
+                .is_some()
+        );
+
+        let migrated = read_settings(&settings_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&migrated, event);
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| QoderInstaller::is_qoder_checkpoint_command(command))
+                    .count(),
+                1,
+                "{event}: expected exactly one Qoder Hook"
+            );
+            assert!(commands.contains(&desired_cmd.as_str()), "{event}");
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
+        assert_eq!(
+            QoderInstaller::hook_status(&migrated, &desired_cmd),
+            (true, true)
+        );
+        assert!(
+            QoderInstaller::install_hooks_at(&settings_path, &params, false)
+                .unwrap()
+                .is_none(),
+            "reinstalling an up-to-date config must be idempotent"
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_qoder_hooks_only() {
+        let (_temp_dir, settings_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let desired_cmd = QoderInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "hooks": {} });
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([{
+                "matcher": "*",
+                "hooks": [
+                    {"type": "command", "command": desired_cmd},
+                    {"type": "command", "command": "echo user hook"},
+                    {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                ]
+            }]);
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            QoderInstaller::uninstall_hooks_at(&settings_path, false)
+                .unwrap()
+                .is_some()
+        );
+        let uninstalled = read_settings(&settings_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&uninstalled, event);
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| QoderInstaller::is_qoder_checkpoint_command(command)),
+                "{event}"
+            );
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
     }
 }

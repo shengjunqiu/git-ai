@@ -30,6 +30,8 @@ pub use jetbrains::JetBrainsInstaller;
 pub use opencode::OpenCodeInstaller;
 pub use pi::PiInstaller;
 pub use qoder::QoderInstaller;
+#[cfg(feature = "test-support")]
+pub use qoder::render_qoder_hook_command_for_test;
 pub use trae::TraeInstaller;
 #[cfg(feature = "test-support")]
 pub use trae::render_trae_hook_command_for_test;
