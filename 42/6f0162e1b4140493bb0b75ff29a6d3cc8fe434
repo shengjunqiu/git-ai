@@ -1,0 +1,47 @@
+src/mdm/command_line.rs
+  d637061b13f88c61 10,15
+docs/plans/windows-trae-codebuddy-qoder-hooks-fix-task-plan.md
+  d637061b13f88c61 29,317,332,820,830,837,842,844-845,847,854-855,869-871,877-889
+tests/integration/windows_hook_commands.rs
+  d637061b13f88c61 293,312-313,316
+src/commands/checkpoint_agent/agent_presets/qoder.rs
+  d637061b13f88c61 204-220,222-225,267,271,274-283,303-306,321-331,632-646
+src/mdm/agents/qoder.rs
+  d637061b13f88c61 21,33-56,58-59,66-69,71-95,97-101,104-116,118-123,125-163,167-169,179,185,188,190-208,214-216,480-481,490-502,520-526,534-540,611,627-646,679-709,745,755-758,762-763
+  501ec29b297f6e77 764
+tests/integration/qoder.rs
+  d637061b13f88c61 89-94,109,134-154,302-326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "426f0162e1b4140493bb0b75ff29a6d3cc8fe434",
+  "prompts": {
+    "501ec29b297f6e77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1b7a014-475e-4abf-bb6d-b2b2952edb1d",
+        "model": "deepseek-v4-pro"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 137,
+      "overriden_lines": 0
+    },
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 165,
+      "total_deletions": 52,
+      "accepted_lines": 939,
+      "overriden_lines": 0
+    }
+  }
+}
