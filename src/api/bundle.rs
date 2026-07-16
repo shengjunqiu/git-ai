@@ -3,40 +3,33 @@ use crate::api::types::{ApiErrorResponse, CreateBundleRequest, CreateBundleRespo
 use crate::error::GitAiError;
 
 
-
 /// Bundle 相关的 API 操作。
 impl ApiClient {
-    /// 将 prompt 记录及其关联的文件变更上传为一个 bundle。
+    /// 创建一个 bundle，并返回服务端生成的响应数据。
     ///
-    /// 请求成功时返回 bundle 的标识和访问信息。对于客户端或服务端错误，
-    /// 优先使用响应体中的结构化错误消息；无法解析时使用默认描述。
-    ///
-    /// # Errors
-    ///
-    /// - 请求发送或响应体读取失败时返回 `GitAiError::Generic`。
-    /// - 成功响应无法反序列化时返回 `GitAiError::JsonError`。
-    /// - API 返回非成功状态码时返回包含服务端错误信息的 `GitAiError::Generic`。
+    /// 该方法会将请求体序列化为 JSON 后发送到 `/api/bundles`。
     pub fn create_bundle(
         &self,
         request: CreateBundleRequest,
     ) -> Result<CreateBundleResponse, GitAiError> {
-        // 请求上下文负责将请求体序列化为 JSON。
+        // 发起 POST 请求，将 bundle 请求数据发送到服务端。
         let response = self.context().post_json("/api/bundles", &request)?;
         let status_code = response.status_code;
 
+        // 读取响应体字符串，用于后续 JSON 反序列化和错误处理。
         let body = response
             .as_str()
             .map_err(|e| GitAiError::Generic(format!("Failed to read response body: {}", e)))?;
 
         match status_code {
-            // 成功响应必须符合 bundle 创建响应结构。
             200 => {
+                // 成功状态时解析 bundle 响应结构。
                 let bundle_response: CreateBundleResponse =
                     serde_json::from_str(body).map_err(GitAiError::JsonError)?;
                 Ok(bundle_response)
             }
-            // 对已知错误状态，尽可能保留服务端返回的错误原因。
             400 => {
+                // 请求格式或参数错误，尝试从响应中提取详细错误信息。
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Invalid request body".to_string(),
@@ -48,6 +41,7 @@ impl ApiClient {
                 )))
             }
             500 => {
+                // 服务端内部错误，返回通用错误消息。
                 let error_response: ApiErrorResponse =
                     serde_json::from_str(body).unwrap_or_else(|_| ApiErrorResponse {
                         error: "Internal server error".to_string(),
@@ -58,8 +52,8 @@ impl ApiClient {
                     error_response.error
                 )))
             }
-            // 未显式支持的状态码保留原始响应体，便于诊断协议变化。
             _ => Err(GitAiError::Generic(format!(
+                // 其他未知状态码，保留原始响应便于诊断。
                 "Unexpected status code {}: {}",
                 status_code, body
             ))),
