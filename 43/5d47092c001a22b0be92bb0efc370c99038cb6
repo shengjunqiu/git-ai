@@ -1,0 +1,31 @@
+src/mdm/utils.rs
+  d637061b13f88c61 9-10,24-78,865-879
+src/mdm/agents/codebuddy.rs
+  d637061b13f88c61 5-6,38-167,244,429,459,560,582-622
+src/mdm/agents/qoder.rs
+  d637061b13f88c61 5-6,75,84-85,95-96,192-199
+src/mdm/agents/trae.rs
+  d637061b13f88c61 9,35-36,39-40,45-52,54,57-102,104-105,107-208,290,518-519,539,717,743-755,775-784,786,788-789,794-816
+docs/plans/windows-trae-codebuddy-qoder-hooks-fix-task-plan.md
+  d637061b13f88c61 829,838,897-936
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "435d47092c001a22b0be92bb0efc370c99038cb6",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 613,
+      "total_deletions": 147,
+      "accepted_lines": 2029,
+      "overriden_lines": 0
+    }
+  }
+}
