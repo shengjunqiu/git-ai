@@ -9,7 +9,7 @@ use crate::error::GitAiError;
 use crate::git::find_repository;
 use crate::git::repo_storage::InitialAttributions;
 use crate::git::repository::{InternalGitProfile, Repository, exec_git_with_profile};
-use crate::git::status::MAX_PATHSPEC_ARGS;
+use crate::git::status::{EntryKind, MAX_PATHSPEC_ARGS};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -128,6 +128,7 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
     // not in authorship_log.attestations (which is for committed changes).
     // Count AI lines from the uncommitted attributions.
     let ai_accepted = count_ai_lines_from_initial(&initial, &ignore_matcher);
+    let known_human_accepted = count_known_human_lines_from_initial(&initial, &ignore_matcher);
 
     let checkpoint_infos =
         build_checkpoint_infos(&checkpoints, &initial, &ignore_matcher, &default_user_name);
@@ -137,7 +138,7 @@ fn run_status(json: bool) -> Result<(), GitAiError> {
         total_additions,
         total_deletions,
         ai_accepted,
-        0,
+        known_human_accepted,
         &BTreeMap::new(),
     );
 
@@ -361,6 +362,7 @@ fn get_working_dir_diff_stats(
 
     let mut added_lines = 0u32;
     let mut deleted_lines = 0u32;
+    let mut diff_reported_paths = HashSet::new();
 
     // Parse numstat output
     for line in stdout.lines() {
@@ -383,6 +385,7 @@ fn get_working_dir_diff_stats(
             if should_ignore_file_with_matcher(file_path, ignore_matcher) {
                 continue;
             }
+            diff_reported_paths.insert(file_path.to_string());
 
             // Parse added lines
             if let Ok(added) = parts[0].parse::<u32>() {
@@ -395,6 +398,26 @@ fn get_working_dir_diff_stats(
             {
                 deleted_lines += deleted;
             }
+        }
+    }
+
+    // `git diff <tree>` does not report untracked files. This matters most for
+    // repositories without a first commit, where every checkpointed file is
+    // still untracked. Include those files explicitly so the diff total and
+    // line-level attribution use the same working-tree population.
+    let status_entries = repo.status(pathspecs, false)?;
+    let workdir = repo.workdir()?;
+    for entry in status_entries {
+        if entry.kind != EntryKind::Untracked
+            || diff_reported_paths.contains(&entry.path)
+            || should_ignore_file_with_matcher(&entry.path, ignore_matcher)
+        {
+            continue;
+        }
+
+        let path = workdir.join(&entry.path);
+        if let Ok(content) = std::fs::read_to_string(path) {
+            added_lines = added_lines.saturating_add(content.lines().count() as u32);
         }
     }
 
@@ -424,6 +447,28 @@ fn count_ai_lines_from_initial(
     }
 
     ai_lines
+}
+
+/// Count positively attested human lines from uncommitted INITIAL state.
+fn count_known_human_lines_from_initial(
+    initial: &InitialAttributions,
+    ignore_matcher: &IgnoreMatcher,
+) -> u32 {
+    let mut human_lines = 0u32;
+
+    for (file_path, line_attrs) in &initial.files {
+        if should_ignore_file_with_matcher(file_path, ignore_matcher) {
+            continue;
+        }
+
+        for line_attr in line_attrs {
+            if initial.humans.contains_key(&line_attr.author_id) {
+                human_lines = human_lines.saturating_add(line_attr.line_count());
+            }
+        }
+    }
+
+    human_lines
 }
 
 fn count_lines_from_initial_by_author(

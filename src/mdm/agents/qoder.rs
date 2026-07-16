@@ -35,10 +35,72 @@ impl QoderInstaller {
             .iter()
             .any(|path| path.exists())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let home = home_dir();
+            let roots = [
+                std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+                std::env::var_os("ProgramFiles").map(PathBuf::from),
+                std::env::var_os("ProgramW6432").map(PathBuf::from),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            Self::windows_app_candidates(&home, &roots)
+                .iter()
+                .any(|path| path.exists())
+                || Self::windows_process_exists()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             false
         }
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let mut candidates = vec![
+            home.join(".qoder").join("Qoder.exe"),
+            home.join("AppData")
+                .join("Local")
+                .join("Programs")
+                .join("Qoder")
+                .join("Qoder.exe"),
+        ];
+
+        for root in roots {
+            candidates.extend([
+                root.join("Programs").join("Qoder").join("Qoder.exe"),
+                root.join("Qoder").join("Qoder.exe"),
+                root.join("Qoder IDE").join("Qoder.exe"),
+            ]);
+        }
+
+        candidates.sort();
+        candidates.dedup();
+        candidates
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_process_exists() -> bool {
+        std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| Self::tasklist_contains_qoder(&output.stdout))
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_qoder(output: &[u8]) -> bool {
+        String::from_utf8_lossy(output).lines().any(|line| {
+            line.split(',')
+                .next()
+                .map(|image| image.trim().trim_matches('"'))
+                .is_some_and(|image| {
+                    image.eq_ignore_ascii_case("qoder") || image.eq_ignore_ascii_case("qoder.exe")
+                })
+        })
     }
 
     fn hook_status(settings: &Value) -> (bool, bool) {
@@ -407,5 +469,31 @@ mod tests {
         });
 
         assert_eq!(QoderInstaller::hook_status(&settings), (true, false));
+    }
+
+    #[test]
+    fn windows_app_candidates_cover_per_user_and_machine_installs() {
+        let home = PathBuf::from("/Users/admin");
+        let roots = vec![
+            PathBuf::from("/Users/admin/AppData/Local"),
+            PathBuf::from("/Program Files"),
+        ];
+        let candidates = QoderInstaller::windows_app_candidates(&home, &roots);
+
+        assert!(candidates.contains(&PathBuf::from(
+            "/Users/admin/AppData/Local/Programs/Qoder/Qoder.exe"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/Program Files/Qoder/Qoder.exe")));
+        assert!(candidates.contains(&PathBuf::from("/Users/admin/.qoder/Qoder.exe")));
+    }
+
+    #[test]
+    fn tasklist_detection_recognizes_qoder_process() {
+        let output = br#""Qoder.exe","1234","Console","1","100,000 K"
+"powershell.exe","5678","Console","1","50,000 K""#;
+        assert!(QoderInstaller::tasklist_contains_qoder(output));
+        assert!(!QoderInstaller::tasklist_contains_qoder(
+            br#""powershell.exe","5678","Console","1","50,000 K""#
+        ));
     }
 }

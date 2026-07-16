@@ -52,8 +52,7 @@ use crate::authorship::working_log::AgentId;
 #[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
 const AGENT_USAGE_MIN_INTERVAL_SECS: u64 = 150;
 
-#[cfg(not(any(test, feature = "test-support")))]
-const KNOWN_HUMAN_MIN_SECS_AFTER_AI: u64 = 1;
+const KNOWN_HUMAN_GRACE_SECS_AFTER_AI: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -481,7 +480,10 @@ fn prepare_active_agent_edit_marker(
     let Some(agent_run) = agent_run_result else {
         return Ok(None);
     };
-    if !matches!(agent_run.agent_id.tool.as_str(), "qoder" | "trae") {
+    if !matches!(
+        agent_run.agent_id.tool.as_str(),
+        "codebuddy" | "qoder" | "trae"
+    ) {
         return Ok(None);
     }
 
@@ -866,27 +868,6 @@ fn execute_resolved_checkpoint(
         return Ok((0, 0, 0));
     }
 
-    // Reject KnownHuman checkpoints that arrive within KNOWN_HUMAN_MIN_SECS_AFTER_AI
-    // seconds of an AI checkpoint on any of the same files. These are likely spurious
-    // IDE save events triggered by the AI completing its edit, not genuine human keystrokes.
-    // Only compiled in non-test builds where the constant is non-zero; under --all-targets
-    // clippy would otherwise flag the comparisons as always-false for u64.
-    #[cfg(not(any(test, feature = "test-support")))]
-    if kind == CheckpointKind::KnownHuman {
-        let too_soon = checkpoints.iter().rev().any(|cp| {
-            cp.kind.is_ai()
-                && now_secs.saturating_sub(cp.timestamp) < KNOWN_HUMAN_MIN_SECS_AFTER_AI
-                && cp.entries.iter().any(|e| resolved.files.contains(&e.file))
-        });
-        if too_soon {
-            tracing::debug!(
-                "[KnownHuman] Rejected: fired within {}s of an AI checkpoint on the same file",
-                KNOWN_HUMAN_MIN_SECS_AFTER_AI
-            );
-            return Ok((0, 0, 0));
-        }
-    }
-
     let save_states_start = Instant::now();
     let file_content_hashes = save_current_file_states(&working_log, &resolved.files)?;
     tracing::debug!(
@@ -894,6 +875,21 @@ fn execute_resolved_checkpoint(
         resolved.files.len(),
         save_states_start.elapsed()
     );
+
+    // IDEs emit a normal document-save event after applying an AI edit. Reject
+    // that KnownHuman event only when every captured file still has exactly the
+    // blob recorded by a recent AI checkpoint. The wider grace period covers
+    // Windows debounce/process startup without suppressing real human edits,
+    // whose content hash necessarily differs from the AI snapshot.
+    if kind == CheckpointKind::KnownHuman
+        && known_human_matches_recent_ai_snapshot(&checkpoints, &file_content_hashes, now_secs)
+    {
+        tracing::debug!(
+            "[KnownHuman] Rejected: unchanged AI snapshot saved within {}s",
+            KNOWN_HUMAN_GRACE_SECS_AFTER_AI
+        );
+        return Ok((0, 0, 0));
+    }
 
     let hash_compute_start = Instant::now();
     let mut ordered_hashes: Vec<_> = file_content_hashes.iter().collect();
@@ -1067,6 +1063,25 @@ fn execute_resolved_checkpoint(
         checkpoint_start.elapsed()
     );
     Ok((entries.len(), resolved.files.len(), checkpoints.len()))
+}
+
+fn known_human_matches_recent_ai_snapshot(
+    checkpoints: &[Checkpoint],
+    file_content_hashes: &HashMap<String, String>,
+    now_secs: u64,
+) -> bool {
+    !file_content_hashes.is_empty()
+        && file_content_hashes.iter().all(|(file, current_hash)| {
+            checkpoints.iter().rev().any(|checkpoint| {
+                checkpoint.kind.is_ai()
+                    && now_secs.saturating_sub(checkpoint.timestamp)
+                        <= KNOWN_HUMAN_GRACE_SECS_AFTER_AI
+                    && checkpoint
+                        .entries
+                        .iter()
+                        .any(|entry| entry.file == *file && entry.blob_sha == *current_hash)
+            })
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2496,7 +2511,7 @@ mod tests {
 
     #[test]
     fn test_native_agent_marker_covers_clean_captured_pre_tool_use() {
-        for tool in ["qoder", "trae"] {
+        for tool in ["codebuddy", "qoder", "trae"] {
             let (repo, mut lines_file, _) = TmpRepo::new_with_base_commit().unwrap();
             let mut pre_tool =
                 test_agent_run_result(CheckpointKind::Human, None, Some(vec!["lines.md"]), None);
@@ -2549,6 +2564,25 @@ mod tests {
             .unwrap();
             assert!(entries > 0);
 
+            let unchanged_save = test_agent_run_result(
+                CheckpointKind::KnownHuman,
+                Some(vec!["lines.md"]),
+                None,
+                None,
+            );
+            assert_eq!(
+                run(
+                    repo.gitai_repo(),
+                    tool,
+                    CheckpointKind::KnownHuman,
+                    true,
+                    Some(unchanged_save),
+                    false,
+                )
+                .unwrap(),
+                (0, 0, 0)
+            );
+
             lines_file.append("Manual edit\n").unwrap();
             let known_human = test_agent_run_result(
                 CheckpointKind::KnownHuman,
@@ -2567,6 +2601,43 @@ mod tests {
             .unwrap();
             assert!(entries > 0);
         }
+    }
+
+    #[test]
+    fn test_known_human_grace_uses_content_identity_across_second_boundaries() {
+        let entry = WorkingLogEntry::new(
+            "src/generated.rs".to_string(),
+            "ai-blob".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff".to_string(),
+            "agent".to_string(),
+            vec![entry],
+        );
+        checkpoint.timestamp = 100;
+
+        let unchanged = HashMap::from([("src/generated.rs".to_string(), "ai-blob".to_string())]);
+        assert!(known_human_matches_recent_ai_snapshot(
+            &[checkpoint.clone()],
+            &unchanged,
+            105
+        ));
+
+        let manually_changed =
+            HashMap::from([("src/generated.rs".to_string(), "human-blob".to_string())]);
+        assert!(!known_human_matches_recent_ai_snapshot(
+            &[checkpoint.clone()],
+            &manually_changed,
+            101
+        ));
+        assert!(!known_human_matches_recent_ai_snapshot(
+            &[checkpoint],
+            &unchanged,
+            106
+        ));
     }
 
     #[test]

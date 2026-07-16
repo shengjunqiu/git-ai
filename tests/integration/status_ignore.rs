@@ -105,6 +105,26 @@ fn test_status_reports_checkpoints_before_initial_commit() {
         !status.checkpoints.is_empty(),
         "status should report checkpoints before the first commit"
     );
+    assert_eq!(status.stats.git_diff_added_lines, 1);
+    assert_eq!(status.stats.ai_accepted, 1);
+    assert_eq!(status.stats.ai_additions, 1);
+    assert_eq!(status.stats.human_additions, 0);
+    assert_eq!(status.stats.unknown_additions, 0);
+}
+
+#[test]
+fn test_status_reports_known_human_before_initial_commit() {
+    let repo = TestRepo::new();
+
+    write_file(&repo, "human.txt", "first human line\n");
+    repo.git_ai(&["checkpoint", "known_human", "--", "human.txt"])
+        .expect("known-human checkpoint should support an unborn repository");
+
+    let status = status_from_args(&repo, &["status", "--json"]);
+    assert_eq!(status.stats.git_diff_added_lines, 1);
+    assert_eq!(status.stats.human_additions, 1);
+    assert_eq!(status.stats.ai_additions, 0);
+    assert_eq!(status.stats.unknown_additions, 0);
 }
 
 #[test]
@@ -433,6 +453,7 @@ fn test_status_numstat_is_stable_under_hostile_diff_config() {
 crate::reuse_tests_in_worktree!(
     test_status_succeeds_before_initial_commit,
     test_status_reports_checkpoints_before_initial_commit,
+    test_status_reports_known_human_before_initial_commit,
     test_checkpoint_ignores_default_lockfiles_integration,
     test_checkpoint_honors_uncommitted_root_gitattributes_linguist_generated_integration,
     test_status_default_ignores_affect_git_diff_and_ai_accepted,
