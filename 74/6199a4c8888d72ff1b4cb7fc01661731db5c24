@@ -1,0 +1,29 @@
+src/api/bundle.rs
+  2356b508d328a559 8,10,15,19,26,32,44,56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "746199a4c8888d72ff1b4cb7fc01661731db5c24",
+  "prompts": {
+    "2356b508d328a559": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "9d852a42-226b-4cfc-9e44-30f333f66015",
+        "model": "copilot/auto"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 10,
+      "total_deletions": 20,
+      "accepted_lines": 61,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/69bdc8eb763eea4480a55943aef3e6dc4e6dab819e3e5c8b060b81d8a5413ccd"
+    }
+  },
+  "humans": {
+    "h_b17cb63ef8b364": {
+      "author": "linewell"
+    }
+  }
+}
