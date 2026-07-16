@@ -290,7 +290,7 @@ fn codebuddy_hook_command_executes_in_cmd_and_git_bash() {
 }
 
 #[test]
-fn qoder_hook_command_executes_in_git_bash() {
+fn qoder_hook_command_executes_in_cmd() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cwd = temp_dir.path().join("repo & workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -309,12 +309,11 @@ fn qoder_hook_command_executes_in_git_bash() {
         let rendered = render_qoder_hook_command_for_test(&binary);
         let record_path = temp_dir.path().join(format!("qoder-{index}.json"));
 
-        assert!(rendered.contains('/'), "{rendered}");
-        assert!(!rendered.contains('\\'), "{rendered}");
-        let output = run_rendered_command(TestHookShell::GitBash, &rendered, &cwd, &record_path);
+        assert!(!rendered.contains("/d/"), "{rendered}");
+        let output = run_rendered_command(TestHookShell::Cmd, &rendered, &cwd, &record_path);
         assert!(
             output.status.success(),
-            "Qoder Git Bash command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
+            "Qoder Cmd command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

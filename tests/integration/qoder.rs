@@ -86,7 +86,12 @@ fn test_qoder_windows_hook_fixtures_cover_native_tool_classification() {
     assert!(matches!(post.checkpoint_kind, CheckpointKind::AiAgent));
 }
 
-fn create_qoder_storage(user_dir: &Path, session_id: &str, selected_model: &str) {
+fn create_qoder_storage_with_session_key(
+    user_dir: &Path,
+    session_key_prefix: &str,
+    session_id: &str,
+    selected_model: &str,
+) {
     let workspace_dir = user_dir.join("workspaceStorage").join("workspace-id");
     let global_dir = user_dir.join("globalStorage");
     fs::create_dir_all(&workspace_dir).unwrap();
@@ -101,10 +106,7 @@ fn create_qoder_storage(user_dir: &Path, session_id: &str, selected_model: &str)
     .unwrap();
     conn.execute(
         "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
-        (
-            format!("chat.modelConfig.session.{session_id}"),
-            selected_model,
-        ),
+        (format!("{session_key_prefix}.{session_id}"), selected_model),
     )
     .unwrap();
 
@@ -129,6 +131,27 @@ fn create_qoder_storage(user_dir: &Path, session_id: &str, selected_model: &str)
         ),
     )
     .unwrap();
+    conn.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+        (
+            "aicoding.modelConfigs.cache.assistant",
+            json!([{
+                "name": "dfmodel",
+                "displayName": "DeepSeek-V4-Flash"
+            }])
+            .to_string(),
+        ),
+    )
+    .unwrap();
+}
+
+fn create_qoder_storage(user_dir: &Path, session_id: &str, selected_model: &str) {
+    create_qoder_storage_with_session_key(
+        user_dir,
+        "chat.modelMapSession",
+        session_id,
+        selected_model,
+    );
 }
 
 #[test]
@@ -272,6 +295,35 @@ fn test_qoder_model_from_storage_resolves_custom_session_model() {
 
     let model = QoderPreset::model_from_qoder_user_dir("qoder-session-model", &user_dir)
         .expect("Qoder storage should parse");
+
+    assert_eq!(model.as_deref(), Some("DeepSeek-V4-Flash"));
+}
+
+#[test]
+fn test_qoder_model_from_storage_resolves_current_model_map_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let user_dir = temp_dir.path().join("QoderCN").join("User");
+    create_qoder_storage(&user_dir, "qoder-cn-session-model", "dfmodel");
+
+    let model = QoderPreset::model_from_qoder_user_dir("qoder-cn-session-model", &user_dir)
+        .expect("Qoder CN storage should parse");
+
+    assert_eq!(model.as_deref(), Some("DeepSeek-V4-Flash"));
+}
+
+#[test]
+fn test_qoder_model_from_storage_keeps_legacy_session_key_compatible() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let user_dir = temp_dir.path().join("Qoder").join("User");
+    create_qoder_storage_with_session_key(
+        &user_dir,
+        "chat.modelConfig.session",
+        "qoder-legacy-session-model",
+        "dfmodel",
+    );
+
+    let model = QoderPreset::model_from_qoder_user_dir("qoder-legacy-session-model", &user_dir)
+        .expect("legacy Qoder storage should parse");
 
     assert_eq!(model.as_deref(), Some("DeepSeek-V4-Flash"));
 }

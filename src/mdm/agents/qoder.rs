@@ -18,7 +18,7 @@ impl QoderInstaller {
         render_hook_command(
             binary_path,
             QODER_HOOK_ARGS,
-            platform_hook_shell(HookShell::GitBash),
+            platform_hook_shell(HookShell::Cmd),
         )
     }
 
@@ -26,75 +26,147 @@ impl QoderInstaller {
         is_git_ai_checkpoint_command(command) && command.contains("checkpoint qoder")
     }
 
-    fn settings_path() -> PathBuf {
-        Self::config_dir().join("settings.json")
-    }
-
     fn config_dir() -> PathBuf {
         home_dir().join(".qoder")
     }
 
-    fn app_exists() -> bool {
+    fn cn_config_dir() -> PathBuf {
+        home_dir().join(".qoder-cn")
+    }
+
+    fn settings_paths_for_variants(
+        home: &Path,
+        international_installed: bool,
+        cn_installed: bool,
+    ) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if international_installed {
+            paths.push(home.join(".qoder").join("settings.json"));
+        }
+        if cn_installed {
+            paths.push(home.join(".qoder-cn").join("settings.json"));
+        }
+        paths
+    }
+
+    fn settings_paths() -> Vec<PathBuf> {
+        let home = home_dir();
+        let international_config_exists = Self::config_dir().exists();
+        let cn_config_exists = Self::cn_config_dir().exists();
+
         #[cfg(target_os = "macos")]
-        {
-            let home = home_dir();
-            [
+        let international_installed = international_config_exists
+            || [
                 PathBuf::from("/Applications/Qoder.app"),
                 PathBuf::from("/Applications/Qoder IDE.app"),
                 home.join("Applications").join("Qoder.app"),
                 home.join("Applications").join("Qoder IDE.app"),
             ]
             .iter()
-            .any(|path| path.exists())
-        }
+            .any(|path| path.exists());
+        #[cfg(target_os = "macos")]
+        let cn_installed = cn_config_exists;
+
         #[cfg(target_os = "windows")]
-        {
-            let home = home_dir();
-            let roots = [
-                std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-                std::env::var_os("ProgramFiles").map(PathBuf::from),
-                std::env::var_os("ProgramW6432").map(PathBuf::from),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-            Self::windows_app_candidates(&home, &roots)
-                .iter()
-                .any(|path| path.exists())
-                || Self::windows_path_binary_exists()
-                || Self::windows_process_exists()
-        }
+        let (international_installed, cn_installed) = {
+            let roots = Self::windows_app_roots();
+            let tasklist = Self::windows_tasklist();
+            (
+                international_config_exists
+                    || Self::windows_international_app_candidates(&home, &roots)
+                        .iter()
+                        .any(|path| path.exists())
+                    || ["qoder", "Qoder"].iter().any(|name| binary_exists(name))
+                    || tasklist
+                        .as_deref()
+                        .is_some_and(Self::tasklist_contains_qoder_international),
+                cn_config_exists
+                    || Self::windows_cn_app_candidates(&home, &roots)
+                        .iter()
+                        .any(|path| path.exists())
+                    || ["qoder-cn", "QoderCN"]
+                        .iter()
+                        .any(|name| binary_exists(name))
+                    || tasklist
+                        .as_deref()
+                        .is_some_and(Self::tasklist_contains_qoder_cn),
+            )
+        };
+
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            false
-        }
+        let international_installed = international_config_exists || binary_exists("qoder");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let cn_installed = cn_config_exists;
+
+        Self::settings_paths_for_variants(&home, international_installed, cn_installed)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_app_roots() -> Vec<PathBuf> {
+        [
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            std::env::var_os("ProgramFiles").map(PathBuf::from),
+            std::env::var_os("ProgramW6432").map(PathBuf::from),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    #[cfg(test)]
+    fn windows_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let mut candidates = Self::windows_international_app_candidates(home, roots);
+        candidates.extend(Self::windows_cn_app_candidates(home, roots));
+        candidates.sort();
+        candidates.dedup();
+        candidates
     }
 
     #[cfg(any(test, target_os = "windows"))]
-    fn windows_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
-        let mut candidates = Vec::new();
-        let executable_names = ["Qoder.exe", "QoderCN.exe"];
-        let install_dir_names = ["Qoder", "Qoder IDE", "QoderCN", "Qoder CN"];
+    fn windows_international_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        Self::windows_variant_app_candidates(
+            home,
+            roots,
+            ".qoder",
+            "Qoder.exe",
+            &["Qoder", "Qoder IDE"],
+        )
+    }
 
-        for executable in executable_names {
-            candidates.push(home.join(".qoder").join(executable));
-            for install_dir in install_dir_names {
-                candidates.push(
-                    home.join("AppData")
-                        .join("Local")
-                        .join("Programs")
-                        .join(install_dir)
-                        .join(executable),
-                );
-            }
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_cn_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        Self::windows_variant_app_candidates(
+            home,
+            roots,
+            ".qoder-cn",
+            "QoderCN.exe",
+            &["QoderCN", "Qoder CN"],
+        )
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_variant_app_candidates(
+        home: &Path,
+        roots: &[PathBuf],
+        config_dir: &str,
+        executable: &str,
+        install_dir_names: &[&str],
+    ) -> Vec<PathBuf> {
+        let mut candidates = vec![home.join(config_dir).join(executable)];
+        for install_dir in install_dir_names {
+            candidates.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join(install_dir)
+                    .join(executable),
+            );
         }
 
         for root in roots {
-            for executable in executable_names {
-                for install_dir in install_dir_names {
-                    candidates.push(root.join("Programs").join(install_dir).join(executable));
-                    candidates.push(root.join(install_dir).join(executable));
-                }
+            for install_dir in install_dir_names {
+                candidates.push(root.join("Programs").join(install_dir).join(executable));
+                candidates.push(root.join(install_dir).join(executable));
             }
         }
 
@@ -104,39 +176,44 @@ impl QoderInstaller {
     }
 
     #[cfg(target_os = "windows")]
-    fn windows_path_binary_exists() -> bool {
-        ["qoder", "Qoder", "qoder-cn", "QoderCN"]
-            .iter()
-            .any(|name| binary_exists(name))
-    }
-
-    #[cfg(target_os = "windows")]
-    fn windows_process_exists() -> bool {
+    fn windows_tasklist() -> Option<Vec<u8>> {
         std::process::Command::new("tasklist")
             .args(["/FO", "CSV", "/NH"])
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .is_some_and(|output| Self::tasklist_contains_qoder(&output.stdout))
+            .map(|output| output.stdout)
+    }
+
+    #[cfg(test)]
+    fn tasklist_contains_qoder(output: &[u8]) -> bool {
+        Self::tasklist_contains_qoder_international(output)
+            || Self::tasklist_contains_qoder_cn(output)
     }
 
     #[cfg(any(test, target_os = "windows"))]
-    fn tasklist_contains_qoder(output: &[u8]) -> bool {
+    fn tasklist_contains_qoder_international(output: &[u8]) -> bool {
+        Self::tasklist_contains_any(output, &["qoder", "qoder.exe"])
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_qoder_cn(output: &[u8]) -> bool {
+        Self::tasklist_contains_any(
+            output,
+            &["qodercn", "qodercn.exe", "qoder-cn", "qoder-cn.exe"],
+        )
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_any(output: &[u8], candidates: &[&str]) -> bool {
         String::from_utf8_lossy(output).lines().any(|line| {
             line.split(',')
                 .next()
                 .map(|image| image.trim().trim_matches('"'))
                 .is_some_and(|image| {
-                    [
-                        "qoder",
-                        "qoder.exe",
-                        "qodercn",
-                        "qodercn.exe",
-                        "qoder-cn",
-                        "qoder-cn.exe",
-                    ]
-                    .iter()
-                    .any(|candidate| image.eq_ignore_ascii_case(candidate))
+                    candidates
+                        .iter()
+                        .any(|candidate| image.eq_ignore_ascii_case(candidate))
                 })
         })
     }
@@ -400,14 +477,8 @@ impl HookInstaller for QoderInstaller {
     }
 
     fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
-        #[cfg(target_os = "windows")]
-        let has_binary = Self::windows_path_binary_exists();
-        #[cfg(not(target_os = "windows"))]
-        let has_binary = binary_exists("qoder");
-        let has_dotfiles = Self::config_dir().exists();
-        let has_app = Self::app_exists();
-
-        if !has_binary && !has_dotfiles && !has_app {
+        let settings_paths = Self::settings_paths();
+        if settings_paths.is_empty() {
             return Ok(HookCheckResult {
                 tool_installed: false,
                 hooks_installed: false,
@@ -415,19 +486,20 @@ impl HookInstaller for QoderInstaller {
             });
         }
 
-        let settings_path = Self::settings_path();
-        if !settings_path.exists() {
-            return Ok(HookCheckResult {
-                tool_installed: true,
-                hooks_installed: false,
-                hooks_up_to_date: false,
-            });
-        }
-
-        let content = fs::read_to_string(&settings_path)?;
-        let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
         let desired_cmd = Self::hook_command(&params.binary_path);
-        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing, &desired_cmd);
+        let mut hooks_installed = false;
+        let mut hooks_up_to_date = true;
+        for settings_path in settings_paths {
+            if !settings_path.exists() {
+                hooks_up_to_date = false;
+                continue;
+            }
+            let content = fs::read_to_string(&settings_path)?;
+            let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
+            let (path_installed, path_up_to_date) = Self::hook_status(&existing, &desired_cmd);
+            hooks_installed |= path_installed;
+            hooks_up_to_date &= path_up_to_date;
+        }
 
         Ok(HookCheckResult {
             tool_installed: true,
@@ -445,7 +517,13 @@ impl HookInstaller for QoderInstaller {
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        Self::install_hooks_at(&Self::settings_path(), params, dry_run)
+        let mut diffs = Vec::new();
+        for settings_path in Self::settings_paths() {
+            if let Some(diff) = Self::install_hooks_at(&settings_path, params, dry_run)? {
+                diffs.push(diff);
+            }
+        }
+        Ok((!diffs.is_empty()).then(|| diffs.join("\n")))
     }
 
     fn uninstall_hooks(
@@ -453,7 +531,13 @@ impl HookInstaller for QoderInstaller {
         _params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        Self::uninstall_hooks_at(&Self::settings_path(), dry_run)
+        let mut diffs = Vec::new();
+        for settings_path in Self::settings_paths() {
+            if let Some(diff) = Self::uninstall_hooks_at(&settings_path, dry_run)? {
+                diffs.push(diff);
+            }
+        }
+        Ok((!diffs.is_empty()).then(|| diffs.join("\n")))
     }
 }
 
@@ -524,7 +608,7 @@ mod tests {
     fn hook_command_uses_the_platform_runtime() {
         let binary = Path::new(r"C:\Users\Test User\.git-ai\bin\git-ai.exe");
         let expected_shell = if cfg!(windows) {
-            HookShell::GitBash
+            HookShell::Cmd
         } else {
             HookShell::Posix
         };
@@ -538,6 +622,26 @@ mod tests {
     #[test]
     fn process_names_include_qoder_cn() {
         assert!(QoderInstaller.process_names().contains(&"QoderCN"));
+    }
+
+    #[test]
+    fn settings_paths_keep_international_and_cn_configs_separate() {
+        let home = Path::new("/Users/admin");
+        assert_eq!(
+            QoderInstaller::settings_paths_for_variants(home, true, false),
+            vec![PathBuf::from("/Users/admin/.qoder/settings.json")]
+        );
+        assert_eq!(
+            QoderInstaller::settings_paths_for_variants(home, false, true),
+            vec![PathBuf::from("/Users/admin/.qoder-cn/settings.json")]
+        );
+        assert_eq!(
+            QoderInstaller::settings_paths_for_variants(home, true, true),
+            vec![
+                PathBuf::from("/Users/admin/.qoder/settings.json"),
+                PathBuf::from("/Users/admin/.qoder-cn/settings.json")
+            ]
+        );
     }
 
     #[test]
@@ -570,6 +674,37 @@ mod tests {
         assert!(diff.is_some());
         assert!(!settings_path.parent().unwrap().exists());
         assert!(!settings_path.exists());
+    }
+
+    #[test]
+    fn cn_install_preserves_existing_product_settings() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join(".qoder-cn").join("settings.json");
+        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&json!({
+                "enabledPlugins": {
+                    "qoder-create-plugin@qoder-bundler": true
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            QoderInstaller::install_hooks_at(&settings_path, &params(), false)
+                .unwrap()
+                .is_some()
+        );
+        let settings = read_settings(&settings_path);
+        assert_eq!(
+            settings["enabledPlugins"]["qoder-create-plugin@qoder-bundler"],
+            true
+        );
+        for event in ["PreToolUse", "PostToolUse"] {
+            assert_eq!(catch_all_hooks(&settings, event).len(), 1, "{event}");
+        }
     }
 
     #[test]
@@ -607,6 +742,7 @@ mod tests {
         )));
         assert!(candidates.contains(&PathBuf::from("/Program Files/Qoder CN/QoderCN.exe")));
         assert!(candidates.contains(&PathBuf::from("/Users/admin/.qoder/Qoder.exe")));
+        assert!(candidates.contains(&PathBuf::from("/Users/admin/.qoder-cn/QoderCN.exe")));
     }
 
     #[test]
@@ -616,8 +752,15 @@ mod tests {
 "qoder-cn","3456","Console","1","100,000 K"
 "powershell.exe","5678","Console","1","50,000 K""#;
         assert!(QoderInstaller::tasklist_contains_qoder(output));
+        assert!(QoderInstaller::tasklist_contains_qoder_international(
+            output
+        ));
+        assert!(QoderInstaller::tasklist_contains_qoder_cn(output));
         assert!(QoderInstaller::tasklist_contains_qoder(
             br#""QoderCN","2345","Console","1","100,000 K""#
+        ));
+        assert!(!QoderInstaller::tasklist_contains_qoder_international(
+            br#""QoderCN.exe","2345","Console","1","100,000 K""#
         ));
         assert!(!QoderInstaller::tasklist_contains_qoder(
             br#""powershell.exe","5678","Console","1","50,000 K""#

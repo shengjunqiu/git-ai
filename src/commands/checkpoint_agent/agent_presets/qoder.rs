@@ -201,11 +201,28 @@ impl AgentCheckpointPreset for QoderPreset {
 
 impl QoderPreset {
     pub fn model_from_qoder_storage(session_id: &str) -> Result<Option<String>, GitAiError> {
-        let Some(user_dir) = Self::qoder_user_dir() else {
-            return Ok(None);
-        };
+        let mut first_error = None;
+        for user_dir in Self::qoder_user_dirs() {
+            match Self::model_from_qoder_user_dir(session_id, &user_dir) {
+                Ok(Some(model)) => return Ok(Some(model)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(
+                        "Failed to resolve Qoder model from user directory {:?}: {}",
+                        user_dir,
+                        error
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
 
-        Self::model_from_qoder_user_dir(session_id, &user_dir)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     pub fn model_from_qoder_user_dir(
@@ -247,14 +264,23 @@ impl QoderPreset {
         keys.iter().find_map(|key| value.get(*key)?.as_str())
     }
 
-    fn qoder_user_dir() -> Option<PathBuf> {
+    fn qoder_user_dirs() -> Vec<PathBuf> {
         if let Ok(path) = std::env::var("GIT_AI_QODER_USER_DIR")
             && !path.trim().is_empty()
         {
-            return Some(PathBuf::from(path));
+            return vec![PathBuf::from(path)];
         }
 
-        dirs::config_dir().map(|config| config.join("Qoder").join("User"))
+        dirs::config_dir()
+            .map(|config| Self::qoder_user_dirs_from_config(&config))
+            .unwrap_or_default()
+    }
+
+    fn qoder_user_dirs_from_config(config_dir: &Path) -> Vec<PathBuf> {
+        ["Qoder", "QoderCN"]
+            .iter()
+            .map(|product| config_dir.join(product).join("User"))
+            .collect()
     }
 
     fn open_sqlite_readonly(path: &Path) -> Result<Connection, GitAiError> {
@@ -274,7 +300,10 @@ impl QoderPreset {
             return Ok(None);
         }
 
-        let key = format!("chat.modelConfig.session.{session_id}");
+        let keys = [
+            format!("chat.modelMapSession.{session_id}"),
+            format!("chat.modelConfig.session.{session_id}"),
+        ];
         let entries = std::fs::read_dir(workspace_storage_dir).map_err(GitAiError::IoError)?;
         for entry in entries {
             let entry = match entry {
@@ -289,15 +318,17 @@ impl QoderPreset {
                 continue;
             }
 
-            match Self::read_qoder_storage_value(&db_path, &key) {
-                Ok(Some(model)) if !model.trim().is_empty() => return Ok(Some(model)),
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::debug!(
-                        "Failed to read Qoder workspace model from {:?}: {}",
-                        db_path,
-                        e
-                    );
+            for key in &keys {
+                match Self::read_qoder_storage_value(&db_path, key) {
+                    Ok(Some(model)) if !model.trim().is_empty() => return Ok(Some(model)),
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to read Qoder workspace model from {:?}: {}",
+                            db_path,
+                            e
+                        );
+                    }
                 }
             }
         }
@@ -596,5 +627,22 @@ impl QoderPreset {
             .get("content")
             .or_else(|| value.get("text"))
             .and_then(Self::text_from_content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QoderPreset;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn qoder_user_dirs_cover_international_and_cn_products() {
+        assert_eq!(
+            QoderPreset::qoder_user_dirs_from_config(Path::new("/config")),
+            vec![
+                PathBuf::from("/config/Qoder/User"),
+                PathBuf::from("/config/QoderCN/User")
+            ]
+        );
     }
 }

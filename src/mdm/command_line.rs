@@ -7,12 +7,12 @@ use std::path::Path;
 /// not by Rust's `std::process::Command` argument handling.
 ///
 /// Agent runtime map:
-/// - Git Bash: Claude Code, CodeBuddy CLI, Qoder.
+/// - Git Bash: Claude Code, CodeBuddy CLI.
 /// - `cmd.exe` and Git Bash compatible command string: CodeBuddy IDE and CLI
 ///   on Windows, where both products share one settings file.
 /// - POSIX shell on macOS/Linux and PowerShell on Windows: Trae.
 /// - POSIX shell on macOS/Linux and `cmd.exe` on Windows: Cursor, Droid,
-///   Firebender, Gemini.
+///   Firebender, Gemini, Qoder.
 /// - Explicit POSIX and PowerShell fields: Codex, GitHub Copilot, Windsurf.
 /// - Amp, OpenCode, and PI generate JavaScript/TypeScript plugins and keep
 ///   executable/argv separation instead of using this shell-string renderer.
