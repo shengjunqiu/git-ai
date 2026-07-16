@@ -7,7 +7,9 @@ use std::path::Path;
 /// not by Rust's `std::process::Command` argument handling.
 ///
 /// Agent runtime map:
-/// - Git Bash: Claude Code, CodeBuddy, Qoder.
+/// - Git Bash: Claude Code, CodeBuddy CLI, Qoder.
+/// - `cmd.exe` and Git Bash compatible command string: CodeBuddy IDE and CLI
+///   on Windows, where both products share one settings file.
 /// - POSIX shell on macOS/Linux and PowerShell on Windows: Trae.
 /// - POSIX shell on macOS/Linux and `cmd.exe` on Windows: Cursor, Droid,
 ///   Firebender, Gemini.
@@ -20,6 +22,10 @@ pub(crate) enum HookShell {
     Posix,
     /// Git for Windows' Bash. Windows drive paths must be converted first.
     GitBash,
+    /// A command string shared by `cmd.exe /C` and Git for Windows' Bash.
+    /// Windows paths use forward slashes and double-quoted tokens so the same
+    /// settings entry works in both CodeBuddy runtimes.
+    CmdAndGitBash,
     /// `cmd.exe /C` on native Windows.
     Cmd,
     /// PowerShell's `-Command` mode.
@@ -42,6 +48,7 @@ pub(crate) fn platform_hook_shell(windows_shell: HookShell) -> HookShell {
 pub(crate) fn render_hook_command(binary_path: &Path, args: &[&str], shell: HookShell) -> String {
     let executable = match shell {
         HookShell::GitBash => to_git_bash_path(binary_path),
+        HookShell::CmdAndGitBash => binary_path.to_string_lossy().replace('\\', "/"),
         HookShell::Posix | HookShell::Cmd | HookShell::PowerShell => {
             binary_path.to_string_lossy().into_owned()
         }
@@ -49,6 +56,7 @@ pub(crate) fn render_hook_command(binary_path: &Path, args: &[&str], shell: Hook
 
     match shell {
         HookShell::Posix | HookShell::GitBash => join_tokens(&executable, args, quote_posix_token),
+        HookShell::CmdAndGitBash => join_tokens(&executable, args, quote_cmd_and_git_bash_token),
         HookShell::Cmd => join_tokens(&executable, args, quote_cmd_token),
         HookShell::PowerShell => {
             let command = join_tokens(&executable, args, quote_powershell_token);
@@ -110,6 +118,25 @@ fn quote_cmd_token(value: &str) -> String {
     }
 }
 
+fn is_cmd_and_git_bash_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-')
+        })
+}
+
+fn quote_cmd_and_git_bash_token(value: &str) -> String {
+    if is_cmd_and_git_bash_safe(value) {
+        value.to_string()
+    } else {
+        // A Windows path cannot contain a double quote. The fixed CodeBuddy
+        // argv is also quote-free, so double quotes are portable across both
+        // cmd.exe and Git Bash for this shared settings entry.
+        format!("\"{}\"", value.replace('"', "\"\""))
+    }
+}
+
 fn powershell_token_needs_quotes(value: &str) -> bool {
     value.is_empty()
         || !value.bytes().all(|byte| {
@@ -137,6 +164,7 @@ pub mod test_support {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum TestHookShell {
         GitBash,
+        CmdAndGitBash,
         Cmd,
         PowerShell,
     }
@@ -144,6 +172,7 @@ pub mod test_support {
     pub fn render_for_shell(binary_path: &Path, args: &[&str], shell: TestHookShell) -> String {
         let shell = match shell {
             TestHookShell::GitBash => HookShell::GitBash,
+            TestHookShell::CmdAndGitBash => HookShell::CmdAndGitBash,
             TestHookShell::Cmd => HookShell::Cmd,
             TestHookShell::PowerShell => HookShell::PowerShell,
         };
@@ -194,6 +223,25 @@ mod tests {
             assert!(command.starts_with('"'), "{command}");
             assert!(command.contains("\" checkpoint test-agent"), "{command}");
         }
+    }
+
+    #[test]
+    fn cmd_and_git_bash_renderer_uses_shared_windows_path_syntax() {
+        let rendered: Vec<String> = special_paths()
+            .iter()
+            .map(|path| render_hook_command(path, ARGS, HookShell::CmdAndGitBash))
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec![
+                r#""C:/Users/Test User/.git-ai/bin/git-ai.exe" checkpoint test-agent --hook-input stdin"#,
+                r#""C:/Users/A&B/.git-ai/bin/git-ai.exe" checkpoint test-agent --hook-input stdin"#,
+                r#""C:/Users/100% Dev/.git-ai/bin/git-ai.exe" checkpoint test-agent --hook-input stdin"#,
+                r#""C:/Users/O'Neil/.git-ai/bin/git-ai.exe" checkpoint test-agent --hook-input stdin"#,
+                r#""D:/Tools/git ai/git-ai.exe" checkpoint test-agent --hook-input stdin"#,
+            ]
+        );
     }
 
     #[test]
@@ -248,6 +296,10 @@ mod tests {
         assert_eq!(
             render_hook_command(binary, &args, HookShell::PowerShell),
             r#"& 'C:\Users\Test User\.git-ai\bin\git-ai.exe' checkpoint 'agent name' 'A&B' 'O''Neil' '100% Dev'"#
+        );
+        assert_eq!(
+            render_hook_command(binary, &args, HookShell::CmdAndGitBash),
+            r#""C:/Users/Test User/.git-ai/bin/git-ai.exe" checkpoint "agent name" "A&B" "O'Neil" "100% Dev""#
         );
     }
 }

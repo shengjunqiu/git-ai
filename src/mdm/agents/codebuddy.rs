@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::mdm::command_line::{HookShell, render_hook_command};
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
@@ -14,6 +14,18 @@ const CODEBUDDY_CATCH_ALL_MATCHER: &str = "*";
 pub struct CodeBuddyInstaller;
 
 impl CodeBuddyInstaller {
+    fn hook_command(binary_path: &Path) -> String {
+        render_hook_command(
+            binary_path,
+            CODEBUDDY_HOOK_ARGS,
+            platform_hook_shell(HookShell::CmdAndGitBash),
+        )
+    }
+
+    fn is_codebuddy_checkpoint_command(command: &str) -> bool {
+        is_git_ai_checkpoint_command(command) && command.contains("checkpoint codebuddy")
+    }
+
     fn settings_path() -> PathBuf {
         home_dir().join(".codebuddy").join("settings.json")
     }
@@ -22,18 +34,18 @@ impl CodeBuddyInstaller {
         home_dir().join(".codebuddy")
     }
 
-    fn hook_status(settings: &Value) -> (bool, bool) {
+    fn hook_status(settings: &Value, desired_cmd: &str) -> (bool, bool) {
         let hooks_installed = ["PreToolUse", "PostToolUse"]
             .iter()
-            .any(|event| Self::event_has_git_ai(settings, event, false));
+            .any(|event| Self::event_has_codebuddy_hook(settings, event));
         let hooks_up_to_date = ["PreToolUse", "PostToolUse"]
             .iter()
-            .all(|event| Self::event_has_git_ai(settings, event, true));
+            .all(|event| Self::event_hook_is_up_to_date(settings, event, desired_cmd));
 
         (hooks_installed, hooks_up_to_date)
     }
 
-    fn event_has_git_ai(settings: &Value, event: &str, catch_all_only: bool) -> bool {
+    fn event_has_codebuddy_hook(settings: &Value, event: &str) -> bool {
         let Some(blocks) = settings
             .get("hooks")
             .and_then(|hooks| hooks.get(event))
@@ -43,16 +55,6 @@ impl CodeBuddyInstaller {
         };
 
         blocks.iter().any(|block| {
-            let is_catch_all = block
-                .get("matcher")
-                .and_then(|matcher| matcher.as_str())
-                .map(|matcher| matcher == CODEBUDDY_CATCH_ALL_MATCHER)
-                .unwrap_or(false);
-
-            if catch_all_only && !is_catch_all {
-                return false;
-            }
-
             block
                 .get("hooks")
                 .and_then(|hooks| hooks.as_array())
@@ -60,12 +62,47 @@ impl CodeBuddyInstaller {
                     hooks.iter().any(|hook| {
                         hook.get("command")
                             .and_then(|command| command.as_str())
-                            .map(is_git_ai_checkpoint_command)
+                            .map(Self::is_codebuddy_checkpoint_command)
                             .unwrap_or(false)
                     })
                 })
                 .unwrap_or(false)
         })
+    }
+
+    fn event_hook_is_up_to_date(settings: &Value, event: &str, desired_cmd: &str) -> bool {
+        let Some(blocks) = settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(|value| value.as_array())
+        else {
+            return false;
+        };
+
+        let mut codebuddy_hook_count = 0;
+        let mut desired_catch_all_count = 0;
+
+        for block in blocks {
+            let is_catch_all =
+                block.get("matcher").and_then(Value::as_str) == Some(CODEBUDDY_CATCH_ALL_MATCHER);
+            let Some(hooks) = block.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+
+            for hook in hooks {
+                let Some(command) = hook.get("command").and_then(Value::as_str) else {
+                    continue;
+                };
+                if Self::is_codebuddy_checkpoint_command(command) {
+                    codebuddy_hook_count += 1;
+                    if is_catch_all && command == desired_cmd {
+                        desired_catch_all_count += 1;
+                    }
+                }
+            }
+        }
+
+        codebuddy_hook_count == 1 && desired_catch_all_count == 1
     }
 
     fn install_hooks_at(
@@ -88,8 +125,7 @@ impl CodeBuddyInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let pre_tool_cmd =
-            render_hook_command(&params.binary_path, CODEBUDDY_HOOK_ARGS, HookShell::GitBash);
+        let pre_tool_cmd = Self::hook_command(&params.binary_path);
         let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
@@ -144,7 +180,7 @@ impl CodeBuddyInstaller {
                 hooks.retain(|hook| {
                     hook.get("command")
                         .and_then(|command| command.as_str())
-                        .map(|command| !is_git_ai_checkpoint_command(command))
+                        .map(|command| !Self::is_codebuddy_checkpoint_command(command))
                         .unwrap_or(true)
                 });
                 if before > 0 && hooks.is_empty() {
@@ -225,7 +261,7 @@ impl CodeBuddyInstaller {
                         hooks.retain(|hook| {
                             hook.get("command")
                                 .and_then(|command| command.as_str())
-                                .map(|command| !is_git_ai_checkpoint_command(command))
+                                .map(|command| !Self::is_codebuddy_checkpoint_command(command))
                                 .unwrap_or(true)
                         });
                         changed |= hooks.len() != before;
@@ -258,7 +294,7 @@ impl HookInstaller for CodeBuddyInstaller {
         "codebuddy"
     }
 
-    fn check_hooks(&self, _params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
+    fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
         let has_binary = binary_exists("codebuddy");
         let has_dotfiles = Self::config_dir().exists();
 
@@ -281,7 +317,8 @@ impl HookInstaller for CodeBuddyInstaller {
 
         let content = fs::read_to_string(&settings_path)?;
         let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
-        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing);
+        let desired_cmd = Self::hook_command(&params.binary_path);
+        let (hooks_installed, hooks_up_to_date) = Self::hook_status(&existing, &desired_cmd);
 
         Ok(HookCheckResult {
             tool_installed: true,
@@ -291,7 +328,7 @@ impl HookInstaller for CodeBuddyInstaller {
     }
 
     fn process_names(&self) -> Vec<&str> {
-        vec!["codebuddy", "CodeBuddy"]
+        vec!["codebuddy", "CodeBuddy", "CodeBuddy CN"]
     }
 
     fn install_hooks(
@@ -309,6 +346,11 @@ impl HookInstaller for CodeBuddyInstaller {
     ) -> Result<Option<String>, GitAiError> {
         Self::uninstall_hooks_at(&Self::settings_path(), dry_run)
     }
+}
+
+#[cfg(feature = "test-support")]
+pub fn render_codebuddy_hook_command_for_test(binary_path: &Path) -> String {
+    CodeBuddyInstaller::hook_command(binary_path)
 }
 
 #[cfg(test)]
@@ -330,11 +372,7 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        render_hook_command(
-            &params().binary_path,
-            CODEBUDDY_HOOK_ARGS,
-            HookShell::GitBash,
-        )
+        CodeBuddyInstaller::hook_command(&params().binary_path)
     }
 
     fn read_settings(path: &Path) -> Value {
@@ -358,6 +396,39 @@ mod tests {
             .and_then(|block| block.get("hooks").and_then(|hooks| hooks.as_array()))
             .map(|hooks| hooks.iter().collect())
             .unwrap_or_default()
+    }
+
+    fn event_commands<'a>(settings: &'a Value, event: &str) -> Vec<&'a str> {
+        settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block.get("hooks").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+            .collect()
+    }
+
+    #[test]
+    fn hook_command_uses_the_platform_runtime() {
+        let binary = Path::new(r"C:\Users\Test User\.git-ai\bin\git-ai.exe");
+        let expected_shell = if cfg!(windows) {
+            HookShell::CmdAndGitBash
+        } else {
+            HookShell::Posix
+        };
+
+        assert_eq!(
+            CodeBuddyInstaller::hook_command(binary),
+            render_hook_command(binary, CODEBUDDY_HOOK_ARGS, expected_shell)
+        );
+    }
+
+    #[test]
+    fn process_names_include_codebuddy_cn() {
+        assert!(CodeBuddyInstaller.process_names().contains(&"CodeBuddy CN"));
     }
 
     #[test]
@@ -390,7 +461,10 @@ mod tests {
             }
         });
 
-        assert_eq!(CodeBuddyInstaller::hook_status(&settings), (true, false));
+        assert_eq!(
+            CodeBuddyInstaller::hook_status(&settings, &expected_cmd()),
+            (true, false)
+        );
     }
 
     #[test]
@@ -440,5 +514,130 @@ mod tests {
                 .and_then(|command| command.as_str()),
             Some(expected_cmd().as_str())
         );
+    }
+
+    #[test]
+    fn legacy_git_bash_hooks_migrate_once_and_preserve_other_hooks() {
+        let (_temp_dir, settings_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let legacy_cmd =
+            render_hook_command(&params.binary_path, CODEBUDDY_HOOK_ARGS, HookShell::GitBash);
+        let desired_cmd = CodeBuddyInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "hooks": {} });
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([
+                {
+                    "matcher": "Write",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "echo user hook"}
+                    ]
+                },
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                    ]
+                }
+            ]);
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            CodeBuddyInstaller::hook_status(&settings, &desired_cmd),
+            (true, false)
+        );
+        assert!(
+            CodeBuddyInstaller::install_hooks_at(&settings_path, &params, false)
+                .unwrap()
+                .is_some()
+        );
+
+        let migrated = read_settings(&settings_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&migrated, event);
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| CodeBuddyInstaller::is_codebuddy_checkpoint_command(command))
+                    .count(),
+                1,
+                "{event}: expected exactly one CodeBuddy Hook"
+            );
+            assert!(commands.contains(&desired_cmd.as_str()), "{event}");
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
+        assert_eq!(
+            CodeBuddyInstaller::hook_status(&migrated, &desired_cmd),
+            (true, true)
+        );
+        assert!(
+            CodeBuddyInstaller::install_hooks_at(&settings_path, &params, false)
+                .unwrap()
+                .is_none(),
+            "reinstalling an up-to-date config must be idempotent"
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_codebuddy_hooks_only() {
+        let (_temp_dir, settings_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let legacy_cmd =
+            render_hook_command(&params.binary_path, CODEBUDDY_HOOK_ARGS, HookShell::GitBash);
+        let desired_cmd = CodeBuddyInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "hooks": {} });
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([{
+                "matcher": "*",
+                "hooks": [
+                    {"type": "command", "command": legacy_cmd},
+                    {"type": "command", "command": desired_cmd},
+                    {"type": "command", "command": "echo user hook"},
+                    {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                ]
+            }]);
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            CodeBuddyInstaller::uninstall_hooks_at(&settings_path, false)
+                .unwrap()
+                .is_some()
+        );
+        let uninstalled = read_settings(&settings_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&uninstalled, event);
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| CodeBuddyInstaller::is_codebuddy_checkpoint_command(command)),
+                "{event}"
+            );
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
     }
 }

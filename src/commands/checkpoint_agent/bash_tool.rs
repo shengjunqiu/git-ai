@@ -428,8 +428,10 @@ pub fn classify_tool(agent: Agent, tool_name: &str) -> ToolClass {
             _ => ToolClass::Skip,
         },
         Agent::CodeBuddy => match tool_name {
-            "Write" | "Edit" | "MultiEdit" | "Create" => ToolClass::FileEdit,
-            "Bash" | "bash" | "Shell" | "shell" => ToolClass::Bash,
+            "Write" | "Edit" | "MultiEdit" | "Create" | "write_to_file" | "replace_in_file" => {
+                ToolClass::FileEdit
+            }
+            "Bash" | "bash" | "Shell" | "shell" | "execute_command" => ToolClass::Bash,
             _ => ToolClass::Skip,
         },
         Agent::Gemini => match tool_name {
@@ -1909,6 +1911,18 @@ mod tests {
             ToolClass::FileEdit
         );
         assert_eq!(classify_tool(Agent::CodeBuddy, "Bash"), ToolClass::Bash);
+        assert_eq!(
+            classify_tool(Agent::CodeBuddy, "write_to_file"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(
+            classify_tool(Agent::CodeBuddy, "replace_in_file"),
+            ToolClass::FileEdit
+        );
+        assert_eq!(
+            classify_tool(Agent::CodeBuddy, "execute_command"),
+            ToolClass::Bash
+        );
         assert_eq!(classify_tool(Agent::CodeBuddy, "Read"), ToolClass::Skip);
 
         assert_eq!(classify_tool(Agent::Trae, "Write"), ToolClass::FileEdit);

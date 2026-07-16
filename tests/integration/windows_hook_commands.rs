@@ -1,4 +1,6 @@
-use git_ai::mdm::agents::render_trae_hook_command_for_test;
+use git_ai::mdm::agents::{
+    render_codebuddy_hook_command_for_test, render_trae_hook_command_for_test,
+};
 use git_ai::mdm::command_line_test_support::{TestHookShell, render_for_shell};
 use serde::Deserialize;
 use std::fs;
@@ -83,6 +85,9 @@ fn shell_process(shell: TestHookShell, rendered: &str) -> Command {
             command.args(["/D", "/S", "/C"]);
             command.raw_arg(format!(r#""{rendered}""#));
             return command;
+        }
+        TestHookShell::CmdAndGitBash => {
+            panic!("CmdAndGitBash selects a renderer, not a process")
         }
         TestHookShell::GitBash => {
             let mut command = Command::new(git_bash_binary());
@@ -232,4 +237,53 @@ fn trae_hook_command_executes_in_powershell() {
         fs::canonicalize(cwd).unwrap()
     );
     assert_eq!(record.stdin, HOOK_STDIN);
+}
+
+#[test]
+fn codebuddy_hook_command_executes_in_cmd_and_git_bash() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cwd = temp_dir.path().join("repo & workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    for (index, special_dir) in ["Test User", "A&B", "100% Dev", "O'Neil", "Tools"]
+        .iter()
+        .enumerate()
+    {
+        let binary = temp_dir
+            .path()
+            .join(special_dir)
+            .join(".git-ai")
+            .join("bin")
+            .join("git-ai.exe");
+        link_or_copy_recorder(&binary);
+        let rendered = render_codebuddy_hook_command_for_test(&binary);
+
+        assert!(!rendered.contains("/c/"), "{rendered}");
+        assert!(!rendered.contains('\\'), "{rendered}");
+
+        for shell in [TestHookShell::Cmd, TestHookShell::GitBash] {
+            let record_path = temp_dir
+                .path()
+                .join(format!("codebuddy-{index}-{shell:?}.json"));
+            let output = run_rendered_command(shell, &rendered, &cwd, &record_path);
+            assert!(
+                output.status.success(),
+                "CodeBuddy {shell:?} command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let record: HookCommandRecord =
+                serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+            assert_eq!(
+                record.args,
+                ["checkpoint", "codebuddy", "--hook-input", "stdin"]
+            );
+            assert_eq!(
+                fs::canonicalize(record.cwd).unwrap(),
+                fs::canonicalize(&cwd).unwrap()
+            );
+            assert_eq!(record.stdin, HOOK_STDIN);
+        }
+    }
 }

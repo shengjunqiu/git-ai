@@ -18,6 +18,8 @@ mod windsurf;
 pub use amp::AmpInstaller;
 pub use claude_code::ClaudeCodeInstaller;
 pub use codebuddy::CodeBuddyInstaller;
+#[cfg(feature = "test-support")]
+pub use codebuddy::render_codebuddy_hook_command_for_test;
 pub use codex::CodexInstaller;
 pub use cursor::CursorInstaller;
 pub use droid::DroidInstaller;

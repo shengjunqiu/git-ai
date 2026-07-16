@@ -116,6 +116,14 @@ impl AgentCheckpointPreset for CodeBuddyPreset {
                 }
             });
         let is_bash_tool = tool_class == ToolClass::Bash;
+        let tool_use_id = if is_bash_tool && tool_use_id == "codebuddy-tool" {
+            // CodeBuddy IDE payloads do not include a unique tool_use_id.
+            // The shared bash handler recognizes this fallback and correlates
+            // Pre/Post snapshots through its per-session sidecar.
+            "bash"
+        } else {
+            tool_use_id
+        };
 
         // 12) PreToolUse 阶段：在工具执行“之前”捕获一个人类检查点，
         //     用于记录改动前状态（人类意图 / 即将发生的编辑）。
@@ -354,7 +362,7 @@ impl CodeBuddyPreset {
         let tool_name = Self::string_at(hook_data, &["tool_name", "toolName"]);
         if !matches!(
             tool_name,
-            Some("Write") | Some("write") | Some("Create") | Some("create")
+            Some("Write") | Some("write") | Some("Create") | Some("create") | Some("write_to_file")
         ) {
             return None;
         }
