@@ -469,7 +469,38 @@ function Set-PathPrependBeforeGit {
 }
 
 # Detect standard Git early and validate (fail-fast behavior)
-$stdGitPath = Get-StdGitPath
+$stdGitPath = $null
+try {
+    $stdGitPath = Get-StdGitPath
+} catch {
+    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+    # When invoked via `irm ... | iex` from a non-interactive context
+    # (e.g. Win+R, double-clicked .bat, or MDM deployment), the console
+    # window would disappear before the user can read the error above.
+    # Pause here so the prerequisite failure is visible.
+    #
+    # [Console]::IsInputRedirected detects CI / piped-stdin environments
+    # where Read-Host would hang indefinitely. In those cases we skip the
+    # pause so tests don't time out.
+    if ($Host.Name -match 'ConsoleHost' -and -not [Console]::IsInputRedirected) {
+        Write-Host ''
+        Write-Host 'Press Enter to exit (auto-closing in 10 seconds)...' -ForegroundColor Yellow
+        $timeout = [TimeSpan]::FromSeconds(10)
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($stopwatch.Elapsed -lt $timeout) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq 'Enter') { break }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    # Stop the install. Using throw (not exit) preserves the interactive
+    # PowerShell session; in -Command contexts the host will exit after
+    # the throw, but the pause above already gave the user time to read
+    # the prerequisite failure.
+    throw
+}
 
 # Detect architecture and OS
 $arch = Get-Architecture
