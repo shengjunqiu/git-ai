@@ -2,7 +2,8 @@ use crate::error::GitAiError;
 use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
-    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
+    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command,
+    windows_uninstall_display_name_exists, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -32,6 +33,136 @@ impl CodeBuddyInstaller {
 
     fn config_dir() -> PathBuf {
         home_dir().join(".codebuddy")
+    }
+
+    fn tool_installed() -> bool {
+        let home = home_dir();
+        if Self::config_dir().exists() || home.join(".codebuddycn").exists() {
+            return true;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return [
+                PathBuf::from("/Applications/CodeBuddy.app"),
+                PathBuf::from("/Applications/CodeBuddy CN.app"),
+                home.join("Applications").join("CodeBuddy.app"),
+                home.join("Applications").join("CodeBuddy CN.app"),
+            ]
+            .iter()
+            .any(|path| path.exists())
+                || binary_exists("codebuddy");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let roots = Self::windows_app_roots();
+            let tasklist = Self::windows_tasklist();
+            return Self::windows_app_candidates(&home, &roots)
+                .iter()
+                .any(|path| path.exists())
+                || ["codebuddy", "CodeBuddy", "codebuddy-cn", "CodeBuddyCN"]
+                    .iter()
+                    .any(|name| binary_exists(name))
+                || tasklist
+                    .as_deref()
+                    .is_some_and(Self::tasklist_contains_codebuddy)
+                || windows_uninstall_display_name_exists(&[
+                    "CodeBuddy",
+                    "CodeBuddy IDE",
+                    "CodeBuddy CN",
+                    "CodeBuddyCN",
+                    "CodeBuddy-CN",
+                ]);
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            binary_exists("codebuddy") || binary_exists("codebuddy-cn")
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_app_roots() -> Vec<PathBuf> {
+        [
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            std::env::var_os("ProgramFiles").map(PathBuf::from),
+            std::env::var_os("ProgramW6432").map(PathBuf::from),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        for (config_dir, executable, install_dirs) in [
+            (
+                ".codebuddy",
+                "CodeBuddy.exe",
+                &["CodeBuddy", "CodeBuddy IDE"][..],
+            ),
+            (
+                ".codebuddycn",
+                "CodeBuddy CN.exe",
+                &["CodeBuddy CN", "CodeBuddyCN"][..],
+            ),
+            (
+                ".codebuddycn",
+                "CodeBuddyCN.exe",
+                &["CodeBuddy CN", "CodeBuddyCN"][..],
+            ),
+        ] {
+            candidates.push(home.join(config_dir).join(executable));
+            for install_dir in install_dirs {
+                candidates.push(
+                    home.join("AppData")
+                        .join("Local")
+                        .join("Programs")
+                        .join(install_dir)
+                        .join(executable),
+                );
+                for root in roots {
+                    candidates.push(root.join("Programs").join(install_dir).join(executable));
+                    candidates.push(root.join(install_dir).join(executable));
+                }
+            }
+        }
+        candidates.sort();
+        candidates.dedup();
+        candidates
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_tasklist() -> Option<Vec<u8>> {
+        std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| output.stdout)
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_codebuddy(output: &[u8]) -> bool {
+        String::from_utf8_lossy(output).lines().any(|line| {
+            line.split(',')
+                .next()
+                .map(|image| image.trim().trim_matches('"'))
+                .is_some_and(|image| {
+                    [
+                        "codebuddy",
+                        "codebuddy.exe",
+                        "codebuddy cn",
+                        "codebuddy cn.exe",
+                        "codebuddycn",
+                        "codebuddycn.exe",
+                    ]
+                    .iter()
+                    .any(|candidate| image.eq_ignore_ascii_case(candidate))
+                })
+        })
     }
 
     fn hook_status(settings: &Value, desired_cmd: &str) -> (bool, bool) {
@@ -110,7 +241,7 @@ impl CodeBuddyInstaller {
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        if let Some(dir) = settings_path.parent() {
+        if !dry_run && let Some(dir) = settings_path.parent() {
             fs::create_dir_all(dir)?;
         }
 
@@ -295,10 +426,7 @@ impl HookInstaller for CodeBuddyInstaller {
     }
 
     fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
-        let has_binary = binary_exists("codebuddy");
-        let has_dotfiles = Self::config_dir().exists();
-
-        if !has_binary && !has_dotfiles {
+        if !Self::tool_installed() {
             return Ok(HookCheckResult {
                 tool_installed: false,
                 hooks_installed: false,
@@ -328,7 +456,7 @@ impl HookInstaller for CodeBuddyInstaller {
     }
 
     fn process_names(&self) -> Vec<&str> {
-        vec!["codebuddy", "CodeBuddy", "CodeBuddy CN"]
+        vec!["codebuddy", "CodeBuddy", "CodeBuddy CN", "CodeBuddyCN"]
     }
 
     fn install_hooks(
@@ -429,6 +557,7 @@ mod tests {
     #[test]
     fn process_names_include_codebuddy_cn() {
         assert!(CodeBuddyInstaller.process_names().contains(&"CodeBuddy CN"));
+        assert!(CodeBuddyInstaller.process_names().contains(&"CodeBuddyCN"));
     }
 
     #[test]
@@ -448,6 +577,49 @@ mod tests {
                 Some(expected_cmd().as_str())
             );
         }
+    }
+
+    #[test]
+    fn fresh_install_dry_run_does_not_create_config_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join(".codebuddy").join("settings.json");
+
+        assert!(
+            CodeBuddyInstaller::install_hooks_at(&settings_path, &params(), true)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!settings_path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn windows_app_candidates_cover_international_and_cn_products() {
+        let home = Path::new("/Users/admin");
+        let candidates =
+            CodeBuddyInstaller::windows_app_candidates(home, &[PathBuf::from("/Program Files")]);
+
+        assert!(candidates.contains(&PathBuf::from("/Program Files/CodeBuddy/CodeBuddy.exe")));
+        assert!(candidates.contains(&PathBuf::from(
+            "/Program Files/CodeBuddy CN/CodeBuddy CN.exe"
+        )));
+        assert!(candidates.contains(&PathBuf::from(
+            "/Program Files/CodeBuddy CN/CodeBuddyCN.exe"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/Users/admin/.codebuddy/CodeBuddy.exe")));
+        assert!(candidates.contains(&PathBuf::from("/Users/admin/.codebuddycn/CodeBuddy CN.exe")));
+    }
+
+    #[test]
+    fn tasklist_detection_recognizes_both_codebuddy_products() {
+        assert!(CodeBuddyInstaller::tasklist_contains_codebuddy(
+            br#""CodeBuddy.exe","123","Console","1","100 K""#
+        ));
+        assert!(CodeBuddyInstaller::tasklist_contains_codebuddy(
+            br#""CodeBuddy CN.exe","456","Console","1","100 K""#
+        ));
+        assert!(!CodeBuddyInstaller::tasklist_contains_codebuddy(
+            br#""CodeBuddy Helper.exe","789","Console","1","100 K""#
+        ));
     }
 
     #[test]

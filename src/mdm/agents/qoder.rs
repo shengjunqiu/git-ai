@@ -2,7 +2,8 @@ use crate::error::GitAiError;
 use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{HookCheckResult, HookInstaller, HookInstallerParams};
 use crate::mdm::utils::{
-    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command, write_atomic,
+    binary_exists, generate_diff, home_dir, is_git_ai_checkpoint_command,
+    windows_uninstall_display_name_exists, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -71,6 +72,7 @@ impl QoderInstaller {
         let (international_installed, cn_installed) = {
             let roots = Self::windows_app_roots();
             let tasklist = Self::windows_tasklist();
+            let (registry_international, registry_cn) = Self::windows_registry_variants();
             (
                 international_config_exists
                     || Self::windows_international_app_candidates(&home, &roots)
@@ -79,7 +81,8 @@ impl QoderInstaller {
                     || ["qoder", "Qoder"].iter().any(|name| binary_exists(name))
                     || tasklist
                         .as_deref()
-                        .is_some_and(Self::tasklist_contains_qoder_international),
+                        .is_some_and(Self::tasklist_contains_qoder_international)
+                    || registry_international,
                 cn_config_exists
                     || Self::windows_cn_app_candidates(&home, &roots)
                         .iter()
@@ -89,7 +92,8 @@ impl QoderInstaller {
                         .any(|name| binary_exists(name))
                     || tasklist
                         .as_deref()
-                        .is_some_and(Self::tasklist_contains_qoder_cn),
+                        .is_some_and(Self::tasklist_contains_qoder_cn)
+                    || registry_cn,
             )
         };
 
@@ -183,6 +187,14 @@ impl QoderInstaller {
             .ok()
             .filter(|output| output.status.success())
             .map(|output| output.stdout)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_registry_variants() -> (bool, bool) {
+        (
+            windows_uninstall_display_name_exists(&["Qoder", "Qoder IDE"]),
+            windows_uninstall_display_name_exists(&["Qoder CN", "QoderCN", "Qoder-CN"]),
+        )
     }
 
     #[cfg(test)]

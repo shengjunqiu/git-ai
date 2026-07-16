@@ -6,7 +6,7 @@ use crate::mdm::hook_installer::{
 use crate::mdm::utils::{
     binary_exists, generate_diff, home_dir, install_vsc_editor_extension,
     is_git_ai_checkpoint_command, is_vsc_editor_extension_installed, resolve_editor_cli,
-    write_atomic,
+    windows_uninstall_display_name_exists, write_atomic,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -31,53 +31,181 @@ impl TraeInstaller {
     }
 
     fn hooks_paths() -> Vec<PathBuf> {
-        Self::hooks_paths_for_home(&home_dir())
+        let home = home_dir();
+        let international_config_exists = home.join(".trae").exists();
+        let cn_config_exists = home.join(".trae-cn").exists();
+
+        #[cfg(target_os = "macos")]
+        let international_installed = international_config_exists
+            || [
+                PathBuf::from("/Applications/Trae.app"),
+                PathBuf::from("/Applications/TRAE.app"),
+                home.join("Applications").join("Trae.app"),
+                home.join("Applications").join("TRAE.app"),
+            ]
+            .iter()
+            .any(|path| path.exists());
+        #[cfg(target_os = "macos")]
+        let cn_installed = cn_config_exists
+            || [
+                PathBuf::from("/Applications/Trae CN.app"),
+                PathBuf::from("/Applications/TRAE CN.app"),
+                home.join("Applications").join("Trae CN.app"),
+                home.join("Applications").join("TRAE CN.app"),
+            ]
+            .iter()
+            .any(|path| path.exists());
+
+        #[cfg(target_os = "windows")]
+        let (international_installed, cn_installed) = {
+            let roots = Self::windows_app_roots();
+            let tasklist = Self::windows_tasklist();
+            (
+                international_config_exists
+                    || Self::windows_international_app_candidates(&home, &roots)
+                        .iter()
+                        .any(|path| path.exists())
+                    || ["trae", "Trae"].iter().any(|name| binary_exists(name))
+                    || tasklist
+                        .as_deref()
+                        .is_some_and(Self::tasklist_contains_trae_international)
+                    || windows_uninstall_display_name_exists(&["Trae", "TRAE"]),
+                cn_config_exists
+                    || Self::windows_cn_app_candidates(&home, &roots)
+                        .iter()
+                        .any(|path| path.exists())
+                    || ["trae-cn", "TraeCN"].iter().any(|name| binary_exists(name))
+                    || tasklist
+                        .as_deref()
+                        .is_some_and(Self::tasklist_contains_trae_cn)
+                    || windows_uninstall_display_name_exists(&[
+                        "Trae CN", "TRAE CN", "TraeCN", "Trae-CN",
+                    ]),
+            )
+        };
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let international_installed = international_config_exists || binary_exists("trae");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let cn_installed = cn_config_exists || binary_exists("trae-cn");
+
+        Self::hooks_paths_for_variants(&home, international_installed, cn_installed)
     }
 
-    fn config_dir() -> PathBuf {
-        home_dir().join(".trae-cn")
-    }
-
-    fn hooks_paths_for_home(home: &Path) -> Vec<PathBuf> {
-        let documented_dir = home.join(".trae-cn");
-        let stable_dir = home.join(".trae");
-        let stable_hooks_path = stable_dir.join("hooks.json");
-
-        let mut paths = vec![documented_dir.join("hooks.json")];
-
-        if stable_dir.exists() || stable_hooks_path.exists() {
-            paths.push(stable_hooks_path);
+    fn hooks_paths_for_variants(
+        home: &Path,
+        international_installed: bool,
+        cn_installed: bool,
+    ) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if international_installed {
+            paths.push(home.join(".trae").join("hooks.json"));
         }
-
+        if cn_installed {
+            paths.push(home.join(".trae-cn").join("hooks.json"));
+        }
         paths
     }
 
-    fn has_dotfiles() -> bool {
-        let home = home_dir();
-        [Self::config_dir(), home.join(".trae")]
-            .iter()
-            .any(|path| path.exists())
+    #[cfg(target_os = "windows")]
+    fn windows_app_roots() -> Vec<PathBuf> {
+        [
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            std::env::var_os("ProgramFiles").map(PathBuf::from),
+            std::env::var_os("ProgramW6432").map(PathBuf::from),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
-    fn app_exists() -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            let home = home_dir();
-            [
-                PathBuf::from("/Applications/Trae.app"),
-                PathBuf::from("/Applications/TRAE.app"),
-                PathBuf::from("/Applications/Trae CN.app"),
-                home.join("Applications").join("Trae.app"),
-                home.join("Applications").join("TRAE.app"),
-                home.join("Applications").join("Trae CN.app"),
-            ]
-            .iter()
-            .any(|path| path.exists())
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_international_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        Self::windows_variant_app_candidates(home, roots, ".trae", "Trae.exe", &["Trae", "TRAE"])
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_cn_app_candidates(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let mut candidates = Self::windows_variant_app_candidates(
+            home,
+            roots,
+            ".trae-cn",
+            "Trae CN.exe",
+            &["Trae CN", "TRAE CN", "TraeCN"],
+        );
+        candidates.extend(Self::windows_variant_app_candidates(
+            home,
+            roots,
+            ".trae-cn",
+            "TraeCN.exe",
+            &["Trae CN", "TRAE CN", "TraeCN"],
+        ));
+        candidates.sort();
+        candidates.dedup();
+        candidates
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_variant_app_candidates(
+        home: &Path,
+        roots: &[PathBuf],
+        config_dir: &str,
+        executable: &str,
+        install_dir_names: &[&str],
+    ) -> Vec<PathBuf> {
+        let mut candidates = vec![home.join(config_dir).join(executable)];
+        for install_dir in install_dir_names {
+            candidates.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join(install_dir)
+                    .join(executable),
+            );
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            false
+        for root in roots {
+            for install_dir in install_dir_names {
+                candidates.push(root.join("Programs").join(install_dir).join(executable));
+                candidates.push(root.join(install_dir).join(executable));
+            }
         }
+        candidates.sort();
+        candidates.dedup();
+        candidates
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_tasklist() -> Option<Vec<u8>> {
+        std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| output.stdout)
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_trae_international(output: &[u8]) -> bool {
+        Self::tasklist_contains_any(output, &["trae", "trae.exe"])
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_trae_cn(output: &[u8]) -> bool {
+        Self::tasklist_contains_any(output, &["trae cn", "trae cn.exe", "traecn", "traecn.exe"])
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    fn tasklist_contains_any(output: &[u8], candidates: &[&str]) -> bool {
+        String::from_utf8_lossy(output).lines().any(|line| {
+            line.split(',')
+                .next()
+                .map(|image| image.trim().trim_matches('"'))
+                .is_some_and(|image| {
+                    candidates
+                        .iter()
+                        .any(|candidate| image.eq_ignore_ascii_case(candidate))
+                })
+        })
     }
 
     fn hook_status(settings: &Value, desired_cmd: &str) -> (bool, bool) {
@@ -159,7 +287,7 @@ impl TraeInstaller {
         params: &HookInstallerParams,
         dry_run: bool,
     ) -> Result<Option<String>, GitAiError> {
-        if let Some(dir) = hooks_path.parent() {
+        if !dry_run && let Some(dir) = hooks_path.parent() {
             fs::create_dir_all(dir)?;
         }
 
@@ -387,11 +515,8 @@ impl HookInstaller for TraeInstaller {
     }
 
     fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
-        let has_binary = binary_exists("trae");
-        let has_dotfiles = Self::has_dotfiles();
-        let has_app = Self::app_exists();
-
-        if !has_binary && !has_dotfiles && !has_app {
+        let paths = Self::hooks_paths();
+        if paths.is_empty() {
             return Ok(HookCheckResult {
                 tool_installed: false,
                 hooks_installed: false,
@@ -399,7 +524,6 @@ impl HookInstaller for TraeInstaller {
             });
         }
 
-        let paths = Self::hooks_paths();
         let desired_cmd = Self::hook_command(&params.binary_path);
         let (hooks_installed, hooks_up_to_date) =
             Self::hook_status_for_paths(&paths, &desired_cmd)?;
@@ -412,7 +536,7 @@ impl HookInstaller for TraeInstaller {
     }
 
     fn process_names(&self) -> Vec<&str> {
-        vec!["trae", "Trae", "TRAE", "Trae CN"]
+        vec!["trae", "Trae", "TRAE", "Trae CN", "TraeCN", "TRAE CN"]
     }
 
     fn install_hooks(
@@ -590,6 +714,7 @@ mod tests {
     #[test]
     fn process_names_include_trae_cn() {
         assert!(TraeInstaller.process_names().contains(&"Trae CN"));
+        assert!(TraeInstaller.process_names().contains(&"TraeCN"));
     }
 
     #[test]
@@ -616,6 +741,19 @@ mod tests {
     }
 
     #[test]
+    fn fresh_install_dry_run_does_not_create_config_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let hooks_path = temp_dir.path().join(".trae").join("hooks.json");
+
+        assert!(
+            TraeInstaller::install_hooks_at(&hooks_path, &params(), true)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!hooks_path.parent().unwrap().exists());
+    }
+
+    #[test]
     fn hook_status_requires_pre_and_post_catch_all() {
         let settings = json!({
             "version": 1,
@@ -634,17 +772,48 @@ mod tests {
     }
 
     #[test]
-    fn hooks_paths_include_stable_dir_when_present() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::create_dir_all(temp_dir.path().join(".trae")).unwrap();
-
+    fn hooks_paths_keep_international_and_cn_products_separate() {
+        let home = Path::new("/Users/admin");
         assert_eq!(
-            TraeInstaller::hooks_paths_for_home(temp_dir.path()),
+            TraeInstaller::hooks_paths_for_variants(home, true, false),
+            vec![PathBuf::from("/Users/admin/.trae/hooks.json")]
+        );
+        assert_eq!(
+            TraeInstaller::hooks_paths_for_variants(home, false, true),
+            vec![PathBuf::from("/Users/admin/.trae-cn/hooks.json")]
+        );
+        assert_eq!(
+            TraeInstaller::hooks_paths_for_variants(home, true, true),
             vec![
-                temp_dir.path().join(".trae-cn").join("hooks.json"),
-                temp_dir.path().join(".trae").join("hooks.json"),
+                PathBuf::from("/Users/admin/.trae/hooks.json"),
+                PathBuf::from("/Users/admin/.trae-cn/hooks.json"),
             ]
         );
+    }
+
+    #[test]
+    fn windows_app_candidates_cover_both_products_and_standard_roots() {
+        let home = Path::new("/Users/admin");
+        let roots = vec![PathBuf::from("/Program Files")];
+        let international = TraeInstaller::windows_international_app_candidates(home, &roots);
+        let cn = TraeInstaller::windows_cn_app_candidates(home, &roots);
+
+        assert!(international.contains(&PathBuf::from("/Program Files/Trae/Trae.exe")));
+        assert!(international.contains(&PathBuf::from("/Users/admin/.trae/Trae.exe")));
+        assert!(cn.contains(&PathBuf::from("/Program Files/Trae CN/Trae CN.exe")));
+        assert!(cn.contains(&PathBuf::from("/Program Files/Trae CN/TraeCN.exe")));
+        assert!(cn.contains(&PathBuf::from("/Users/admin/.trae-cn/Trae CN.exe")));
+    }
+
+    #[test]
+    fn tasklist_detection_distinguishes_trae_products() {
+        let output = br#""Trae.exe","123","Console","1","100 K"
+"Trae CN.exe","456","Console","1","100 K""#;
+        assert!(TraeInstaller::tasklist_contains_trae_international(output));
+        assert!(TraeInstaller::tasklist_contains_trae_cn(output));
+        assert!(!TraeInstaller::tasklist_contains_trae_international(
+            br#""Trae CN.exe","456","Console","1","100 K""#
+        ));
     }
 
     #[test]

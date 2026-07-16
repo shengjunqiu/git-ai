@@ -6,6 +6,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(windows)]
+use std::sync::OnceLock;
 
 mod paths;
 pub use paths::{
@@ -18,6 +20,61 @@ pub use paths::{
 pub const MIN_CURSOR_VERSION: (u32, u32) = (1, 7);
 pub const MIN_CODE_VERSION: (u32, u32) = (1, 99);
 pub const MIN_CLAUDE_VERSION: (u32, u32) = (2, 0);
+
+#[cfg(windows)]
+static WINDOWS_UNINSTALL_DISPLAY_NAMES: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Check Windows uninstall registrations by stable product display name.
+///
+/// This detects applications installed to arbitrary drive letters without
+/// persisting or guessing their executable paths.
+#[cfg(windows)]
+pub fn windows_uninstall_display_name_exists(candidates: &[&str]) -> bool {
+    WINDOWS_UNINSTALL_DISPLAY_NAMES
+        .get_or_init(query_windows_uninstall_display_names)
+        .iter()
+        .any(|display_name| {
+            candidates
+                .iter()
+                .any(|candidate| display_name.eq_ignore_ascii_case(candidate))
+        })
+}
+
+#[cfg(not(windows))]
+pub fn windows_uninstall_display_name_exists(_candidates: &[&str]) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn query_windows_uninstall_display_names() -> Vec<String> {
+    let mut display_names = Vec::new();
+    for root in [
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ] {
+        let Some(output) = Command::new("reg")
+            .args(["query", root, "/s", "/v", "DisplayName"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+        else {
+            continue;
+        };
+        display_names.extend(windows_uninstall_display_names_from_output(&output.stdout));
+    }
+    display_names
+}
+
+#[cfg(any(test, windows))]
+fn windows_uninstall_display_names_from_output(output: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| line.split_once("REG_SZ").map(|(_, value)| value.trim()))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
 
 /// Get version from a binary's --version output
 pub fn get_binary_version(binary: &str) -> Result<String, GitAiError> {
@@ -804,6 +861,21 @@ mod tests {
     use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_windows_uninstall_display_names_parser() {
+        let output = br#"
+HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\trae
+    DisplayName    REG_SZ    Trae
+HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\codebuddy-cn
+    DisplayName    REG_SZ    CodeBuddy CN
+"#;
+
+        assert_eq!(
+            windows_uninstall_display_names_from_output(output),
+            vec!["Trae".to_string(), "CodeBuddy CN".to_string()]
+        );
+    }
 
     #[test]
     fn test_parse_version() {
