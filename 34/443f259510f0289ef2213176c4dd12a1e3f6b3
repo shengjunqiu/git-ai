@@ -1,0 +1,39 @@
+tests/integration/windows_hook_commands.rs
+  d637061b13f88c61 1-3,89-91,241-288
+src/mdm/agents/mod.rs
+  d637061b13f88c61 21-22
+tests/integration/codebuddy.rs
+  d637061b13f88c61 10-12,32-33,37-39,41,55,59-66,180-371
+tests/fixtures/agent-hooks/README.md
+  d637061b13f88c61 8
+src/mdm/command_line.rs
+  d637061b13f88c61 10-12,25-28,51,59,121-139,167,175,228-246,300-302
+src/commands/checkpoint_agent/agent_presets/codebuddy.rs
+  d637061b13f88c61 119-126,365
+src/commands/checkpoint_agent/bash_tool.rs
+  d637061b13f88c61 431-434,1914-1923
+src/mdm/agents/codebuddy.rs
+  d637061b13f88c61 2,17-28,37,40,43,48,65,73-107,128,183,264,297,320-321,331,351-355,375,401-433,464-467,518-642
+docs/plans/windows-trae-codebuddy-qoder-hooks-fix-task-plan.md
+  d637061b13f88c61 248-250,280-282,750-815
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "34443f259510f0289ef2213176c4dd12a1e3f6b3",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 672,
+      "total_deletions": 91,
+      "accepted_lines": 4123,
+      "overriden_lines": 0
+    }
+  }
+}
