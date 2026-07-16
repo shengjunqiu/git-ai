@@ -3,6 +3,7 @@ use git_ai::authorship::working_log::CheckpointKind;
 use git_ai::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, QoderPreset,
 };
+use git_ai::commands::checkpoint_agent::bash_tool::{self, Agent, ToolClass};
 use rusqlite::Connection;
 use serde_json::json;
 use std::ffi::OsString;
@@ -39,6 +40,47 @@ fn flags_from_json(value: serde_json::Value) -> AgentCheckpointFlags {
     AgentCheckpointFlags {
         hook_input: Some(value.to_string()),
     }
+}
+
+fn qoder_fixture_case(name: &str) -> serde_json::Value {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/agent-hooks/qoder.json")).unwrap();
+    fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap_or_else(|| panic!("missing Qoder fixture case: {name}"))["input"]
+        .clone()
+}
+
+#[test]
+fn test_qoder_windows_hook_fixtures_cover_native_tool_classification() {
+    let expected = [
+        ("pre-create-file", ToolClass::FileEdit),
+        ("post-create-file", ToolClass::FileEdit),
+        ("post-search-replace", ToolClass::FileEdit),
+        ("post-run-in-terminal", ToolClass::Bash),
+    ];
+
+    for (case, expected_class) in expected {
+        let input = qoder_fixture_case(case);
+        let tool_name = input["tool_name"].as_str().unwrap();
+        assert_eq!(
+            bash_tool::classify_tool(Agent::Qoder, tool_name),
+            expected_class
+        );
+    }
+
+    let pre = QoderPreset
+        .run(flags_from_json(qoder_fixture_case("pre-create-file")))
+        .expect("Qoder fixture PreToolUse should parse");
+    let post = QoderPreset
+        .run(flags_from_json(qoder_fixture_case("post-search-replace")))
+        .expect("Qoder fixture PostToolUse should parse");
+
+    assert!(matches!(pre.checkpoint_kind, CheckpointKind::Human));
+    assert!(matches!(post.checkpoint_kind, CheckpointKind::AiAgent));
 }
 
 fn create_qoder_storage(user_dir: &Path, session_id: &str, selected_model: &str) {

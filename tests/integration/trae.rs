@@ -2,6 +2,7 @@ use git_ai::authorship::working_log::CheckpointKind;
 use git_ai::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, TraePreset,
 };
+use git_ai::commands::checkpoint_agent::bash_tool::{self, Agent, ToolClass};
 use serde_json::json;
 use std::path::Path;
 
@@ -37,6 +38,50 @@ fn flags_from_json(value: serde_json::Value) -> AgentCheckpointFlags {
     AgentCheckpointFlags {
         hook_input: Some(value.to_string()),
     }
+}
+
+fn trae_fixture_case(name: &str) -> serde_json::Value {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/agent-hooks/trae.json")).unwrap();
+    fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap_or_else(|| panic!("missing Trae fixture case: {name}"))["input"]
+        .clone()
+}
+
+#[test]
+#[serial_test::serial]
+fn test_trae_windows_hook_fixtures_cover_current_tool_classification() {
+    let expected = [
+        ("pre-write", ToolClass::FileEdit),
+        ("post-write", ToolClass::FileEdit),
+        ("post-edit", ToolClass::FileEdit),
+        ("post-run-command", ToolClass::Bash),
+    ];
+
+    for (case, expected_class) in expected {
+        let input = trae_fixture_case(case);
+        let tool_name = input["tool_name"].as_str().unwrap();
+        assert_eq!(
+            bash_tool::classify_tool(Agent::Trae, tool_name),
+            expected_class
+        );
+    }
+
+    let temp_trae_user_dir = tempfile::tempdir().unwrap();
+    let _env = ScopedTraeUserDir::set(temp_trae_user_dir.path());
+    let pre = TraePreset
+        .run(flags_from_json(trae_fixture_case("pre-write")))
+        .expect("Trae fixture PreToolUse should parse");
+    let post = TraePreset
+        .run(flags_from_json(trae_fixture_case("post-edit")))
+        .expect("Trae fixture PostToolUse should parse");
+
+    assert!(matches!(pre.checkpoint_kind, CheckpointKind::Human));
+    assert!(matches!(post.checkpoint_kind, CheckpointKind::AiAgent));
 }
 
 #[test]

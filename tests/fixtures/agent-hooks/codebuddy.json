@@ -1,0 +1,109 @@
+{
+  "agent": "codebuddy",
+  "source": "Sanitized payload shapes derived from observed Windows CodeBuddy IDE tool names plus the documented CLI and IDE hook schemas during stage 0",
+  "cases": [
+    {
+      "name": "cli-pre-write",
+      "environment": "cli",
+      "input": {
+        "session_id": "fixture-codebuddy-cli",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        }
+      }
+    },
+    {
+      "name": "cli-post-edit",
+      "environment": "cli",
+      "input": {
+        "session_id": "fixture-codebuddy-cli",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Edit",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "old_string": "old",
+          "new_string": "new"
+        },
+        "tool_response": {
+          "filePath": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "success": true
+        }
+      }
+    },
+    {
+      "name": "cli-post-bash",
+      "environment": "cli",
+      "input": {
+        "session_id": "fixture-codebuddy-cli",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf generated > generated.txt"
+        },
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": ""
+        }
+      }
+    },
+    {
+      "name": "ide-pre-write-to-file",
+      "environment": "ide",
+      "input": {
+        "session_id": "fixture-codebuddy-ide",
+        "transcript_path": "C:\\Users\\Test User\\.codebuddy\\history\\session.jsonl",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "write_to_file",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        }
+      }
+    },
+    {
+      "name": "ide-post-replace-in-file",
+      "environment": "ide",
+      "input": {
+        "session_id": "fixture-codebuddy-ide",
+        "transcript_path": "C:\\Users\\Test User\\.codebuddy\\history\\session.jsonl",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "replace_in_file",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "old_string": "old",
+          "new_string": "new"
+        },
+        "tool_response": {
+          "filePath": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "success": true
+        }
+      }
+    },
+    {
+      "name": "ide-post-execute-command",
+      "environment": "ide",
+      "input": {
+        "session_id": "fixture-codebuddy-ide",
+        "transcript_path": "C:\\Users\\Test User\\.codebuddy\\history\\session.jsonl",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "execute_command",
+        "tool_input": {
+          "command": "powershell -NoProfile -Command Set-Content generated.txt generated"
+        },
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": ""
+        }
+      }
+    }
+  ]
+}

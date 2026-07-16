@@ -3,6 +3,7 @@ use git_ai::authorship::working_log::CheckpointKind;
 use git_ai::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, CodeBuddyPreset,
 };
+use git_ai::commands::checkpoint_agent::bash_tool::{self, Agent, ToolClass};
 use serde_json::json;
 use std::fs;
 
@@ -10,6 +11,65 @@ fn flags_from_json(value: serde_json::Value) -> AgentCheckpointFlags {
     AgentCheckpointFlags {
         hook_input: Some(value.to_string()),
     }
+}
+
+fn codebuddy_fixture_case(name: &str) -> serde_json::Value {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/agent-hooks/codebuddy.json")).unwrap();
+    fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap_or_else(|| panic!("missing CodeBuddy fixture case: {name}"))["input"]
+        .clone()
+}
+
+#[test]
+fn test_codebuddy_windows_hook_fixtures_document_cli_and_ide_classification() {
+    let cli_expected = [
+        ("cli-pre-write", ToolClass::FileEdit),
+        ("cli-post-edit", ToolClass::FileEdit),
+        ("cli-post-bash", ToolClass::Bash),
+    ];
+    for (case, expected_class) in cli_expected {
+        let input = codebuddy_fixture_case(case);
+        let tool_name = input["tool_name"].as_str().unwrap();
+        assert_eq!(
+            bash_tool::classify_tool(Agent::CodeBuddy, tool_name),
+            expected_class
+        );
+    }
+
+    for case in [
+        "ide-pre-write-to-file",
+        "ide-post-replace-in-file",
+        "ide-post-execute-command",
+    ] {
+        let input = codebuddy_fixture_case(case);
+        let tool_name = input["tool_name"].as_str().unwrap();
+        assert_eq!(
+            bash_tool::classify_tool(Agent::CodeBuddy, tool_name),
+            ToolClass::Skip,
+            "stage 0 fixture must reproduce the current CodeBuddy IDE alias gap"
+        );
+    }
+
+    let cli_pre = CodeBuddyPreset
+        .run(flags_from_json(codebuddy_fixture_case("cli-pre-write")))
+        .expect("CodeBuddy CLI fixture should parse");
+    assert!(matches!(cli_pre.checkpoint_kind, CheckpointKind::Human));
+
+    let ide_error = CodeBuddyPreset
+        .run(flags_from_json(codebuddy_fixture_case(
+            "ide-pre-write-to-file",
+        )))
+        .expect_err("CodeBuddy IDE alias gap should be reproducible before stage 3");
+    assert!(
+        ide_error
+            .to_string()
+            .contains("Skipping CodeBuddy PreToolUse without mutating tool/path")
+    );
 }
 
 #[test]

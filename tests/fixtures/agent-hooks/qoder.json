@@ -1,0 +1,68 @@
+{
+  "agent": "qoder",
+  "source": "Sanitized payload shapes derived from observed Windows Qoder activity and the documented native hook schema during stage 0",
+  "cases": [
+    {
+      "name": "pre-create-file",
+      "input": {
+        "session_id": "fixture-qoder-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "create_file",
+        "model": "fixture-model",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        }
+      }
+    },
+    {
+      "name": "post-create-file",
+      "input": {
+        "session_id": "fixture-qoder-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "create_file",
+        "model": "fixture-model",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        },
+        "tool_response": "File written successfully"
+      }
+    },
+    {
+      "name": "post-search-replace",
+      "input": {
+        "session_id": "fixture-qoder-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "search_replace",
+        "model": "fixture-model",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "old_string": "old",
+          "new_string": "new"
+        },
+        "tool_response": "File edited successfully"
+      }
+    },
+    {
+      "name": "post-run-in-terminal",
+      "input": {
+        "session_id": "fixture-qoder-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_in_terminal",
+        "model": "fixture-model",
+        "tool_input": {
+          "command": "powershell -NoProfile -Command Set-Content generated.txt generated"
+        },
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": ""
+        }
+      }
+    }
+  ]
+}

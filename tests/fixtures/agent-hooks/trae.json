@@ -1,0 +1,76 @@
+{
+  "agent": "trae",
+  "source": "Sanitized payload shapes derived from observed Windows Trae tool names and the supported hook schema during stage 0",
+  "cases": [
+    {
+      "name": "pre-write",
+      "input": {
+        "session_id": "fixture-trae-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "trae-tool-1",
+        "tool_name": "Write",
+        "llm_tool_name": "Write",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        }
+      }
+    },
+    {
+      "name": "post-write",
+      "input": {
+        "session_id": "fixture-trae-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "trae-tool-1",
+        "tool_name": "Write",
+        "llm_tool_name": "Write",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\main.rs",
+          "content": "fn main() {}\n"
+        },
+        "tool_response": {
+          "filePath": "C:\\Users\\Test User\\repo\\src\\main.rs"
+        }
+      }
+    },
+    {
+      "name": "post-edit",
+      "input": {
+        "session_id": "fixture-trae-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "trae-tool-2",
+        "tool_name": "Edit",
+        "llm_tool_name": "Edit",
+        "tool_input": {
+          "file_path": "C:\\Users\\Test User\\repo\\src\\lib.rs",
+          "old_string": "old",
+          "new_string": "new"
+        },
+        "tool_response": {
+          "filePath": "C:\\Users\\Test User\\repo\\src\\lib.rs"
+        }
+      }
+    },
+    {
+      "name": "post-run-command",
+      "input": {
+        "session_id": "fixture-trae-session",
+        "cwd": "C:\\Users\\Test User\\repo",
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "trae-tool-3",
+        "tool_name": "RunCommand",
+        "llm_tool_name": "RunCommand",
+        "tool_input": {
+          "command": "powershell -NoProfile -Command Set-Content generated.txt generated"
+        },
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": ""
+        }
+      }
+    }
+  ]
+}
