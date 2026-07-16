@@ -4,7 +4,10 @@ use git_ai::commands::checkpoint_agent::agent_presets::{
 };
 use git_ai::commands::checkpoint_agent::bash_tool::{self, Agent, ToolClass};
 use serde_json::json;
-use std::path::Path;
+use std::{fs, path::Path};
+
+use crate::repos::test_file::ExpectedLineExt;
+use crate::repos::test_repo::TestRepo;
 
 struct ScopedTraeUserDir {
     previous: Option<std::ffi::OsString>,
@@ -187,4 +190,100 @@ fn test_trae_preset_skips_read_without_path() {
             .to_string()
             .contains("Skipping Trae PreToolUse without mutating tool/path")
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn test_trae_checkpoint_commit_preserves_human_line_attribution() {
+    let repo = TestRepo::new();
+    let repo_root = repo.path().clone();
+    let file_path = repo_root.join("src").join("main.rs");
+    fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    fs::write(&file_path, "// human baseline\n").unwrap();
+    repo.stage_all_and_commit("Add human baseline").unwrap();
+
+    let temp_trae_user_dir = tempfile::tempdir().unwrap();
+    let _env = ScopedTraeUserDir::set(temp_trae_user_dir.path());
+    let repo_root_string = repo_root.to_string_lossy().to_string();
+    let file_path_string = file_path.to_string_lossy().to_string();
+    let pre_hook_input = json!({
+        "session_id": "trae-e2e-session",
+        "cwd": repo_root_string.clone(),
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "trae-e2e-write",
+        "tool_name": "Write",
+        "llm_tool_name": "Write",
+        "tool_input": {
+            "file_path": file_path_string.clone(),
+            "content": "// human baseline\n// written by Trae\n"
+        }
+    })
+    .to_string();
+    let pre_output = repo
+        .git_ai_with_stdin(
+            &["checkpoint", "trae", "--hook-input", "stdin"],
+            pre_hook_input.as_bytes(),
+        )
+        .expect("Trae pre-hook checkpoint should succeed");
+    let active_edits_path = repo
+        .current_working_logs()
+        .dir
+        .join("active_agent_edits.json");
+    let active_edits = fs::read_to_string(&active_edits_path)
+        .expect("Trae pre-hook should mark its target file as an active agent edit");
+    assert!(active_edits.contains("src/main.rs"), "{active_edits}");
+    assert!(active_edits.contains("trae"), "{active_edits}");
+
+    fs::write(&file_path, "// human baseline\n// written by Trae\n").unwrap();
+
+    let post_hook_input = json!({
+        "session_id": "trae-e2e-session",
+        "cwd": repo_root_string,
+        "hook_event_name": "PostToolUse",
+        "tool_use_id": "trae-e2e-write",
+        "tool_name": "Write",
+        "llm_tool_name": "Write",
+        "tool_input": {
+            "file_path": file_path_string.clone(),
+            "content": "// human baseline\n// written by Trae\n"
+        },
+        "tool_response": {
+            "filePath": file_path_string
+        }
+    })
+    .to_string();
+    let post_output = repo
+        .git_ai_with_stdin(
+            &["checkpoint", "trae", "--hook-input", "stdin"],
+            post_hook_input.as_bytes(),
+        )
+        .expect("Trae post-hook checkpoint should succeed");
+
+    let checkpoints = repo
+        .current_working_logs()
+        .read_all_checkpoints()
+        .expect("Trae working log should be readable");
+    assert!(
+        checkpoints.iter().any(|checkpoint| {
+            matches!(checkpoint.kind, CheckpointKind::AiAgent)
+                && checkpoint
+                    .entries
+                    .iter()
+                    .any(|entry| entry.file == "src/main.rs")
+        }),
+        "Trae post-hook should create an AI checkpoint for src/main.rs; pre output: {pre_output:?}; post output: {post_output:?}; checkpoints: {checkpoints:#?}"
+    );
+    assert!(
+        !active_edits_path.exists(),
+        "Trae post-hook should clear the active edit marker"
+    );
+
+    repo.stage_all_and_commit("Add Trae-authored line")
+        .expect("commit should succeed");
+
+    let mut tracked = repo.filename("src/main.rs");
+    tracked.assert_lines_and_blame(crate::lines![
+        "// human baseline".human(),
+        "// written by Trae".ai(),
+    ]);
 }

@@ -1,3 +1,4 @@
+use git_ai::mdm::agents::render_trae_hook_command_for_test;
 use git_ai::mdm::command_line_test_support::{TestHookShell, render_for_shell};
 use serde::Deserialize;
 use std::fs;
@@ -195,4 +196,40 @@ fn native_windows_shells_reject_git_bash_executable_paths() {
             "recorder unexpectedly ran for {shell:?}: {rendered}"
         );
     }
+}
+
+#[test]
+fn trae_hook_command_executes_in_powershell() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cwd = temp_dir.path().join("repo & workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let binary = temp_dir
+        .path()
+        .join("Test User")
+        .join(".git-ai")
+        .join("bin")
+        .join("git-ai.exe");
+    link_or_copy_recorder(&binary);
+    let record_path = temp_dir.path().join("trae-record.json");
+    let rendered = render_trae_hook_command_for_test(&binary);
+
+    assert!(rendered.starts_with("& '"), "{rendered}");
+    assert!(!rendered.contains("/c/"), "{rendered}");
+
+    let output = run_rendered_command(TestHookShell::PowerShell, &rendered, &cwd, &record_path);
+    assert!(
+        output.status.success(),
+        "Trae PowerShell command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let record: HookCommandRecord =
+        serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(record.args, ["checkpoint", "trae", "--hook-input", "stdin"]);
+    assert_eq!(
+        fs::canonicalize(record.cwd).unwrap(),
+        fs::canonicalize(cwd).unwrap()
+    );
+    assert_eq!(record.stdin, HOOK_STDIN);
 }

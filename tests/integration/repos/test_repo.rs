@@ -675,6 +675,7 @@ fn is_known_checkpoint_preset(arg: &str) -> bool {
     matches!(
         arg,
         "claude"
+            | "codebuddy"
             | "codex"
             | "continue-cli"
             | "cursor"
@@ -684,6 +685,8 @@ fn is_known_checkpoint_preset(arg: &str) -> bool {
             | "windsurf"
             | "opencode"
             | "pi"
+            | "qoder"
+            | "trae"
             | "ai_tab"
             | "firebender"
             | "mock_ai"
@@ -3121,6 +3124,18 @@ mod tests {
             normalize_test_git_ai_checkpoint_args(&["checkpoint", "--", "src/lib.rs"]),
             vec!["checkpoint", "--", "src/lib.rs"]
         );
+        for preset in ["codebuddy", "qoder", "trae"] {
+            assert_eq!(
+                normalize_test_git_ai_checkpoint_args(&[
+                    "checkpoint",
+                    preset,
+                    "--hook-input",
+                    "stdin",
+                ]),
+                vec!["checkpoint", preset, "--hook-input", "stdin"],
+                "{preset} must be passed to the checkpoint preset dispatcher"
+            );
+        }
     }
 
     #[test]

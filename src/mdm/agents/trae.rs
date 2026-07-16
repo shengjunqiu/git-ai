@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::mdm::command_line::{HookShell, render_hook_command};
+use crate::mdm::command_line::{HookShell, platform_hook_shell, render_hook_command};
 use crate::mdm::hook_installer::{
     HookCheckResult, HookInstaller, HookInstallerParams, InstallResult,
 };
@@ -18,6 +18,18 @@ const TRAE_CATCH_ALL_MATCHER: &str = "*";
 pub struct TraeInstaller;
 
 impl TraeInstaller {
+    fn hook_command(binary_path: &Path) -> String {
+        render_hook_command(
+            binary_path,
+            TRAE_HOOK_ARGS,
+            platform_hook_shell(HookShell::PowerShell),
+        )
+    }
+
+    fn is_trae_checkpoint_command(command: &str) -> bool {
+        is_git_ai_checkpoint_command(command) && command.contains("checkpoint trae")
+    }
+
     fn hooks_paths() -> Vec<PathBuf> {
         Self::hooks_paths_for_home(&home_dir())
     }
@@ -68,18 +80,18 @@ impl TraeInstaller {
         }
     }
 
-    fn hook_status(settings: &Value) -> (bool, bool) {
+    fn hook_status(settings: &Value, desired_cmd: &str) -> (bool, bool) {
         let hooks_installed = ["PreToolUse", "PostToolUse"]
             .iter()
-            .any(|event| Self::event_has_git_ai(settings, event, false));
+            .any(|event| Self::event_has_trae_hook(settings, event));
         let hooks_up_to_date = ["PreToolUse", "PostToolUse"]
             .iter()
-            .all(|event| Self::event_has_git_ai(settings, event, true));
+            .all(|event| Self::event_hook_is_up_to_date(settings, event, desired_cmd));
 
         (hooks_installed, hooks_up_to_date)
     }
 
-    fn event_has_git_ai(settings: &Value, event: &str, catch_all_only: bool) -> bool {
+    fn event_has_trae_hook(settings: &Value, event: &str) -> bool {
         let Some(blocks) = settings
             .get("hooks")
             .and_then(|hooks| hooks.get(event))
@@ -89,16 +101,6 @@ impl TraeInstaller {
         };
 
         blocks.iter().any(|block| {
-            let is_catch_all = block
-                .get("matcher")
-                .and_then(|matcher| matcher.as_str())
-                .map(|matcher| matcher == TRAE_CATCH_ALL_MATCHER)
-                .unwrap_or(false);
-
-            if catch_all_only && !is_catch_all {
-                return false;
-            }
-
             block
                 .get("hooks")
                 .and_then(|hooks| hooks.as_array())
@@ -106,12 +108,50 @@ impl TraeInstaller {
                     hooks.iter().any(|hook| {
                         hook.get("command")
                             .and_then(|command| command.as_str())
-                            .map(is_git_ai_checkpoint_command)
+                            .map(Self::is_trae_checkpoint_command)
                             .unwrap_or(false)
                     })
                 })
                 .unwrap_or(false)
         })
+    }
+
+    fn event_hook_is_up_to_date(settings: &Value, event: &str, desired_cmd: &str) -> bool {
+        let Some(blocks) = settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(|value| value.as_array())
+        else {
+            return false;
+        };
+
+        let mut trae_hook_count = 0;
+        let mut desired_catch_all_count = 0;
+
+        for block in blocks {
+            let is_catch_all = block
+                .get("matcher")
+                .and_then(|matcher| matcher.as_str())
+                .map(|matcher| matcher == TRAE_CATCH_ALL_MATCHER)
+                .unwrap_or(false);
+            let Some(hooks) = block.get("hooks").and_then(|hooks| hooks.as_array()) else {
+                continue;
+            };
+
+            for hook in hooks {
+                let Some(command) = hook.get("command").and_then(|command| command.as_str()) else {
+                    continue;
+                };
+                if Self::is_trae_checkpoint_command(command) {
+                    trae_hook_count += 1;
+                    if is_catch_all && command == desired_cmd {
+                        desired_catch_all_count += 1;
+                    }
+                }
+            }
+        }
+
+        trae_hook_count == 1 && desired_catch_all_count == 1
     }
 
     fn install_hooks_at(
@@ -134,8 +174,7 @@ impl TraeInstaller {
             serde_json::from_str(&existing_content)?
         };
 
-        let pre_tool_cmd =
-            render_hook_command(&params.binary_path, TRAE_HOOK_ARGS, HookShell::GitBash);
+        let pre_tool_cmd = Self::hook_command(&params.binary_path);
         let post_tool_cmd = pre_tool_cmd.clone();
 
         let mut merged = existing.clone();
@@ -198,7 +237,7 @@ impl TraeInstaller {
                 hooks.retain(|hook| {
                     hook.get("command")
                         .and_then(|command| command.as_str())
-                        .map(|command| !is_git_ai_checkpoint_command(command))
+                        .map(|command| !Self::is_trae_checkpoint_command(command))
                         .unwrap_or(true)
                 });
                 if before > 0 && hooks.is_empty() {
@@ -276,7 +315,7 @@ impl TraeInstaller {
                         hooks.retain(|hook| {
                             hook.get("command")
                                 .and_then(|command| command.as_str())
-                                .map(|command| !is_git_ai_checkpoint_command(command))
+                                .map(|command| !Self::is_trae_checkpoint_command(command))
                                 .unwrap_or(true)
                         });
                         changed |= hooks.len() != before;
@@ -299,7 +338,10 @@ impl TraeInstaller {
         Ok(Some(diff_output))
     }
 
-    fn hook_status_for_paths(paths: &[PathBuf]) -> Result<(bool, bool), GitAiError> {
+    fn hook_status_for_paths(
+        paths: &[PathBuf],
+        desired_cmd: &str,
+    ) -> Result<(bool, bool), GitAiError> {
         let mut saw_relevant_path = false;
         let mut hooks_installed = false;
         let mut hooks_up_to_date = true;
@@ -321,7 +363,8 @@ impl TraeInstaller {
 
             let content = fs::read_to_string(hooks_path)?;
             let existing: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
-            let (path_hooks_installed, path_hooks_up_to_date) = Self::hook_status(&existing);
+            let (path_hooks_installed, path_hooks_up_to_date) =
+                Self::hook_status(&existing, desired_cmd);
             hooks_installed |= path_hooks_installed;
             hooks_up_to_date &= path_hooks_up_to_date;
         }
@@ -343,7 +386,7 @@ impl HookInstaller for TraeInstaller {
         "trae"
     }
 
-    fn check_hooks(&self, _params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
+    fn check_hooks(&self, params: &HookInstallerParams) -> Result<HookCheckResult, GitAiError> {
         let has_binary = binary_exists("trae");
         let has_dotfiles = Self::has_dotfiles();
         let has_app = Self::app_exists();
@@ -357,7 +400,9 @@ impl HookInstaller for TraeInstaller {
         }
 
         let paths = Self::hooks_paths();
-        let (hooks_installed, hooks_up_to_date) = Self::hook_status_for_paths(&paths)?;
+        let desired_cmd = Self::hook_command(&params.binary_path);
+        let (hooks_installed, hooks_up_to_date) =
+            Self::hook_status_for_paths(&paths, &desired_cmd)?;
 
         Ok(HookCheckResult {
             tool_installed: true,
@@ -367,7 +412,7 @@ impl HookInstaller for TraeInstaller {
     }
 
     fn process_names(&self) -> Vec<&str> {
-        vec!["trae", "Trae", "TRAE"]
+        vec!["trae", "Trae", "TRAE", "Trae CN"]
     }
 
     fn install_hooks(
@@ -464,6 +509,11 @@ impl HookInstaller for TraeInstaller {
     }
 }
 
+#[cfg(feature = "test-support")]
+pub fn render_trae_hook_command_for_test(binary_path: &Path) -> String {
+    TraeInstaller::hook_command(binary_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,7 +533,7 @@ mod tests {
     }
 
     fn expected_cmd() -> String {
-        render_hook_command(&params().binary_path, TRAE_HOOK_ARGS, HookShell::GitBash)
+        TraeInstaller::hook_command(&params().binary_path)
     }
 
     fn read_settings(path: &Path) -> Value {
@@ -507,6 +557,39 @@ mod tests {
             .and_then(|block| block.get("hooks").and_then(|hooks| hooks.as_array()))
             .map(|hooks| hooks.iter().collect())
             .unwrap_or_default()
+    }
+
+    fn event_commands<'a>(settings: &'a Value, event: &str) -> Vec<&'a str> {
+        settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event))
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block.get("hooks").and_then(|hooks| hooks.as_array()))
+            .flatten()
+            .filter_map(|hook| hook.get("command").and_then(|command| command.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn hook_command_uses_the_platform_runtime() {
+        let binary = Path::new(r"C:\Users\Test User\.git-ai\bin\git-ai.exe");
+        let expected_shell = if cfg!(windows) {
+            HookShell::PowerShell
+        } else {
+            HookShell::Posix
+        };
+
+        assert_eq!(
+            TraeInstaller::hook_command(binary),
+            render_hook_command(binary, TRAE_HOOK_ARGS, expected_shell)
+        );
+    }
+
+    #[test]
+    fn process_names_include_trae_cn() {
+        assert!(TraeInstaller.process_names().contains(&"Trae CN"));
     }
 
     #[test]
@@ -544,7 +627,10 @@ mod tests {
             }
         });
 
-        assert_eq!(TraeInstaller::hook_status(&settings), (true, false));
+        assert_eq!(
+            TraeInstaller::hook_status(&settings, &expected_cmd()),
+            (true, false)
+        );
     }
 
     #[test]
@@ -572,8 +658,127 @@ mod tests {
         TraeInstaller::install_hooks_at(&documented_path, &params(), false).unwrap();
 
         assert_eq!(
-            TraeInstaller::hook_status_for_paths(&[documented_path, stable_path]).unwrap(),
+            TraeInstaller::hook_status_for_paths(&[documented_path, stable_path], &expected_cmd())
+                .unwrap(),
             (true, false)
         );
+    }
+
+    #[test]
+    fn legacy_git_bash_hooks_migrate_once_and_preserve_user_hooks() {
+        let (_temp_dir, hooks_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let legacy_cmd =
+            render_hook_command(&params.binary_path, TRAE_HOOK_ARGS, HookShell::GitBash);
+        let desired_cmd = TraeInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "version": 1, "hooks": {} });
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([
+                {
+                    "matcher": "Write",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "echo user hook"}
+                    ]
+                },
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": legacy_cmd},
+                        {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                    ]
+                }
+            ]);
+        }
+        fs::write(&hooks_path, serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+
+        assert_eq!(
+            TraeInstaller::hook_status(&settings, &desired_cmd),
+            (true, false),
+            "legacy Git Bash commands must require an upgrade"
+        );
+        assert!(
+            TraeInstaller::install_hooks_at(&hooks_path, &params, false)
+                .unwrap()
+                .is_some()
+        );
+
+        let migrated = read_settings(&hooks_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&migrated, event);
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| TraeInstaller::is_trae_checkpoint_command(command))
+                    .count(),
+                1,
+                "{event}: expected exactly one Trae Hook"
+            );
+            assert!(commands.contains(&desired_cmd.as_str()), "{event}");
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
+        assert_eq!(
+            TraeInstaller::hook_status(&migrated, &desired_cmd),
+            (true, true)
+        );
+        assert!(
+            TraeInstaller::install_hooks_at(&hooks_path, &params, false)
+                .unwrap()
+                .is_none(),
+            "reinstalling an up-to-date config must be idempotent"
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_legacy_and_current_trae_hooks_only() {
+        let (_temp_dir, hooks_path) = setup_test_env();
+        let params = HookInstallerParams {
+            binary_path: PathBuf::from(r"C:\Users\Test User\.git-ai\bin\git-ai.exe"),
+        };
+        let legacy_cmd =
+            render_hook_command(&params.binary_path, TRAE_HOOK_ARGS, HookShell::GitBash);
+        let desired_cmd = TraeInstaller::hook_command(&params.binary_path);
+        let mut settings = json!({ "version": 1, "hooks": {} });
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            settings["hooks"][event] = json!([{
+                "matcher": "*",
+                "hooks": [
+                    {"type": "command", "command": legacy_cmd},
+                    {"type": "command", "command": desired_cmd},
+                    {"type": "command", "command": "echo user hook"},
+                    {"type": "command", "command": "git-ai checkpoint custom-agent --hook-input stdin"}
+                ]
+            }]);
+        }
+        fs::write(&hooks_path, serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+
+        assert!(
+            TraeInstaller::uninstall_hooks_at(&hooks_path, false)
+                .unwrap()
+                .is_some()
+        );
+        let uninstalled = read_settings(&hooks_path);
+        for event in ["PreToolUse", "PostToolUse"] {
+            let commands = event_commands(&uninstalled, event);
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| TraeInstaller::is_trae_checkpoint_command(command)),
+                "{event}"
+            );
+            assert!(commands.contains(&"echo user hook"), "{event}");
+            assert!(
+                commands.contains(&"git-ai checkpoint custom-agent --hook-input stdin"),
+                "{event}"
+            );
+        }
     }
 }

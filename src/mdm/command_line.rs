@@ -7,7 +7,8 @@ use std::path::Path;
 /// not by Rust's `std::process::Command` argument handling.
 ///
 /// Agent runtime map:
-/// - Git Bash: Claude Code, CodeBuddy, Qoder, Trae.
+/// - Git Bash: Claude Code, CodeBuddy, Qoder.
+/// - POSIX shell on macOS/Linux and PowerShell on Windows: Trae.
 /// - POSIX shell on macOS/Linux and `cmd.exe` on Windows: Cursor, Droid,
 ///   Firebender, Gemini.
 /// - Explicit POSIX and PowerShell fields: Codex, GitHub Copilot, Windsurf.
