@@ -8,11 +8,12 @@ use std::path::Path;
 ///
 /// Agent runtime map:
 /// - Git Bash: Claude Code, CodeBuddy CLI.
-/// - `cmd.exe` and Git Bash compatible command string: CodeBuddy IDE and CLI
-///   on Windows, where both products share one settings file.
+/// - `cmd.exe` and Git Bash compatible command string: CodeBuddy IDE/CLI and
+///   Qoder international/CN on Windows, where one renderer must cover product
+///   variants that select different shells.
 /// - POSIX shell on macOS/Linux and PowerShell on Windows: Trae.
 /// - POSIX shell on macOS/Linux and `cmd.exe` on Windows: Cursor, Droid,
-///   Firebender, Gemini, Qoder.
+///   Firebender, Gemini.
 /// - Explicit POSIX and PowerShell fields: Codex, GitHub Copilot, Windsurf.
 /// - Amp, OpenCode, and PI generate JavaScript/TypeScript plugins and keep
 ///   executable/argv separation instead of using this shell-string renderer.

@@ -934,3 +934,23 @@ GUI 反馈后的根因修正：
 | `cargo test --test integration windows_hook_commands:: -- --test-threads 1` | 通过：7 passed，Trae PowerShell、CodeBuddy Cmd/Git Bash 与 Qoder Cmd 均保持成功。 |
 | `cargo build --bin git-ai` | 通过；仅有已记录的仓库基线 warning。 |
 | D 盘 debug `install-hooks --dry-run` | Qoder 已是最新；Trae/CodeBuddy 正确识别为待更新，dry-run 未写外部配置。 |
+
+## 21. Qoder 国际版 Windows Hook runner 修正：2026-07-16
+
+国际版 GUI 实测日志确认，Qoder 国际版在 Windows 上通过 Git for Windows 的
+`bash.exe -c` 执行 Hook，而 Qoder CN 通过 `cmd /c` 执行。原 Cmd renderer 生成的
+`D:\...\git-ai.exe` 在国际版 Bash 中会丢失反斜杠，最终以 exit code 127 失败。
+
+Qoder Windows Hook 现使用 Cmd/Git Bash 共通 renderer：路径统一为正斜杠盘符格式，
+同一命令可由两种产品 runner 执行。Windows 集成测试同时通过真实 Cmd 和 Git Bash
+校验 argv、stdin、cwd，并覆盖空格、`&`、`%` 和单引号路径。
+
+验证与迁移结果：
+
+- `cargo test mdm::agents::qoder::tests --lib -- --test-threads 1`：11 passed。
+- `cargo test --test integration windows_hook_commands:: -- --test-threads 1`：7 passed，Qoder 同一命令在真实 Cmd/Git Bash 中均成功。
+- `cargo test --test integration qoder:: -- --test-threads 1`：11 passed。
+- `cargo build --bin git-ai`：通过，debug 产物继续位于 D 盘。
+- 国际版/CN 配置均已迁移为 `D:/linewell-code/git-ai/target/debug/git-ai.exe checkpoint qoder --hook-input stdin`；dry-run 报告 `Qoder: Hooks already up to date`。
+- 迁移前备份位于 `target/qoder-hook-live-backups-20260716-210455/`。
+- 国际版 GUI 复测通过：2026-07-16 21:35 的 PreToolUse/PostToolUse 均由 Git Bash 执行并以 exit code 0 完成；测试仓库写入 `tool=qoder`、`model=DeepSeek-V4-Pro` 的 `AiAgent` checkpoint。

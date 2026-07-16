@@ -290,7 +290,7 @@ fn codebuddy_hook_command_executes_in_cmd_and_git_bash() {
 }
 
 #[test]
-fn qoder_hook_command_executes_in_cmd() {
+fn qoder_hook_command_executes_in_cmd_and_git_bash() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cwd = temp_dir.path().join("repo & workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -307,27 +307,33 @@ fn qoder_hook_command_executes_in_cmd() {
             .join("git-ai.exe");
         link_or_copy_recorder(&binary);
         let rendered = render_qoder_hook_command_for_test(&binary);
-        let record_path = temp_dir.path().join(format!("qoder-{index}.json"));
 
         assert!(!rendered.contains("/d/"), "{rendered}");
-        let output = run_rendered_command(TestHookShell::Cmd, &rendered, &cwd, &record_path);
-        assert!(
-            output.status.success(),
-            "Qoder Cmd command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(!rendered.contains('\\'), "{rendered}");
 
-        let record: HookCommandRecord =
-            serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
-        assert_eq!(
-            record.args,
-            ["checkpoint", "qoder", "--hook-input", "stdin"]
-        );
-        assert_eq!(
-            fs::canonicalize(record.cwd).unwrap(),
-            fs::canonicalize(&cwd).unwrap()
-        );
-        assert_eq!(record.stdin, HOOK_STDIN);
+        for shell in [TestHookShell::Cmd, TestHookShell::GitBash] {
+            let record_path = temp_dir
+                .path()
+                .join(format!("qoder-{index}-{shell:?}.json"));
+            let output = run_rendered_command(shell, &rendered, &cwd, &record_path);
+            assert!(
+                output.status.success(),
+                "Qoder {shell:?} command failed\ncommand: {rendered}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let record: HookCommandRecord =
+                serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+            assert_eq!(
+                record.args,
+                ["checkpoint", "qoder", "--hook-input", "stdin"]
+            );
+            assert_eq!(
+                fs::canonicalize(record.cwd).unwrap(),
+                fs::canonicalize(&cwd).unwrap()
+            );
+            assert_eq!(record.stdin, HOOK_STDIN);
+        }
     }
 }

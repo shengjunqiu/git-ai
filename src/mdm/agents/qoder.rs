@@ -19,7 +19,7 @@ impl QoderInstaller {
         render_hook_command(
             binary_path,
             QODER_HOOK_ARGS,
-            platform_hook_shell(HookShell::Cmd),
+            platform_hook_shell(HookShell::CmdAndGitBash),
         )
     }
 
@@ -620,7 +620,7 @@ mod tests {
     fn hook_command_uses_the_platform_runtime() {
         let binary = Path::new(r"C:\Users\Test User\.git-ai\bin\git-ai.exe");
         let expected_shell = if cfg!(windows) {
-            HookShell::Cmd
+            HookShell::CmdAndGitBash
         } else {
             HookShell::Posix
         };
