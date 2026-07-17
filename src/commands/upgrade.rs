@@ -19,6 +19,11 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn windows_installer_runs_hidden(silent: bool) -> bool {
+    silent
+}
 #[cfg(windows)]
 type WindowsHandle = *mut std::ffi::c_void;
 #[cfg(windows)]
@@ -520,9 +525,10 @@ fn run_install_script(script_content: &str, tag: &str, silent: bool) -> Result<(
             let _ = crate::commands::daemon::stop_daemon(&daemon_config, Duration::from_secs(10));
         }
 
-        // On Windows, we need to run the installer detached because the current git-ai
-        // binary and shims are in use and need to be replaced. The installer will wait
-        // for the files to be released before proceeding.
+        // On Windows, the installer must outlive this process because the current
+        // git-ai binary is in use and cannot be replaced until we exit. Automatic
+        // updates stay fully hidden; an explicit `git-ai update` inherits the
+        // invoking terminal so its installation output remains visible in real time.
         let pid = std::process::id();
         let log_dir = dirs::home_dir()
             .ok_or_else(|| "Could not determine home directory".to_string())?
@@ -574,11 +580,16 @@ fn run_install_script(script_content: &str, tag: &str, silent: bool) -> Result<(
                 .arg(&ps_wrapper)
                 .env(GIT_AI_RELEASE_ENV, tag);
 
-            // Hide the spawned console to prevent any host/UI bleed-through
-            cmd.creation_flags(CREATE_NO_WINDOW);
-
-            if silent {
+            if windows_installer_runs_hidden(silent) {
+                // Automatic daemon updates must not open a console or write into
+                // whichever application happens to own the daemon process.
+                cmd.creation_flags(CREATE_NO_WINDOW);
                 cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            } else {
+                // The parent must exit to release git-ai.exe. Keep the child
+                // attached to the same terminal so users can watch the verified
+                // installer continue after this launcher returns.
+                cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
             }
 
             cmd.spawn()
@@ -594,12 +605,14 @@ fn run_install_script(script_content: &str, tag: &str, silent: bool) -> Result<(
                         styled_update_text(
                             update_output_supports_ansi(),
                             "1;33",
-                            "Note: The installation is running in the background on Windows."
+                            "Note: Windows is handing installation to a child PowerShell process."
                         )
                     );
                     println!(
                         "This allows the current git-ai process to exit and release file locks."
                     );
+                    println!("Live installation output will continue in this terminal.");
+                    println!("Wait for 'Successfully installed git-ai' before running Git again.");
                     println!("Check the log file for progress: {}", log_path_str);
                     println!(
                         "The installer will stop lingering git-ai background processes if needed, but active git commands can still delay completion."
@@ -1114,6 +1127,18 @@ mod tests {
             styled_update_text(true, "1;33", "A new version is available!"),
             "\x1b[1;33mA new version is available!\x1b[0m"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_manual_windows_installer_keeps_live_output_visible() {
+        assert!(!windows_installer_runs_hidden(false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_automatic_windows_installer_stays_hidden() {
+        assert!(windows_installer_runs_hidden(true));
     }
 
     fn set_test_cache_dir(dir: &tempfile::TempDir) {
