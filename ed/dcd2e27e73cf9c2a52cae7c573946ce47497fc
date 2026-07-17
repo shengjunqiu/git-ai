@@ -1,0 +1,14 @@
+enterprise-server/static/dashboard.html
+  h_8c00d195f87269 483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "eddcd2e27e73cf9c2a52cae7c573946ce47497fc",
+  "prompts": {},
+  "humans": {
+    "h_8c00d195f87269": {
+      "author": "邱圣军"
+    }
+  }
+}
