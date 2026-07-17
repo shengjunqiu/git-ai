@@ -1,0 +1,28 @@
+enterprise-server/static/dashboard.css
+  d637061b13f88c61 130
+enterprise-server/src/handlers/dashboard.rs
+  d637061b13f88c61 328,1679-1680,1711-1724,1755-1756,1786-1794,1796-1797,1805,2987-3097
+enterprise-server/static/dashboard.js
+  d637061b13f88c61 769-771,773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "a07189d9bad13beb159f14ae53cbae3cb9386ada",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 147,
+      "total_deletions": 20,
+      "accepted_lines": 6602,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/05f74ae337ff5f229bdf9fcfd7ab5856df18a411d08062bc0b47b650cb562316"
+    }
+  }
+}
