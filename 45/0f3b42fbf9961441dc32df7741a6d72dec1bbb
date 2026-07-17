@@ -1,0 +1,44 @@
+tests/daemon_mode.rs
+  d637061b13f88c61 151,163-164,172,184-185,200-213,226-230,239-240,261-268,939,943-953,991-1006,1050,1056-1062
+docs/plans/windows-trae-codebuddy-qoder-hooks-fix-task-plan.md
+  d637061b13f88c61 957-1009
+src/daemon/telemetry_worker.rs
+  d637061b13f88c61 20-27,223-265,403-420,427-428,433,450,458,516,895-896,898-903,920-927,929-933,940-971,1007-1010,1023,1135,1140,1158-1216,1225,1231,1248,1253-1255,1267
+scripts/dev.ps1
+  d637061b13f88c61 6-12,139-146
+src/metrics/mod.rs
+  d637061b13f88c61 45-48,50,54,91,110
+src/commands/checkpoint.rs
+  d637061b13f88c61 1012
+src/commands/install_hooks.rs
+  d637061b13f88c61 863
+src/commands/git_handlers.rs
+  d637061b13f88c61 329-345
+src/authorship/post_commit.rs
+  d637061b13f88c61 257,598,615,619,627-643,657,668,775
+src/observability/mod.rs
+  d637061b13f88c61 14-18,21,24-26,37,54,66,73-74,76-78,80-84,86-96,99-100
+src/commands/git_ai_handlers.rs
+  d637061b13f88c61 917
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "450f3b42fbf9961441dc32df7741a6d72dec1bbb",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 519,
+      "total_deletions": 172,
+      "accepted_lines": 16758,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/87d4b30709e41bf10bb5bab4a7d65dc3ff85142b9ee19446d701832fb962d627"
+    }
+  }
+}
