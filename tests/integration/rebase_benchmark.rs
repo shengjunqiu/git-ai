@@ -804,7 +804,7 @@ fn benchmark_rebase_heavy() {
 
     println!(
         "\n━━━ Starting HEAVY rebase ({} commits onto {}) ━━━",
-        num_feature_commits, &default_branch
+        num_feature_commits, default_branch
     );
     let wall_start = Instant::now();
 
@@ -1433,7 +1433,7 @@ fn benchmark_rebase_realistic_monorepo() {
 
     println!(
         "\n--- Starting realistic rebase ({} commits onto {}) ---",
-        num_feature_commits, &default_branch
+        num_feature_commits, default_branch
     );
     let start = Instant::now();
     let result = repo.git_with_env(
@@ -2747,7 +2747,7 @@ fn benchmark_large_scale_mixed() {
 
     println!(
         "\n--- Starting rebase ({} commits onto {}) ---",
-        num_feature_commits, &default_branch
+        num_feature_commits, default_branch
     );
     let wall_start = Instant::now();
     let bench_result = repo.benchmark_git(&["rebase", &default_branch]);

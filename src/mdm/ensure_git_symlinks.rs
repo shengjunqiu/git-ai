@@ -120,6 +120,7 @@ fn symlink_points_to(link_path: &Path, expected_target: &Path) -> bool {
     paths_equal(&resolved_target, expected_target)
 }
 
+#[cfg(unix)]
 fn remove_existing_file(path: &Path) -> Result<(), GitAiError> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return Ok(());

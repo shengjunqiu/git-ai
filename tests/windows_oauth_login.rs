@@ -48,6 +48,7 @@ fn hold_daemon_lock(home: &Path) -> File {
     fs::create_dir_all(&daemon_dir).unwrap();
     OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .share_mode(0)
         .open(daemon_dir.join("daemon.lock"))
@@ -190,12 +191,14 @@ fn write_json_response(stream: &mut TcpStream, body: &Value) {
     .unwrap();
 }
 
-fn spawn_mock_server() -> (
+type MockServer = (
     String,
     Arc<AtomicBool>,
     Arc<Mutex<Vec<Value>>>,
     thread::JoinHandle<()>,
-) {
+);
+
+fn spawn_mock_server() -> MockServer {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

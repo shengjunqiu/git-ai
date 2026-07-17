@@ -183,7 +183,7 @@ impl RepoStorage {
     pub fn delete_working_log_for_base_commit(&self, sha: &str) -> Result<(), GitAiError> {
         let working_log_dir = self.working_logs.join(sha);
         if working_log_dir.exists() {
-            let _guard = acquire_working_log_lock(&working_log_dir)?;
+            let guard = acquire_working_log_lock(&working_log_dir)?;
 
             // Both debug and release: move to old-{sha} for retention
             let old_dir = self.working_logs.join(format!("old-{}", sha));
@@ -191,7 +191,41 @@ impl RepoStorage {
             if old_dir.exists() {
                 fs::remove_dir_all(&old_dir)?;
             }
-            fs::rename(&working_log_dir, &old_dir)?;
+
+            #[cfg(windows)]
+            {
+                // Windows does not allow renaming a directory while this
+                // process still owns an exclusive handle to a file inside it.
+                // The daemon family sequencer already serializes working-log
+                // side effects for this repository, so release the inner lock
+                // immediately before the atomic directory rename.
+                drop(guard);
+                let mut last_error = None;
+                for attempt in 0..=10 {
+                    match fs::rename(&working_log_dir, &old_dir) {
+                        Ok(()) => {
+                            last_error = None;
+                            break;
+                        }
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::PermissionDenied
+                                && attempt < 10 =>
+                        {
+                            last_error = Some(error);
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                if let Some(error) = last_error {
+                    return Err(error.into());
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _guard = guard;
+                fs::rename(&working_log_dir, &old_dir)?;
+            }
 
             // Write a timestamp marker so we know when it was archived
             let marker = old_dir.join(".archived_at");

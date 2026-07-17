@@ -85,14 +85,28 @@ pub fn post_commit_with_final_state(
 
     // Initialize the new storage system
     let repo_storage = &repo.storage;
-    let working_log = repo_storage.working_log_for_base_commit(&parent_sha)?;
+    let working_log = repo_storage
+        .working_log_for_base_commit(&parent_sha)
+        .map_err(|error| {
+            GitAiError::Generic(format!(
+                "failed opening working log for base {}: {}",
+                parent_sha, error
+            ))
+        })?;
 
     // Refresh prompts/transcripts under the same checkpoints lock used by append_checkpoint so
     // concurrent checkpoint appends cannot be lost between a read and rewrite of the JSONL file.
-    let parent_working_log = working_log.mutate_all_checkpoints(|checkpoints| {
-        update_prompts_to_latest(checkpoints)?;
-        Ok(())
-    })?;
+    let parent_working_log = working_log
+        .mutate_all_checkpoints(|checkpoints| {
+            update_prompts_to_latest(checkpoints)?;
+            Ok(())
+        })
+        .map_err(|error| {
+            GitAiError::Generic(format!(
+                "failed refreshing working-log checkpoints for base {}: {}",
+                parent_sha, error
+            ))
+        })?;
 
     // Batch upsert all prompts to database after refreshing (non-fatal if it fails)
     if let Err(e) = batch_upsert_prompts_to_db(&parent_working_log, &working_log, &commit_sha) {
@@ -227,7 +241,12 @@ pub fn post_commit_with_final_state(
         .serialize_to_string()
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
-    notes_add(repo, &commit_sha, &authorship_json)?;
+    notes_add(repo, &commit_sha, &authorship_json).map_err(|error| {
+        GitAiError::Generic(format!(
+            "failed writing authorship note for commit {}: {}",
+            commit_sha, error
+        ))
+    })?;
 
     // Compute stats once (needed for both metrics and terminal output), unless preflight
     // estimate predicts this would be too expensive for the commit hook path.
@@ -297,7 +316,14 @@ pub fn post_commit_with_final_state(
     }
 
     // // Clean up old working log
-    repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
+    repo_storage
+        .delete_working_log_for_base_commit(&parent_sha)
+        .map_err(|error| {
+            GitAiError::Generic(format!(
+                "failed cleaning working log for base {} after commit {}: {}",
+                parent_sha, commit_sha, error
+            ))
+        })?;
 
     // Use Config::fresh() to support runtime config updates
     if !supress_output && !Config::fresh().is_quiet() {
@@ -597,7 +623,7 @@ fn enqueue_prompt_messages_to_cas(
     let api_base_url = Config::fresh().api_base_url().to_string();
     let mut cas_payloads = Vec::new();
 
-    for (_key, prompt) in prompts.iter_mut() {
+    for prompt in prompts.values_mut() {
         if !prompt.messages.is_empty() {
             // Wrap messages in CasMessagesObject and serialize to JSON
             let messages_obj = crate::api::types::CasMessagesObject {

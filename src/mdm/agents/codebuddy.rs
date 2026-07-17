@@ -58,7 +58,7 @@ impl CodeBuddyInstaller {
         {
             let roots = Self::windows_app_roots();
             let tasklist = Self::windows_tasklist();
-            return Self::windows_app_candidates(&home, &roots)
+            Self::windows_app_candidates(&home, &roots)
                 .iter()
                 .any(|path| path.exists())
                 || ["codebuddy", "CodeBuddy", "codebuddy-cn", "CodeBuddyCN"]
@@ -73,7 +73,7 @@ impl CodeBuddyInstaller {
                     "CodeBuddy CN",
                     "CodeBuddyCN",
                     "CodeBuddy-CN",
-                ]);
+                ])
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]

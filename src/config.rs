@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::feature_flags::FeatureFlags;
 use crate::git::repository::Repository;
+#[cfg(not(windows))]
 use crate::mdm::utils::home_dir;
 
 mod paths;

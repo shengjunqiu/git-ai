@@ -4684,6 +4684,94 @@ fn daemon_recovers_from_panic_in_side_effect_pipeline() {
     daemon.shutdown();
 }
 
+/// A Windows named-pipe client can connect to Git's trace endpoint and exit
+/// before writing a frame (for example when Git startup itself fails). This
+/// must be treated as an isolated connection error, not a daemon process abort.
+#[test]
+#[serial]
+#[cfg(windows)]
+fn daemon_survives_trace_client_disconnect_without_payload() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+    let mut daemon = DaemonGuard::start(&repo);
+
+    for _ in 0..5 {
+        let stream = open_local_socket_stream_with_timeout(
+            &daemon.trace_socket_path,
+            DAEMON_TEST_PROBE_TIMEOUT,
+        )
+        .expect("failed to connect to daemon trace pipe");
+        drop(stream);
+    }
+
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        daemon
+            .child
+            .try_wait()
+            .expect("failed to poll daemon")
+            .is_none(),
+        "daemon exited after a trace client disconnected"
+    );
+    assert!(
+        send_control_request(
+            &daemon.control_socket_path,
+            &ControlRequest::StatusFamily {
+                repo_working_dir: repo_workdir_string(&repo),
+            },
+        )
+        .is_ok(),
+        "daemon control pipe became unreachable after trace disconnect"
+    );
+
+    daemon.shutdown();
+}
+
+#[test]
+#[serial]
+fn daemon_persists_metrics_before_acknowledging_submission() {
+    let repo = TestRepo::new_with_mode(GitTestMode::Wrapper);
+    let metrics_dir = tempfile::tempdir().expect("failed to create metrics directory");
+    let metrics_path = metrics_dir.path().join("metrics-db");
+    let metrics_path_string = metrics_path.to_string_lossy().to_string();
+    let mut daemon = DaemonGuard::start_with_env(
+        &repo,
+        &[
+            ("GIT_AI_TEST_METRICS_DB_PATH", &metrics_path_string),
+            ("GIT_AI_API_BASE_URL", "http://127.0.0.1:1"),
+        ],
+    );
+    let event = git_ai::metrics::MetricEvent {
+        event_id: git_ai::metrics::types::MetricEventId::Committed as i32,
+        timestamp: 1_700_000_000,
+        values: HashMap::new(),
+        attrs: HashMap::new(),
+    };
+
+    let response = send_control_request(
+        &daemon.control_socket_path,
+        &ControlRequest::SubmitTelemetry {
+            envelopes: vec![git_ai::daemon::TelemetryEnvelope::Metrics {
+                events: vec![event],
+            }],
+        },
+    )
+    .expect("telemetry submission should receive a daemon response");
+    assert!(
+        response.ok,
+        "daemon should acknowledge a durably persisted telemetry submission: {:?}",
+        response.error
+    );
+
+    let conn = rusqlite::Connection::open(&metrics_path)
+        .expect("daemon should create the durable metrics database");
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM metrics", [], |row| row.get(0))
+        .expect("failed to count persisted metrics");
+    assert_eq!(count, 1, "daemon acknowledged telemetry before persistence");
+
+    daemon.shutdown();
+}
+
 /// When the daemon's socket files are deleted from the filesystem while the
 /// daemon process is still running, the daemon becomes a zombie: alive but
 /// unreachable. New clients cannot connect because the filesystem entries are

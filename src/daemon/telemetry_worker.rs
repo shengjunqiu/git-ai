@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, interval};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(3);
+const METRICS_RETRY_DELAY_SECS: u64 = 300;
 
 thread_local! {
     /// The plain wrapper runs post-commit and the user-facing Git proxy in the
@@ -145,9 +146,15 @@ pub struct DaemonTelemetryWorkerHandle {
 }
 
 impl DaemonTelemetryWorkerHandle {
-    /// Submit telemetry envelopes for batched processing.
-    pub async fn submit_telemetry(&self, envelopes: Vec<TelemetryEnvelope>) {
+    /// Durably persist metrics before acknowledging their submission, then
+    /// retain all envelopes as a trigger for the background flush worker.
+    pub async fn submit_telemetry(
+        &self,
+        envelopes: Vec<TelemetryEnvelope>,
+    ) -> Result<(), crate::error::GitAiError> {
+        persist_metrics_from_envelopes(&envelopes)?;
         self.buffer.lock().await.ingest_envelopes(envelopes);
+        Ok(())
     }
 
     /// Submit CAS records for batched upload.
@@ -160,10 +167,18 @@ impl DaemonTelemetryWorkerHandle {
     /// Used by the daemon process's own `observability::log_*()` calls which
     /// cannot go through the control socket (the daemon can't connect to itself).
     /// Uses `try_lock()` to avoid blocking the caller if the buffer is contested.
-    pub fn submit_telemetry_sync(&self, envelopes: Vec<TelemetryEnvelope>) {
+    pub fn submit_telemetry_sync(&self, envelopes: Vec<TelemetryEnvelope>) -> bool {
+        if let Err(error) = persist_metrics_from_envelopes(&envelopes) {
+            tracing::warn!(
+                %error,
+                "telemetry: failed to persist daemon-internal metrics"
+            );
+            return false;
+        }
         if let Ok(mut buf) = self.buffer.try_lock() {
             buf.ingest_envelopes(envelopes);
         }
+        true
     }
 
     /// Submit CAS records synchronously (best-effort, non-blocking).
@@ -195,8 +210,7 @@ pub fn set_daemon_internal_telemetry(handle: DaemonTelemetryWorkerHandle) {
 /// Returns true if the handle was available and envelopes were submitted.
 pub fn submit_daemon_internal_telemetry(envelopes: Vec<TelemetryEnvelope>) -> bool {
     if let Some(handle) = DAEMON_INTERNAL_TELEMETRY.get() {
-        handle.submit_telemetry_sync(envelopes);
-        true
+        handle.submit_telemetry_sync(envelopes)
     } else {
         false
     }
@@ -232,7 +246,16 @@ pub fn submit_local_telemetry(envelopes: Vec<TelemetryEnvelope>) -> Option<Metri
         return None;
     }
 
-    store_metrics_in_db(&buffer.metrics);
+    if let Err(error) = store_metrics_in_db(&buffer.metrics) {
+        let result = MetricsUploadResult {
+            error: Some(error),
+            ..MetricsUploadResult::default()
+        };
+        LAST_LOCAL_METRICS_UPLOAD_RESULT.with(|last| {
+            *last.borrow_mut() = Some(result.clone());
+        });
+        return Some(result);
+    }
     if should_upload_telemetry() {
         let client = ApiClient::new(ApiContext::new(None));
         let result = drain_stored_metrics_queue(&client, "local_metrics_queue", false);
@@ -291,14 +314,20 @@ async fn telemetry_flush_loop(buffer: Arc<Mutex<TelemetryBuffer>>) {
         let snapshot = {
             let mut buf = buffer.lock().await;
             if buf.is_empty() {
-                continue;
+                None
+            } else {
+                Some(buf.take())
             }
-            buf.take()
         };
 
         // Flush in a blocking task since the underlying HTTP clients are synchronous.
+        // Always inspect the durable metrics queue: metrics can have been persisted
+        // even when the in-memory trigger could not acquire its lock.
         tokio::task::spawn_blocking(move || {
-            flush_telemetry_batch(snapshot);
+            if let Some(snapshot) = snapshot {
+                flush_telemetry_batch(snapshot);
+            }
+            flush_stored_metrics_queue();
         })
         .await
         .unwrap_or_else(|e| {
@@ -310,11 +339,6 @@ async fn telemetry_flush_loop(buffer: Arc<Mutex<TelemetryBuffer>>) {
 fn flush_telemetry_batch(batch: TelemetryBuffer) {
     let config = Config::get();
     let distinct_id = get_or_create_distinct_id();
-
-    // Flush metrics (always processed — uploaded or stored in SQLite)
-    if !batch.metrics.is_empty() {
-        flush_metrics(&batch.metrics);
-    }
 
     // Flush Sentry events (errors, performance, messages)
     let has_sentry_or_posthog =
@@ -336,67 +360,82 @@ fn flush_telemetry_batch(batch: TelemetryBuffer) {
     }
 }
 
-fn flush_metrics(events: &[MetricEvent]) {
+fn flush_stored_metrics_queue() {
+    let db = match MetricsDatabase::global() {
+        Ok(db) => db,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry: failed to open stored metrics queue");
+            return;
+        }
+    };
+    let pending = match db.lock() {
+        Ok(db_lock) => match db_lock.count() {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::warn!(%error, "telemetry: failed to count stored metrics queue");
+                return;
+            }
+        },
+        Err(error) => {
+            tracing::warn!(%error, "telemetry: failed to lock stored metrics queue");
+            return;
+        }
+    };
+    if pending == 0 {
+        return;
+    }
+
     let context = ApiContext::new(None);
     let api_base_url = context.base_url.clone();
     let client = ApiClient::new(context);
 
     let using_default_api = api_base_url == crate::config::DEFAULT_API_BASE_URL;
     let should_upload = !using_default_api || client.is_logged_in() || client.has_api_key();
-    let mut uploaded_live_metrics = false;
-
-    if !should_upload && !events.is_empty() {
+    if !should_upload {
         tracing::warn!(
-            event_count = events.len(),
             api_base_url = %api_base_url,
             "telemetry: metrics upload skipped — not logged in and no API key configured. \
              Set GIT_AI_API_KEY or run `git-ai login` to enable automatic upload, \
              or set GIT_AI_API_BASE_URL to your enterprise server."
         );
+        return;
     }
 
-    for chunk in events.chunks(MAX_METRICS_PER_ENVELOPE) {
-        let batch = MetricsBatch::new(chunk.to_vec());
-        if should_upload {
-            match upload_metrics_with_retry(&client, &batch, "daemon_telemetry") {
-                Ok(()) => {
-                    uploaded_live_metrics = true;
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!(%e, "telemetry: metrics upload failed, storing in local DB");
-                    store_metrics_in_db(chunk);
-                    continue;
-                }
-            }
-        }
-        store_metrics_in_db(chunk);
-    }
-
-    if uploaded_live_metrics {
-        let _ = drain_stored_metrics_queue(&client, "daemon_metrics_queue", true);
-    }
+    let _ = drain_stored_metrics_queue(&client, "daemon_metrics_queue", true);
 }
 
-fn store_metrics_in_db(events: &[MetricEvent]) {
+fn persist_metrics_from_envelopes(
+    envelopes: &[TelemetryEnvelope],
+) -> Result<(), crate::error::GitAiError> {
+    let events: Vec<MetricEvent> = envelopes
+        .iter()
+        .filter_map(|envelope| match envelope {
+            TelemetryEnvelope::Metrics { events } => Some(events.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect();
+    store_metrics_in_db(&events)
+}
+
+fn store_metrics_in_db(events: &[MetricEvent]) -> Result<(), crate::error::GitAiError> {
     if events.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let event_jsons: Vec<String> = events
-        .iter()
-        .filter_map(|e| serde_json::to_string(e).ok())
-        .collect();
+    let event_jsons: Result<Vec<String>, _> = events.iter().map(serde_json::to_string).collect();
+    let event_jsons = event_jsons?;
 
     if event_jsons.is_empty() {
-        return;
+        return Ok(());
     }
 
-    if let Ok(db) = MetricsDatabase::global()
-        && let Ok(mut db_lock) = db.lock()
-    {
-        let _ = db_lock.insert_events(&event_jsons);
-    }
+    let db = MetricsDatabase::global()?;
+    let mut db_lock = db
+        .lock()
+        .map_err(|error| crate::error::GitAiError::Generic(error.to_string()))?;
+    db_lock.insert_events(&event_jsons)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -494,18 +533,56 @@ fn drain_stored_metrics_queue(
         let upload_result = if with_retry {
             upload_metrics_with_retry(client, &metrics_batch, operation)
         } else {
-            client.upload_metrics(&metrics_batch).map(|_| ())
+            client.upload_metrics(&metrics_batch)
         };
         match upload_result {
-            Ok(()) => {
+            Ok(response) => {
+                let successful_indices = response.successful_indices(event_count);
+                let successful_ids: Vec<i64> = successful_indices
+                    .iter()
+                    .map(|index| record_ids[*index])
+                    .collect();
+                let failed_ids: Vec<i64> = response
+                    .errors
+                    .iter()
+                    .filter_map(|error| record_ids.get(error.index).copied())
+                    .collect();
                 if let Ok(mut db_lock) = db.lock() {
-                    let _ = db_lock.delete_records(&record_ids);
+                    let _ = db_lock.delete_records(&successful_ids);
+                    if !failed_ids.is_empty() {
+                        let failure = response
+                            .errors
+                            .iter()
+                            .map(|error| format!("index {}: {}", error.index, error.error))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        let _ = db_lock.record_sync_failure(
+                            &failed_ids,
+                            &failure,
+                            METRICS_RETRY_DELAY_SECS,
+                        );
+                    }
                 }
-                summary.uploaded += event_count;
+                summary.uploaded += successful_ids.len();
                 tracing::info!(
-                    event_count,
+                    event_count = successful_ids.len(),
                     "telemetry: uploaded stored metrics queue batch"
                 );
+                if !response.errors.is_empty() {
+                    let first_error = &response.errors[0];
+                    let error = crate::error::GitAiError::Generic(format!(
+                        "{} metric event(s) were rejected; first error at index {}: {}",
+                        response.errors.len(),
+                        first_error.index,
+                        first_error.error
+                    ));
+                    tracing::warn!(
+                        %error,
+                        "telemetry: rejected metrics remain queued for a later retry"
+                    );
+                    summary.error = Some(error);
+                    break;
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -513,6 +590,13 @@ fn drain_stored_metrics_queue(
                     event_count,
                     "telemetry: stored metrics queue upload failed; records will retry later"
                 );
+                if let Ok(mut db_lock) = db.lock() {
+                    let _ = db_lock.record_sync_failure(
+                        &record_ids,
+                        &e.to_string(),
+                        METRICS_RETRY_DELAY_SECS,
+                    );
+                }
                 summary.error = Some(e);
                 break;
             }
@@ -891,9 +975,9 @@ pub fn telemetry_upload_diagnostics() -> TelemetryUploadDiagnostics {
 
 /// Print a concise post-commit upload status for user-facing CLI output.
 ///
-/// This intentionally reports queue/auth/daemon state, not "uploaded successfully":
-/// daemon uploads are asynchronous, while the local fallback makes one direct
-/// attempt and leaves failures in the durable queue.
+/// Metrics are already durable when this runs. If authentication is available,
+/// make one bounded direct drain so the current commit receives an actual upload
+/// result instead of only reporting asynchronous daemon state.
 pub fn print_commit_upload_notice() {
     print_commit_upload_notice_with_result(None);
 }
@@ -905,36 +989,22 @@ pub fn print_commit_upload_notice_with_result(result: Option<&MetricsUploadResul
     let daemon_available = crate::daemon::daemon_process_active()
         || crate::daemon::telemetry_handle::daemon_telemetry_available();
 
-    // The daemon upload is asynchronous, so its response can arrive after the
-    // post-commit hook exits. Probe the same guarded metrics endpoint with an
-    // empty batch to make an authorization denial visible in this commit's
-    // output without creating an extra tracking event.
-    if daemon_available
-        && (diag.is_logged_in || diag.has_api_key)
-        && let Some(message) = commit_upload_authorization_notice()
-    {
-        eprintln!("{}", message);
-        return;
-    }
-
-    if !daemon_available
-        && let Some(result) = result
+    if let Some(result) = result
         && let Some(message) = direct_upload_result_notice_message(&diag, result)
     {
         eprintln!("{}", message);
         return;
     }
 
-    eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
-    // The local fallback already drains the complete metrics queue once. Avoid
-    // repeating the same network attempt during a single commit when the server
-    // is unavailable. Daemon mode still uses this path to retry older records.
     if daemon_available
         && (diag.is_logged_in || diag.has_api_key)
-        && let Some(message) = retry_stored_metrics_notice()
+        && let Some(message) = drain_commit_metrics_notice(&diag)
     {
         eprintln!("{}", message);
+        return;
     }
+
+    eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
 }
 
 fn direct_upload_result_notice_message(
@@ -967,14 +1037,6 @@ fn direct_upload_result_notice_message(
     }
 
     None
-}
-
-fn commit_upload_authorization_notice() -> Option<String> {
-    let context = ApiContext::new(None).with_timeout(5);
-    let client = ApiClient::new(context);
-    let probe = crate::metrics::MetricsBatch::new(Vec::new());
-
-    upload_authorization_notice_message(&client.upload_metrics(&probe).err()?)
 }
 
 fn upload_authorization_notice_message(error: &crate::error::GitAiError) -> Option<String> {
@@ -1013,13 +1075,14 @@ fn commit_upload_notice_message(
     format!("[git-ai] AI tracking upload queued to {}.", api_base_url)
 }
 
-fn retry_stored_metrics_notice() -> Option<String> {
+fn drain_commit_metrics_notice(diag: &TelemetryUploadDiagnostics) -> Option<String> {
     let context = ApiContext::new(None).with_timeout(10);
     let client = ApiClient::new(context);
     let summary = drain_stored_metrics_queue(&client, "commit_metrics_queue", false);
-    stored_metrics_retry_notice_message(&summary)
+    direct_upload_result_notice_message(diag, &summary)
 }
 
+#[cfg(test)]
 fn stored_metrics_retry_notice_message(summary: &MetricsUploadResult) -> Option<String> {
     if summary.pending_before == 0
         && summary.uploaded == 0
@@ -1500,7 +1563,7 @@ mod tests {
     #[test]
     fn test_store_metrics_in_db_empty() {
         // Should not panic with empty events
-        store_metrics_in_db(&[]);
+        assert!(store_metrics_in_db(&[]).is_ok());
     }
 
     // ==================== TelemetryBuffer Tests ====================

@@ -215,14 +215,27 @@ pub fn send_via_daemon(request: &ControlRequest) -> Result<ControlResponse, Stri
 
 /// Submit telemetry envelopes to the daemon over the control socket.
 ///
-/// Fire-and-forget: sends the request but doesn't propagate errors
-/// (silently drops on failure since telemetry is best-effort).
-pub fn submit_telemetry(envelopes: Vec<TelemetryEnvelope>) {
+/// Returns the original envelopes when the daemon cannot durably accept them,
+/// allowing the caller to persist metrics through the local fallback.
+pub fn submit_telemetry(
+    envelopes: Vec<TelemetryEnvelope>,
+) -> Result<(), (String, Vec<TelemetryEnvelope>)> {
     if envelopes.is_empty() {
-        return;
+        return Ok(());
     }
-    let request = ControlRequest::SubmitTelemetry { envelopes };
-    let _ = send_via_daemon(&request);
+    let request = ControlRequest::SubmitTelemetry {
+        envelopes: envelopes.clone(),
+    };
+    match send_via_daemon(&request) {
+        Ok(response) if response.ok => Ok(()),
+        Ok(response) => Err((
+            response
+                .error
+                .unwrap_or_else(|| "daemon rejected telemetry submission".to_string()),
+            envelopes,
+        )),
+        Err(error) => Err((error, envelopes)),
+    }
 }
 
 /// Submit CAS sync records to the daemon over the control socket.
