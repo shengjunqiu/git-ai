@@ -17,11 +17,23 @@ fn submit_telemetry_envelope(
     envelopes: Vec<crate::daemon::TelemetryEnvelope>,
 ) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     if crate::daemon::telemetry_handle::daemon_telemetry_available() {
-        crate::daemon::telemetry_handle::submit_telemetry(envelopes);
-        None
+        match crate::daemon::telemetry_handle::submit_telemetry(envelopes) {
+            Ok(()) => None,
+            Err((error, envelopes)) => {
+                tracing::warn!(
+                    %error,
+                    "telemetry: daemon submission failed; using durable local fallback"
+                );
+                crate::daemon::telemetry_worker::submit_local_telemetry(envelopes)
+            }
+        }
     } else if crate::daemon::daemon_process_active() {
-        crate::daemon::telemetry_worker::submit_daemon_internal_telemetry(envelopes);
-        None
+        let fallback = envelopes.clone();
+        if crate::daemon::telemetry_worker::submit_daemon_internal_telemetry(envelopes) {
+            None
+        } else {
+            crate::daemon::telemetry_worker::submit_local_telemetry(fallback)
+        }
     } else {
         crate::daemon::telemetry_worker::submit_local_telemetry(envelopes)
     }
@@ -73,9 +85,7 @@ pub fn log_metrics(
     events: Vec<MetricEvent>,
 ) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     #[cfg(any(test, feature = "test-support"))]
-    if std::env::var_os("GIT_AI_TEST_ENABLE_TELEMETRY").is_none() {
-        return None;
-    }
+    std::env::var_os("GIT_AI_TEST_ENABLE_TELEMETRY")?;
 
     if events.is_empty() {
         return None;

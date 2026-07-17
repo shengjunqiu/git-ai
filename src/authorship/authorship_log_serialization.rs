@@ -165,7 +165,7 @@ impl AuthorshipLog {
         for file_attestation in &self.attestations {
             // Quote file names that contain spaces or whitespace
             let file_path = if needs_quoting(&file_attestation.file_path) {
-                format!("\"{}\"", &file_attestation.file_path)
+                format!("\"{}\"", file_attestation.file_path)
             } else {
                 file_attestation.file_path.clone()
             };
@@ -289,7 +289,7 @@ impl AuthorshipLog {
                     } else {
                         // Try to find prompt record using git grep
                         let shas =
-                            crate::git::refs::grep_ai_notes(repo, &format!("\"{}\"", &entry.hash))
+                            crate::git::refs::grep_ai_notes(repo, &format!("\"{}\"", entry.hash))
                                 .unwrap_or_default();
                         let result = if let Some(latest_sha) = shas.first() {
                             if let Some(authorship_log) =

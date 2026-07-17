@@ -14,16 +14,17 @@ const RETRY_DELAYS_SECS: [u64; 1] = [60];
 
 /// Upload metrics batch with retry logic.
 ///
-/// Returns Ok(()) on success (200 response, even with partial errors).
+/// Returns the server response on success so callers can retain records that
+/// were rejected from an otherwise successful batch.
 /// Returns Err on failure after all retries exhausted.
 ///
-/// Partial errors (200 + errors array) are logged to Sentry but not retried,
-/// since validation errors won't succeed on retry.
+/// Partial errors (200 + errors array) are logged to Sentry and returned to the
+/// caller, which decides how successful and rejected records are persisted.
 pub fn upload_metrics_with_retry(
     client: &ApiClient,
     batch: &MetricsBatch,
     operation: &str,
-) -> Result<(), GitAiError> {
+) -> Result<MetricsUploadResponse, GitAiError> {
     // First attempt (no delay), then retry with delays
     for (attempt, delay_secs) in std::iter::once(&0u64)
         .chain(RETRY_DELAYS_SECS.iter())
@@ -54,7 +55,7 @@ pub fn upload_metrics_with_retry(
                         })),
                     );
                 }
-                return Ok(());
+                return Ok(response);
             }
             Err(e) => {
                 // Administrator authorization is a durable policy decision, not a

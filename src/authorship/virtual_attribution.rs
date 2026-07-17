@@ -2132,7 +2132,7 @@ impl VirtualAttributions {
         let valid_prompt_ids: HashSet<String> = self.prompts.keys().cloned().collect();
 
         // Remove attributions that reference filtered-out prompts
-        for (_file_path, (char_attrs, _line_attrs)) in self.attributions.iter_mut() {
+        for (char_attrs, _line_attrs) in self.attributions.values_mut() {
             char_attrs.retain(|attr| {
                 // Keep human attributions (not in original prompts at all)
                 // OR keep AI attributions that are still valid after filtering

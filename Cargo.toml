@@ -51,6 +51,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 junction = "1.4.2"
 named_pipe = "0.4.1"
 widestring = "1"
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [features]
 default = ["keyring"]
@@ -78,6 +79,9 @@ split-debuginfo = "unpacked"
 
 [profile.dev.build-override]
 opt-level = 2                      # Optimize proc macros and build scripts
+
+[patch.crates-io]
+interprocess = { path = "vendor/interprocess" }
 
 [[test]]
 name = "integration"

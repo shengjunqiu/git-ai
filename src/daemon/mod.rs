@@ -36,7 +36,7 @@ use crate::{
 use interprocess::local_socket::{ListenerOptions, prelude::*};
 #[cfg(windows)]
 use interprocess::os::windows::{
-    named_pipe::{PipeListener, PipeListenerOptions, pipe_mode},
+    named_pipe::{PipeListener, PipeListenerOptions, PipeStream, pipe_mode},
     security_descriptor::SecurityDescriptor,
 };
 #[cfg(windows)]
@@ -47,6 +47,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -101,7 +103,7 @@ const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_CONTROL_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACE_FRAME_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(windows)]
-const WINDOWS_PIPE_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WINDOWS_PIPE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(windows)]
 const WINDOWS_TRACE_PIPE_WORKERS: usize = 16;
 #[cfg(windows)]
@@ -2506,7 +2508,13 @@ fn apply_rewrite_side_effect(
         &rewrite_event,
         &author,
         normalized_carryover_snapshot_ref,
-    )?;
+    )
+    .map_err(|error| {
+        GitAiError::Generic(format!(
+            "daemon pre-commit checkpoint replay failed for {}: {}",
+            worktree, error
+        ))
+    })?;
     // Read the current log BEFORE appending, so we can pass it to authorship
     // processing.  We intentionally defer the append until AFTER authorship
     // succeeds — this prevents a failed rewrite from being permanently marked
@@ -2523,7 +2531,13 @@ fn apply_rewrite_side_effect(
                 author.clone(),
                 true,
                 final_state_override,
-            )?;
+            )
+            .map_err(|error| {
+                GitAiError::Generic(format!(
+                    "daemon post-commit authorship failed for {}: {}",
+                    worktree, error
+                ))
+            })?;
         }
         RewriteLogEvent::CommitAmend { commit_amend } => {
             let final_state_override =
@@ -6369,6 +6383,17 @@ impl ActorDaemonCoordinator {
             primary,
             "commit" | "rebase" | "merge" | "cherry-pick" | "am" | "stash" | "reset" | "push"
         );
+        #[cfg(windows)]
+        if is_write_op {
+            // Trace2 emits its terminal frame from Git's atexit path, before
+            // every process-owned repository handle is guaranteed to be
+            // closed. Starting authorship/notes side effects immediately can
+            // therefore race the exiting Git process and fail with
+            // ERROR_ACCESS_DENIED on Windows. The daemon path is asynchronous,
+            // so allow that short handle-release window before touching the
+            // repository.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         if is_write_op && cmd.exit_code == 0 {
             let repo_path = cmd
                 .worktree
@@ -6894,12 +6919,15 @@ impl ActorDaemonCoordinator {
                     .map(|v| ControlResponse::ok(None, Some(v)))
                     .map_err(GitAiError::from)
                 }),
-            ControlRequest::SubmitTelemetry { envelopes } => {
-                if let Some(worker) = &self.telemetry_worker {
-                    worker.submit_telemetry(envelopes).await;
-                }
-                Ok(ControlResponse::ok(None, None))
-            }
+            ControlRequest::SubmitTelemetry { envelopes } => match self.telemetry_worker.as_ref() {
+                Some(worker) => worker
+                    .submit_telemetry(envelopes)
+                    .await
+                    .map(|()| ControlResponse::ok(None, None)),
+                None => Err(GitAiError::Generic(
+                    "daemon telemetry worker is unavailable".to_string(),
+                )),
+            },
             ControlRequest::SubmitCas { records } => {
                 if let Some(worker) = &self.telemetry_worker {
                     worker.submit_cas(records).await;
@@ -7113,6 +7141,92 @@ fn control_listener_loop_actor(
 type WindowsPipeListener = PipeListener<pipe_mode::Bytes, pipe_mode::Bytes>;
 
 #[cfg(windows)]
+type WindowsPipeStream = PipeStream<pipe_mode::Bytes, pipe_mode::Bytes>;
+
+#[cfg(windows)]
+struct WindowsTimedPipeStream<'a> {
+    inner: &'a mut WindowsPipeStream,
+    timeout: Duration,
+}
+
+#[cfg(windows)]
+fn is_windows_pipe_disconnect_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(109 | 232 | 233))
+}
+
+#[cfg(windows)]
+impl WindowsTimedPipeStream<'_> {
+    fn wait_for_data(&self) -> std::io::Result<bool> {
+        let started = Instant::now();
+        loop {
+            let mut available = 0u32;
+            let result = unsafe {
+                windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                    self.inner.as_raw_handle() as isize,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            };
+            if result == 0 {
+                let error = std::io::Error::last_os_error();
+                // Named-pipe clients commonly close immediately after writing
+                // their final frame. Treat the disconnected states as EOF so
+                // the caller can finalize roots observed on this connection.
+                // Propagating these as read errors skips connection-close
+                // bookkeeping and can leave otherwise complete Git commands
+                // stuck in the trace normalizer.
+                if is_windows_pipe_disconnect_error(&error) {
+                    return Ok(false);
+                }
+                return Err(error);
+            }
+            if available > 0 {
+                return Ok(true);
+            }
+            if started.elapsed() >= self.timeout {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("timed out waiting {:?} for named pipe data", self.timeout),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Read for WindowsTimedPipeStream<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if !self.wait_for_data()? {
+            // PeekNamedPipe may report a disconnected client even though the
+            // server still has bytes buffered from the client's final write.
+            // Give ReadFileEx one last chance to drain those bytes. The local
+            // interprocess patch makes its immediate-error path safe; only a
+            // confirmed disconnected read is converted to EOF.
+            return match self.inner.read(buffer) {
+                Err(error) if is_windows_pipe_disconnect_error(&error) => Ok(0),
+                result => result,
+            };
+        }
+        self.inner.read(buffer)
+    }
+}
+
+#[cfg(windows)]
+impl Write for WindowsTimedPipeStream<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(windows)]
 fn windows_pipe_listener(
     pipe_path: &Path,
     worker_count: usize,
@@ -7221,20 +7335,16 @@ fn windows_control_pipe_worker_loop(
                 e
             ))
         })?;
-        server.set_nonblocking(true).map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed configuring control pipe {} read timeout: {}",
-                control_socket_path.display(),
-                e
-            ))
-        })?;
-
         if coordinator.is_shutting_down() {
             break;
         }
 
         {
-            let mut reader = BufReader::new(&mut server);
+            let stream = WindowsTimedPipeStream {
+                inner: &mut server,
+                timeout: WINDOWS_PIPE_READ_TIMEOUT,
+            };
+            let mut reader = BufReader::new(stream);
             if let Err(e) = handle_control_connection_actor_reader(
                 &mut reader,
                 coordinator.clone(),
@@ -7380,20 +7490,16 @@ fn windows_trace_pipe_worker_loop(
                 e
             ))
         })?;
-        server.set_nonblocking(true).map_err(|e| {
-            GitAiError::Generic(format!(
-                "failed configuring trace pipe {} read timeout: {}",
-                trace_socket_path.display(),
-                e
-            ))
-        })?;
-
         if coordinator.is_shutting_down() {
             break;
         }
 
         {
-            let mut reader = BufReader::new(&mut server);
+            let stream = WindowsTimedPipeStream {
+                inner: &mut server,
+                timeout: WINDOWS_PIPE_READ_TIMEOUT,
+            };
+            let mut reader = BufReader::new(stream);
             if let Err(e) = handle_trace_connection_actor_reader(&mut reader, coordinator.clone()) {
                 tracing::debug!(%e, "trace connection error");
             }

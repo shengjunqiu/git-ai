@@ -1702,7 +1702,7 @@ fn output_default_format(
             let short_hash = &author[..7.min(author.len())];
             format!("{} [{}]", prompt.agent_id.tool, short_hash)
         } else if options.show_email {
-            format!("{} <{}>", author, &hunk.author_email)
+            format!("{} <{}>", author, hunk.author_email)
         } else {
             author.to_string()
         };
@@ -1754,7 +1754,7 @@ fn output_default_format(
                 let short_hash = &author[..7.min(author.len())];
                 format!("{} [{}]", prompt.agent_id.tool, short_hash)
             } else if options.show_email {
-                format!("{} <{}>", author, &hunk.author_email)
+                format!("{} <{}>", author, hunk.author_email)
             } else {
                 author.to_string()
             };

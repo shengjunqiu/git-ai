@@ -2,7 +2,6 @@ use crate::api::client::ApiClient;
 use crate::api::types::{ApiErrorResponse, CreateBundleRequest, CreateBundleResponse};
 use crate::error::GitAiError;
 
-
 /// Bundle 相关的 API 操作。
 impl ApiClient {
     /// 创建一个 bundle，并返回服务端生成的响应数据。

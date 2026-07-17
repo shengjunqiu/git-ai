@@ -321,6 +321,41 @@ impl MetricsDatabase {
         Ok(())
     }
 
+    /// Keep rejected or failed records pending while delaying their next retry.
+    pub fn record_sync_failure(
+        &mut self,
+        ids: &[i64],
+        error: &str,
+        retry_after_secs: u64,
+    ) -> Result<(), GitAiError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let now_ts = current_unix_ts();
+        let next_retry_at = now_ts.saturating_add(retry_after_secs as i64);
+        let tx = self.conn.transaction()?;
+
+        {
+            let mut stmt = tx.prepare_cached(
+                "UPDATE metrics SET \
+                    attempts = attempts + 1, \
+                    last_sync_error = ?1, \
+                    last_sync_at = ?2, \
+                    next_retry_at = ?3, \
+                    processing_started_at = NULL \
+                 WHERE id = ?4 AND delivered_ts IS NULL",
+            )?;
+
+            for id in ids {
+                stmt.execute(params![error, now_ts, next_retry_at, id])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Get count of pending metrics
     pub fn count(&self) -> Result<usize, GitAiError> {
         let count: i64 = if self.column_exists("metrics", "delivered_ts")? {
@@ -603,6 +638,30 @@ mod tests {
         let remaining = db.get_batch(10).unwrap();
         assert_eq!(remaining.len(), 1);
         assert!(remaining[0].event_json.contains("\"t\":3"));
+    }
+
+    #[test]
+    fn test_record_sync_failure_keeps_record_and_delays_retry() {
+        let (mut db, _temp_dir) = create_test_db();
+        db.insert_events(&[r#"{"t":1,"e":1,"v":{},"a":{}}"#.to_string()])
+            .unwrap();
+        let id = db.get_batch(1).unwrap()[0].id;
+
+        db.record_sync_failure(&[id], "validation failed", 300)
+            .unwrap();
+
+        assert_eq!(db.count().unwrap(), 1);
+        assert!(db.get_batch(1).unwrap().is_empty());
+        let (attempts, last_error): (i64, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT attempts, last_sync_error FROM metrics WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(attempts, 1);
+        assert_eq!(last_error.as_deref(), Some("validation failed"));
     }
 
     #[test]

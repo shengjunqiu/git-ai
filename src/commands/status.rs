@@ -207,7 +207,7 @@ fn build_checkpoint_infos(
         let tool_model = checkpoint
             .agent_id
             .as_ref()
-            .map(|a| format!("{} {}", capitalize(&a.tool), &a.model))
+            .map(|a| format!("{} {}", capitalize(&a.tool), a.model))
             .unwrap_or_else(|| default_user_name.to_string());
 
         let is_human = checkpoint.kind == CheckpointKind::Human;

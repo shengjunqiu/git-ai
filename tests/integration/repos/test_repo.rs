@@ -4,7 +4,7 @@ use git_ai::authorship::authorship_log_serialization::AuthorshipLog;
 use git_ai::authorship::stats::CommitStats;
 use git_ai::config::ConfigPatch;
 use git_ai::daemon::{
-    ControlRequest, DaemonConfig, local_socket_connects_with_timeout, send_control_request,
+    ControlRequest, DaemonConfig, open_local_socket_stream_with_timeout, send_control_request,
     send_control_request_with_timeout,
 };
 use git_ai::feature_flags::FeatureFlags;
@@ -17,7 +17,7 @@ use rand::RngExt;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -208,24 +208,19 @@ impl DaemonProcess {
             );
             match status {
                 Ok(response) => {
-                    if local_socket_connects_with_timeout(
-                        &self.trace_socket_path,
-                        DAEMON_TEST_PROBE_TIMEOUT,
-                    )
-                    .is_ok()
-                    {
-                        let baseline_seq = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data.get("latest_seq"))
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0);
-                        self.wait_until_trace_pipeline_ready(
-                            repo_path,
-                            &repo_working_dir,
-                            baseline_seq,
-                        )?;
-                        return Ok(());
+                    let baseline_seq = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("latest_seq"))
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    match self.wait_until_trace_pipeline_ready(
+                        repo_path,
+                        &repo_working_dir,
+                        baseline_seq,
+                    ) {
+                        Ok(()) => return Ok(()),
+                        Err(error) => last_status_error = Some(error),
                     }
                 }
                 Err(error) => {
@@ -250,38 +245,41 @@ impl DaemonProcess {
         repo_working_dir: &str,
         baseline_seq: u64,
     ) -> Result<(), String> {
-        #[cfg(windows)]
-        let null_hooks = "NUL";
-        #[cfg(not(windows))]
-        let null_hooks = "/dev/null";
-
-        let mut command = Command::new(real_git_executable());
-        command
-            .arg("-C")
-            .arg(repo_path)
-            .arg("-c")
-            .arg(format!("core.hooksPath={}", null_hooks))
-            .args(["notes", "--ref=ai", "list"])
-            .env(
-                "GIT_TRACE2_EVENT",
-                DaemonConfig::trace2_event_target_for_path(&self.trace_socket_path),
-            )
-            .env("GIT_TRACE2_EVENT_NESTING", "10");
-        configure_test_home_env(&mut command, &self.daemon_home);
-
-        let output = command.output().map_err(|error| {
-            format!(
-                "failed to run daemon readiness probe git notes list: {}",
-                error
-            )
-        })?;
-        if !output.status.success() {
-            return Err(format!(
-                "daemon readiness probe git notes list failed:\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ));
+        let sid = format!("daemon-readiness-{}-{}", self.pid, baseline_seq);
+        let payloads = [
+            serde_json::json!({
+                "event": "start",
+                "sid": sid,
+                "ts": 1,
+                "argv": ["git", "git-ai-daemon-readiness-probe"],
+                "cwd": repo_path.to_string_lossy(),
+            }),
+            serde_json::json!({
+                "event": "atexit",
+                "sid": sid,
+                "ts": 2,
+                "code": 0,
+            }),
+        ];
+        let mut stream = open_local_socket_stream_with_timeout(
+            &self.trace_socket_path,
+            DAEMON_TEST_PROBE_TIMEOUT,
+        )
+        .map_err(|error| format!("failed connecting daemon trace readiness probe: {}", error))?;
+        for payload in payloads {
+            let raw = serde_json::to_string(&payload)
+                .map_err(|error| format!("failed serializing trace readiness probe: {}", error))?;
+            stream
+                .write_all(raw.as_bytes())
+                .and_then(|()| stream.write_all(b"\n"))
+                .map_err(|error| {
+                    format!("failed writing daemon trace readiness probe: {}", error)
+                })?;
         }
+        stream
+            .flush()
+            .map_err(|error| format!("failed flushing daemon trace readiness probe: {}", error))?;
+        drop(stream);
 
         let start = Instant::now();
         while start.elapsed() < DAEMON_TEST_TRACE_READY_TIMEOUT {
