@@ -860,7 +860,7 @@ fn emit_install_hooks_metrics(results: &[(String, InstallResult)]) {
             values = values.message_null();
         }
 
-        crate::metrics::record(values, attrs.clone());
+        let _ = crate::metrics::record(values, attrs.clone());
     }
 }
 

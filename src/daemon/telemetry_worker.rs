@@ -17,6 +17,14 @@ use tokio::time::{Duration, interval};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(3);
 
+thread_local! {
+    /// The plain wrapper runs post-commit and the user-facing Git proxy in the
+    /// same process. Keep the latest direct metrics result until the proxy —
+    /// the owner of terminal output — consumes it after post-command hooks.
+    static LAST_LOCAL_METRICS_UPLOAD_RESULT: std::cell::RefCell<Option<MetricsUploadResult>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Accumulated telemetry events waiting to be flushed.
 struct TelemetryBuffer {
     errors: Vec<ErrorEvent>,
@@ -212,6 +220,49 @@ pub fn submit_daemon_internal_cas(records: Vec<CasSyncPayload>) -> bool {
     }
 }
 
+/// Persist and opportunistically upload telemetry when no daemon route exists.
+///
+/// Synchronous/local tracking must never discard committed metrics. Store them
+/// before attempting one immediate upload without the daemon's 60-second retry;
+/// failed records remain in SQLite for a later commit or explicit flush.
+pub fn submit_local_telemetry(envelopes: Vec<TelemetryEnvelope>) -> Option<MetricsUploadResult> {
+    let mut buffer = TelemetryBuffer::new();
+    buffer.ingest_envelopes(envelopes);
+    if buffer.metrics.is_empty() {
+        return None;
+    }
+
+    store_metrics_in_db(&buffer.metrics);
+    if should_upload_telemetry() {
+        let client = ApiClient::new(ApiContext::new(None));
+        let result = drain_stored_metrics_queue(&client, "local_metrics_queue", false);
+        LAST_LOCAL_METRICS_UPLOAD_RESULT.with(|last| {
+            *last.borrow_mut() = Some(result.clone());
+        });
+        return Some(result);
+    }
+
+    None
+}
+
+/// Consume the latest synchronous metrics upload result in this thread.
+///
+/// This is intentionally one-shot so nested authorship work cannot cause the
+/// parent Git proxy to print the same status twice.
+pub fn take_local_metrics_upload_result() -> Option<MetricsUploadResult> {
+    LAST_LOCAL_METRICS_UPLOAD_RESULT.with(|last| last.borrow_mut().take())
+}
+
+/// Attempt a direct CAS upload when post-commit processing has no daemon.
+///
+/// The caller has already inserted every payload into `cas_sync_queue`, so a
+/// failed or unauthorized upload remains durable for a later retry.
+pub fn submit_local_cas(records: Vec<CasSyncPayload>) {
+    if !records.is_empty() {
+        flush_cas(records);
+    }
+}
+
 /// Spawn the telemetry worker task. Returns a handle for submitting events.
 ///
 /// The worker runs a flush loop every 3 seconds, sending accumulated events
@@ -349,25 +400,37 @@ fn store_metrics_in_db(events: &[MetricEvent]) {
 }
 
 #[derive(Debug, Default, Clone)]
-struct StoredMetricsDrainSummary {
-    pending_before: usize,
-    uploaded: usize,
-    discarded_invalid: usize,
-    remaining: usize,
-    error: Option<String>,
+pub struct MetricsUploadResult {
+    pub pending_before: usize,
+    pub uploaded: usize,
+    pub discarded_invalid: usize,
+    pub remaining: usize,
+    pub error: Option<crate::error::GitAiError>,
+}
+
+impl MetricsUploadResult {
+    pub fn merge(&mut self, other: Self) {
+        self.pending_before += other.pending_before;
+        self.uploaded += other.uploaded;
+        self.discarded_invalid += other.discarded_invalid;
+        self.remaining = other.remaining;
+        if other.error.is_some() {
+            self.error = other.error;
+        }
+    }
 }
 
 fn drain_stored_metrics_queue(
     client: &ApiClient,
     operation: &str,
     with_retry: bool,
-) -> StoredMetricsDrainSummary {
-    let mut summary = StoredMetricsDrainSummary::default();
+) -> MetricsUploadResult {
+    let mut summary = MetricsUploadResult::default();
     let db = match MetricsDatabase::global() {
         Ok(db) => db,
         Err(e) => {
             tracing::warn!(%e, "telemetry: failed to open stored metrics queue");
-            summary.error = Some(e.to_string());
+            summary.error = Some(e);
             return summary;
         }
     };
@@ -384,7 +447,7 @@ fn drain_stored_metrics_queue(
                 Ok(lock) => lock,
                 Err(e) => {
                     tracing::warn!(%e, "telemetry: failed to lock stored metrics queue");
-                    summary.error = Some(e.to_string());
+                    summary.error = Some(crate::error::GitAiError::Generic(e.to_string()));
                     break;
                 }
             };
@@ -392,7 +455,7 @@ fn drain_stored_metrics_queue(
                 Ok(batch) => batch,
                 Err(e) => {
                     tracing::warn!(%e, "telemetry: failed to read stored metrics queue");
-                    summary.error = Some(e.to_string());
+                    summary.error = Some(e);
                     break;
                 }
             }
@@ -450,7 +513,7 @@ fn drain_stored_metrics_queue(
                     event_count,
                     "telemetry: stored metrics queue upload failed; records will retry later"
                 );
-                summary.error = Some(e.to_string());
+                summary.error = Some(e);
                 break;
             }
         }
@@ -829,8 +892,15 @@ pub fn telemetry_upload_diagnostics() -> TelemetryUploadDiagnostics {
 /// Print a concise post-commit upload status for user-facing CLI output.
 ///
 /// This intentionally reports queue/auth/daemon state, not "uploaded successfully":
-/// the actual network upload is asynchronous and may still retry in the background.
+/// daemon uploads are asynchronous, while the local fallback makes one direct
+/// attempt and leaves failures in the durable queue.
 pub fn print_commit_upload_notice() {
+    print_commit_upload_notice_with_result(None);
+}
+
+/// Print post-commit status using the actual synchronous upload result when
+/// the caller performed a daemon-independent upload in this process.
+pub fn print_commit_upload_notice_with_result(result: Option<&MetricsUploadResult>) {
     let diag = telemetry_upload_diagnostics();
     let daemon_available = crate::daemon::daemon_process_active()
         || crate::daemon::telemetry_handle::daemon_telemetry_available();
@@ -847,12 +917,56 @@ pub fn print_commit_upload_notice() {
         return;
     }
 
+    if !daemon_available
+        && let Some(result) = result
+        && let Some(message) = direct_upload_result_notice_message(&diag, result)
+    {
+        eprintln!("{}", message);
+        return;
+    }
+
     eprintln!("{}", commit_upload_notice_message(&diag, daemon_available));
-    if (diag.is_logged_in || diag.has_api_key)
+    // The local fallback already drains the complete metrics queue once. Avoid
+    // repeating the same network attempt during a single commit when the server
+    // is unavailable. Daemon mode still uses this path to retry older records.
+    if daemon_available
+        && (diag.is_logged_in || diag.has_api_key)
         && let Some(message) = retry_stored_metrics_notice()
     {
         eprintln!("{}", message);
     }
+}
+
+fn direct_upload_result_notice_message(
+    diag: &TelemetryUploadDiagnostics,
+    result: &MetricsUploadResult,
+) -> Option<String> {
+    if let Some(error) = result.error.as_ref() {
+        if let Some(message) = upload_authorization_notice_message(error) {
+            return Some(message);
+        }
+
+        return Some(format!(
+            "[git-ai] AI tracking saved locally. Upload failed; {} event(s) remain queued for the next commit.",
+            result.remaining
+        ));
+    }
+
+    if result.uploaded > 0 && result.remaining == 0 {
+        return Some(format!(
+            "[git-ai] AI tracking uploaded successfully to {}.",
+            crate::config::normalize_api_base_url(&diag.api_base_url)
+        ));
+    }
+
+    if result.remaining > 0 {
+        return Some(format!(
+            "[git-ai] AI tracking saved locally; {} event(s) remain queued for the next commit.",
+            result.remaining
+        ));
+    }
+
+    None
 }
 
 fn commit_upload_authorization_notice() -> Option<String> {
@@ -890,7 +1004,10 @@ fn commit_upload_notice_message(
     }
 
     if !daemon_available {
-        return "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it.".to_string();
+        return format!(
+            "[git-ai] AI tracking upload processed directly to {}; failures remain queued locally.",
+            api_base_url
+        );
     }
 
     format!("[git-ai] AI tracking upload queued to {}.", api_base_url)
@@ -903,7 +1020,7 @@ fn retry_stored_metrics_notice() -> Option<String> {
     stored_metrics_retry_notice_message(&summary)
 }
 
-fn stored_metrics_retry_notice_message(summary: &StoredMetricsDrainSummary) -> Option<String> {
+fn stored_metrics_retry_notice_message(summary: &MetricsUploadResult) -> Option<String> {
     if summary.pending_before == 0
         && summary.uploaded == 0
         && summary.discarded_invalid == 0
@@ -1015,12 +1132,12 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_upload_notice_reports_missing_daemon_after_auth() {
+    fn test_commit_upload_notice_reports_direct_fallback_after_auth() {
         let diag = test_diag("https://enterprise.example.com", false, true, false);
         let message = commit_upload_notice_message(&diag, false);
         assert_eq!(
             message,
-            "[git-ai] AI tracking saved locally. Upload not queued: background daemon is not running. Run `git-ai install-hooks` to restart it."
+            "[git-ai] AI tracking upload processed directly to https://enterprise.example.com; failures remain queued locally."
         );
     }
 
@@ -1039,6 +1156,65 @@ mod tests {
     }
 
     #[test]
+    fn test_direct_upload_notice_reports_actual_success() {
+        let diag = test_diag("https://enterprise.example.com/", false, true, false);
+        let result = MetricsUploadResult {
+            pending_before: 3,
+            uploaded: 3,
+            discarded_invalid: 0,
+            remaining: 0,
+            error: None,
+        };
+
+        assert_eq!(
+            direct_upload_result_notice_message(&diag, &result).as_deref(),
+            Some("[git-ai] AI tracking uploaded successfully to https://enterprise.example.com.")
+        );
+    }
+
+    #[test]
+    fn test_direct_upload_notice_reports_actual_authorization_block() {
+        let diag = test_diag("https://enterprise.example.com", false, true, false);
+        let result = MetricsUploadResult {
+            pending_before: 5,
+            uploaded: 0,
+            discarded_invalid: 0,
+            remaining: 5,
+            error: Some(crate::error::GitAiError::UploadForbidden(
+                "Developer is not authorized to upload Git tracking data".to_string(),
+            )),
+        };
+
+        assert_eq!(
+            direct_upload_result_notice_message(&diag, &result).as_deref(),
+            Some(
+                "[git-ai] AI tracking saved locally. Upload blocked: an organization administrator must authorize Git tracking uploads for this developer account."
+            )
+        );
+    }
+
+    #[test]
+    fn test_direct_upload_notice_reports_actual_network_failure() {
+        let diag = test_diag("https://enterprise.example.com", false, true, false);
+        let result = MetricsUploadResult {
+            pending_before: 2,
+            uploaded: 0,
+            discarded_invalid: 0,
+            remaining: 2,
+            error: Some(crate::error::GitAiError::Generic(
+                "network timeout".to_string(),
+            )),
+        };
+
+        assert_eq!(
+            direct_upload_result_notice_message(&diag, &result).as_deref(),
+            Some(
+                "[git-ai] AI tracking saved locally. Upload failed; 2 event(s) remain queued for the next commit."
+            )
+        );
+    }
+
+    #[test]
     fn test_commit_upload_notice_ignores_transient_probe_failure() {
         let error = crate::error::GitAiError::Generic("network timeout".to_string());
         assert!(upload_authorization_notice_message(&error).is_none());
@@ -1046,13 +1222,13 @@ mod tests {
 
     #[test]
     fn test_stored_metrics_retry_notice_is_empty_without_queue_activity() {
-        let summary = StoredMetricsDrainSummary::default();
+        let summary = MetricsUploadResult::default();
         assert!(stored_metrics_retry_notice_message(&summary).is_none());
     }
 
     #[test]
     fn test_stored_metrics_retry_notice_reports_success() {
-        let summary = StoredMetricsDrainSummary {
+        let summary = MetricsUploadResult {
             pending_before: 3,
             uploaded: 3,
             discarded_invalid: 0,
@@ -1069,12 +1245,14 @@ mod tests {
 
     #[test]
     fn test_stored_metrics_retry_notice_reports_failure_and_remaining_queue() {
-        let summary = StoredMetricsDrainSummary {
+        let summary = MetricsUploadResult {
             pending_before: 5,
             uploaded: 2,
             discarded_invalid: 0,
             remaining: 3,
-            error: Some("network timeout".to_string()),
+            error: Some(crate::error::GitAiError::Generic(
+                "network timeout".to_string(),
+            )),
         };
         assert_eq!(
             stored_metrics_retry_notice_message(&summary).as_deref(),
@@ -1086,7 +1264,7 @@ mod tests {
 
     #[test]
     fn test_stored_metrics_retry_notice_reports_invalid_records() {
-        let summary = StoredMetricsDrainSummary {
+        let summary = MetricsUploadResult {
             pending_before: 2,
             uploaded: 1,
             discarded_invalid: 1,

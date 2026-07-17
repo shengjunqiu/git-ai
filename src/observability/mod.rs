@@ -11,12 +11,19 @@ pub const MAX_METRICS_PER_ENVELOPE: usize = 250;
 /// Submit telemetry envelopes via the best available path:
 /// 1. External daemon control socket (wrapper processes)
 /// 2. In-process daemon telemetry worker (daemon process itself)
-/// 3. Silently drop if neither is available
-fn submit_telemetry_envelope(envelopes: Vec<crate::daemon::TelemetryEnvelope>) {
+/// 3. Persist metrics locally and attempt a direct upload when neither daemon
+///    route is available
+fn submit_telemetry_envelope(
+    envelopes: Vec<crate::daemon::TelemetryEnvelope>,
+) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     if crate::daemon::telemetry_handle::daemon_telemetry_available() {
         crate::daemon::telemetry_handle::submit_telemetry(envelopes);
+        None
     } else if crate::daemon::daemon_process_active() {
         crate::daemon::telemetry_worker::submit_daemon_internal_telemetry(envelopes);
+        None
+    } else {
+        crate::daemon::telemetry_worker::submit_local_telemetry(envelopes)
     }
 }
 
@@ -27,7 +34,7 @@ pub fn log_error(error: &dyn std::error::Error, context: Option<serde_json::Valu
         message: error.to_string(),
         context,
     };
-    submit_telemetry_envelope(vec![envelope]);
+    let _ = submit_telemetry_envelope(vec![envelope]);
 }
 
 /// Log a performance metric to Sentry (via daemon telemetry worker)
@@ -44,7 +51,7 @@ pub fn log_performance(
         context,
         tags,
     };
-    submit_telemetry_envelope(vec![envelope]);
+    let _ = submit_telemetry_envelope(vec![envelope]);
 }
 
 /// Log a message to Sentry (info, warning, etc.) (via daemon telemetry worker)
@@ -56,32 +63,41 @@ pub fn log_message(message: &str, level: &str, context: Option<serde_json::Value
         level: level.to_string(),
         context,
     };
-    submit_telemetry_envelope(vec![envelope]);
+    let _ = submit_telemetry_envelope(vec![envelope]);
 }
 
 /// Log a batch of metric events (via daemon telemetry worker).
 ///
 /// Events are batched into envelopes of up to 250 events each.
 pub fn log_metrics(
-    #[cfg_attr(any(test, feature = "test-support"), allow(unused))] events: Vec<MetricEvent>,
-) {
+    events: Vec<MetricEvent>,
+) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     #[cfg(any(test, feature = "test-support"))]
-    return;
+    if std::env::var_os("GIT_AI_TEST_ENABLE_TELEMETRY").is_none() {
+        return None;
+    }
 
-    #[cfg(not(any(test, feature = "test-support")))]
-    {
-        if events.is_empty() {
-            return;
-        }
+    if events.is_empty() {
+        return None;
+    }
 
-        // Split into chunks of MAX_METRICS_PER_ENVELOPE
-        for chunk in events.chunks(MAX_METRICS_PER_ENVELOPE) {
-            let envelope = crate::daemon::TelemetryEnvelope::Metrics {
-                events: chunk.to_vec(),
-            };
-            submit_telemetry_envelope(vec![envelope]);
+    let mut result: Option<crate::daemon::telemetry_worker::MetricsUploadResult> = None;
+
+    // Split into chunks of MAX_METRICS_PER_ENVELOPE
+    for chunk in events.chunks(MAX_METRICS_PER_ENVELOPE) {
+        let envelope = crate::daemon::TelemetryEnvelope::Metrics {
+            events: chunk.to_vec(),
+        };
+        if let Some(chunk_result) = submit_telemetry_envelope(vec![envelope]) {
+            if let Some(result) = result.as_mut() {
+                result.merge(chunk_result);
+            } else {
+                result = Some(chunk_result);
+            }
         }
     }
+
+    result
 }
 
 #[cfg(test)]

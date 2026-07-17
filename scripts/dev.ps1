@@ -3,8 +3,13 @@ Set-StrictMode -Version Latest
 
 # Parse arguments
 $BuildType = 'debug'
-if ($args.Count -gt 0 -and $args[0] -eq '--release') {
-    $BuildType = 'release'
+$SkipInstallHooks = $false
+foreach ($arg in $args) {
+    switch ($arg) {
+        '--release' { $BuildType = 'release' }
+        '--skip-install-hooks' { $SkipInstallHooks = $true }
+        default { throw "Unknown argument: $arg" }
+    }
 }
 
 $InstallDir = Join-Path $HOME '.git-ai\bin'
@@ -131,9 +136,14 @@ Install-Binary -SrcPath "target\$BuildType\git-ai.exe" -DstPath $GitAiExe -GitAi
 Write-Host 'Updating git.exe shim...'
 Install-Binary -SrcPath $GitAiExe -DstPath $GitShim -GitAiExe $GitAiExe
 
-# Run install hooks
-Write-Host 'Running install hooks...'
-& $GitAiExe install
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Hook migration is only needed when an integration definition changed. Most
+# local code changes only need the two Git proxy executables refreshed.
+if ($SkipInstallHooks) {
+    Write-Host 'Skipping hook installation.'
+} else {
+    Write-Host 'Running install hooks...'
+    & $GitAiExe install
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 Write-Host 'Done!'

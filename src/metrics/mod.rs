@@ -42,13 +42,16 @@ pub use types::{EventValues, METRICS_API_VERSION, MetricEvent, MetricsBatch};
 ///
 /// record(values, attrs);
 /// ```
-pub fn record<V: EventValues>(values: V, attrs: EventAttributes) {
+pub fn record<V: EventValues>(
+    values: V,
+    attrs: EventAttributes,
+) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     if attrs.tool == Some(Some("mock_ai".to_string())) {
-        return;
+        return None;
     }
     let event = MetricEvent::new(&values, attrs.to_sparse());
     // Write directly to observability log
-    crate::observability::log_metrics(vec![event]);
+    crate::observability::log_metrics(vec![event])
 }
 
 #[cfg(test)]
@@ -85,7 +88,7 @@ mod tests {
         // record() early-returns for mock_ai; nothing to assert on the write
         // side since log_metrics is a no-op in tests, but the guard is exercised.
         let values = events::AgentUsageValues::new();
-        record(values, attrs);
+        let _ = record(values, attrs);
     }
 
     /// Verify that a Committed event whose tool_model_pairs contain "mock_ai::unknown"
@@ -104,6 +107,6 @@ mod tests {
 
         // This would pass through record() — the call-site filter in
         // record_commit_metrics is responsible for stripping mock_ai entries.
-        record(values, attrs);
+        let _ = record(values, attrs);
     }
 }

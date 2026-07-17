@@ -914,7 +914,7 @@ fn handle_checkpoint(args: &[String]) {
             .custom_attributes_map(crate::config::Config::fresh().custom_attributes());
 
         let values = crate::metrics::AgentUsageValues::new();
-        crate::metrics::record(values, attrs);
+        let _ = crate::metrics::record(values, attrs);
     }
 
     let final_working_dir = agent_run_result

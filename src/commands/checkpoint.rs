@@ -1009,7 +1009,7 @@ fn execute_resolved_checkpoint(
                     .lines_added_sloc(file_stat.additions_sloc)
                     .lines_deleted_sloc(file_stat.deletions_sloc);
                 let file_attrs = attrs.clone().author(&checkpoint.author);
-                crate::metrics::record(values, file_attrs);
+                let _ = crate::metrics::record(values, file_attrs);
             }
         }
     }

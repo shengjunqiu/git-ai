@@ -326,6 +326,26 @@ pub fn handle_git(args: &[String]) {
         );
         let post_command_duration = post_command_start.elapsed();
 
+        // The Git proxy owns user-facing output. Synchronous post-commit work
+        // may run while stdout is represented as a Windows/IDE pipe, so the
+        // lower authorship layer records the actual upload result and the
+        // proxy prints it here after Git output has been forwarded.
+        if parsed_args.command.as_deref() == Some("commit") {
+            let suppress_output = parsed_args.has_command_flag("--porcelain")
+                || parsed_args.has_command_flag("--quiet")
+                || parsed_args.has_command_flag("-q")
+                || parsed_args.has_command_flag("--no-status");
+            if let Some(result) =
+                crate::daemon::telemetry_worker::take_local_metrics_upload_result()
+                && !suppress_output
+                && !config::Config::fresh().is_quiet()
+            {
+                crate::daemon::telemetry_worker::print_commit_upload_notice_with_result(Some(
+                    &result,
+                ));
+            }
+        }
+
         log_performance_target_if_violated(
             parsed_args.command.as_deref().unwrap_or("unknown"),
             pre_command_duration,

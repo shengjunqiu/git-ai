@@ -254,7 +254,7 @@ pub fn post_commit_with_final_state(
     if skip_reason.is_none() {
         let computed = stats_for_commit_stats(repo, &commit_sha, &ignore_patterns)?;
         // Record metrics only when we have full stats.
-        record_commit_metrics(
+        let _ = record_commit_metrics(
             repo,
             &commit_sha,
             &parent_sha,
@@ -305,9 +305,6 @@ pub fn post_commit_with_final_state(
         let is_interactive = std::io::stdout().is_terminal();
         if let Some(stats) = stats.as_ref() {
             write_stats_to_terminal(stats, is_interactive);
-            if is_interactive {
-                crate::daemon::telemetry_worker::print_commit_upload_notice();
-            }
         } else {
             match skip_reason.as_ref() {
                 Some(StatsSkipReason::MergeCommit) => {
@@ -598,6 +595,7 @@ fn enqueue_prompt_messages_to_cas(
     // Get API base URL for constructing messages_url
     // Always use Config::fresh() to support runtime config updates
     let api_base_url = Config::fresh().api_base_url().to_string();
+    let mut cas_payloads = Vec::new();
 
     for (_key, prompt) in prompts.iter_mut() {
         if !prompt.messages.is_empty() {
@@ -614,25 +612,32 @@ fn enqueue_prompt_messages_to_cas(
             let metadata_json = serde_json::to_string(&metadata).ok();
             let canonical = serde_json_canonicalizer::to_string(&messages_json)
                 .unwrap_or_else(|_| messages_json.to_string());
-            let cas_payload = crate::daemon::control_api::CasSyncPayload {
+            cas_payloads.push(crate::daemon::control_api::CasSyncPayload {
                 hash: hash.clone(),
                 data: canonical,
                 metadata: metadata_json,
-            };
-
-            // In daemon mode, submit directly to the in-process telemetry worker.
-            // In wrapper-daemon mode, forward over the control socket so the
-            // background daemon can upload it immediately.
-            if crate::daemon::daemon_process_active() {
-                let _ =
-                    crate::daemon::telemetry_worker::submit_daemon_internal_cas(vec![cas_payload]);
-            } else if crate::daemon::telemetry_handle::daemon_telemetry_available() {
-                crate::daemon::telemetry_handle::submit_cas(vec![cas_payload]);
-            }
+            });
 
             // Set full URL and clear messages
             prompt.messages_url = Some(format!("{}/cas/{}", api_base_url, hash));
             prompt.messages.clear();
+        }
+    }
+
+    // Release the queue lock before any upload path can delete successfully
+    // uploaded records from the same database.
+    drop(db_lock);
+
+    if !cas_payloads.is_empty() {
+        // In daemon mode, submit directly to the in-process telemetry worker.
+        // In wrapper-daemon mode, forward over the control socket so the
+        // background daemon can upload it immediately.
+        if crate::daemon::daemon_process_active() {
+            let _ = crate::daemon::telemetry_worker::submit_daemon_internal_cas(cas_payloads);
+        } else if crate::daemon::telemetry_handle::daemon_telemetry_available() {
+            crate::daemon::telemetry_handle::submit_cas(cas_payloads);
+        } else {
+            crate::daemon::telemetry_worker::submit_local_cas(cas_payloads);
         }
     }
 
@@ -649,7 +654,7 @@ fn record_commit_metrics(
     _authorship_log: &AuthorshipLog,
     stats: &crate::authorship::stats::CommitStats,
     checkpoints: &[Checkpoint],
-) {
+) -> Option<crate::daemon::telemetry_worker::MetricsUploadResult> {
     use crate::metrics::{CommittedValues, EventAttributes, record};
 
     // Never emit telemetry for mock_ai (test preset).  If every tool in the
@@ -660,7 +665,7 @@ fn record_commit_metrics(
             .keys()
             .all(|k| k.starts_with("mock_ai::"));
     if only_mock_ai {
-        return;
+        return None;
     }
 
     // Subtract mock_ai contributions from the aggregates so the "all" entry
@@ -767,7 +772,7 @@ fn record_commit_metrics(
     attrs = attrs.custom_attributes_map(Config::fresh().custom_attributes());
 
     // Record the metric
-    record(values, attrs);
+    record(values, attrs)
 }
 
 #[cfg(test)]

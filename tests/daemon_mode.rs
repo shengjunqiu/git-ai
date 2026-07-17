@@ -148,6 +148,7 @@ impl Drop for ScopedEnvVar {
 struct MockApiServer {
     base_url: String,
     received_cas: mpsc::Receiver<Value>,
+    received_metrics: mpsc::Receiver<Value>,
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -159,7 +160,8 @@ impl MockApiServer {
             .set_nonblocking(true)
             .expect("failed to set nonblocking listener");
         let addr = listener.local_addr().expect("failed to read listener addr");
-        let (tx, rx) = mpsc::channel();
+        let (cas_tx, cas_rx) = mpsc::channel();
+        let (metrics_tx, metrics_rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
 
@@ -167,7 +169,7 @@ impl MockApiServer {
             while !stop_thread.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        handle_http_connection(stream, &tx);
+                        handle_http_connection(stream, &cas_tx, &metrics_tx);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -179,7 +181,8 @@ impl MockApiServer {
 
         Self {
             base_url: format!("http://{}", addr),
-            received_cas: rx,
+            received_cas: cas_rx,
+            received_metrics: metrics_rx,
             stop,
             thread: Some(thread),
         }
@@ -194,6 +197,20 @@ impl MockApiServer {
             .recv_timeout(timeout)
             .expect("timed out waiting for CAS upload")
     }
+
+    fn recv_metrics_upload_for_commit(&self, commit_sha: &str, timeout: Duration) -> Value {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let upload = self
+                .received_metrics
+                .recv_timeout(remaining)
+                .expect("timed out waiting for committed metrics upload");
+            if upload.to_string().contains(commit_sha) {
+                return upload;
+            }
+        }
+    }
 }
 
 impl Drop for MockApiServer {
@@ -206,7 +223,11 @@ impl Drop for MockApiServer {
     }
 }
 
-fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
+fn handle_http_connection(
+    mut stream: TcpStream,
+    cas_tx: &mpsc::Sender<Value>,
+    metrics_tx: &mpsc::Sender<Value>,
+) {
     let Some((path, body)) = read_http_request(&mut stream) else {
         return;
     };
@@ -215,7 +236,8 @@ fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
         "/worker/cas/upload" => {
             let request_json: Value =
                 serde_json::from_slice(&body).expect("CAS upload should contain JSON");
-            tx.send(request_json.clone())
+            cas_tx
+                .send(request_json.clone())
                 .expect("failed to record CAS upload");
             let hashes = request_json["objects"]
                 .as_array()
@@ -236,7 +258,14 @@ fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
             })
             .to_string()
         }
-        "/worker/metrics/upload" => json!({ "errors": [] }).to_string(),
+        "/worker/metrics/upload" => {
+            let request_json: Value =
+                serde_json::from_slice(&body).expect("metrics upload should contain JSON");
+            metrics_tx
+                .send(request_json)
+                .expect("failed to record metrics upload");
+            json!({ "errors": [] }).to_string()
+        }
         _ => "{}".to_string(),
     };
 
@@ -907,10 +936,21 @@ fn claude_fixture_path() -> PathBuf {
         .join("example-claude-code.jsonl")
 }
 
-fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
+fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode, expect_sync_metrics: bool) {
     let mock_api = MockApiServer::start();
     let _api_base_url = ScopedEnvVar::set("GIT_AI_API_BASE_URL", mock_api.base_url());
     let _api_key = ScopedEnvVar::set("GIT_AI_API_KEY", "test-api-key");
+    let _enable_telemetry =
+        expect_sync_metrics.then(|| ScopedEnvVar::set("GIT_AI_TEST_ENABLE_TELEMETRY", "1"));
+    let metrics_dir = expect_sync_metrics
+        .then(|| tempfile::tempdir().expect("failed to create metrics temp dir"));
+    let _metrics_db_path = metrics_dir.as_ref().map(|dir| {
+        let metrics_path = dir.path().join("metrics-db");
+        ScopedEnvVar::set(
+            "GIT_AI_TEST_METRICS_DB_PATH",
+            metrics_path.to_string_lossy().as_ref(),
+        )
+    });
 
     // These tests depend on per-test API env vars being visible to the daemon.
     // A shared daemon may already be running from an earlier test with different env.
@@ -947,6 +987,22 @@ fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
     let commit = repo
         .stage_all_and_commit("Add AI line")
         .expect("AI commit should succeed");
+
+    if expect_sync_metrics {
+        assert!(
+            commit
+                .stdout
+                .contains("AI tracking uploaded successfully to"),
+            "captured synchronous commit output should report the actual upload result: {}",
+            commit.stdout
+        );
+        let metrics_upload =
+            mock_api.recv_metrics_upload_for_commit(&commit.commit_sha, Duration::from_secs(15));
+        assert!(
+            metrics_upload.to_string().contains(&commit.commit_sha),
+            "metrics upload should contain the committed SHA"
+        );
+    }
 
     let upload = mock_api.recv_cas_upload(Duration::from_secs(15));
     let uploaded_objects = upload["objects"]
@@ -991,13 +1047,19 @@ fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
 #[test]
 #[serial]
 fn daemon_mode_post_commit_uploads_prompt_cas() {
-    assert_post_commit_uploads_prompt_cas(GitTestMode::Daemon);
+    assert_post_commit_uploads_prompt_cas(GitTestMode::Daemon, false);
 }
 
 #[test]
 #[serial]
 fn wrapper_daemon_mode_post_commit_uploads_prompt_cas() {
-    assert_post_commit_uploads_prompt_cas(GitTestMode::WrapperDaemon);
+    assert_post_commit_uploads_prompt_cas(GitTestMode::WrapperDaemon, false);
+}
+
+#[test]
+#[serial]
+fn synchronous_wrapper_post_commit_uploads_metrics_and_prompt_cas_without_daemon() {
+    assert_post_commit_uploads_prompt_cas(GitTestMode::Wrapper, true);
 }
 
 #[test]

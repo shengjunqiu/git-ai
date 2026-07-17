@@ -17,7 +17,10 @@ vars:
       printf '%s' "$args"
   TEST_THREADS:
     sh: |
-      n=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)
+      n="${NUMBER_OF_PROCESSORS:-}"
+      if [ -z "$n" ]; then
+        n=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+      fi
       [ "$n" -gt 12 ] && echo 12 || echo "$n"
 
 tasks:
@@ -33,6 +36,14 @@ tasks:
         platforms: [windows]
       - cmd: ./scripts/dev.sh
         platforms: [linux, darwin]
+
+  dev:binary:
+    desc: |
+      Build on D: and refresh only the installed Windows git-ai.exe/git.exe proxy binaries.
+      Does not rewrite editor hooks or start the daemon.
+    cmds:
+      - cmd: powershell -NonInteractive -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1 --skip-install-hooks
+        platforms: [windows]
 
   clean:
     desc: Clean build artifacts
