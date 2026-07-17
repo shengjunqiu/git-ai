@@ -1,0 +1,14 @@
+Cargo.toml
+  h_b17cb63ef8b364 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "303dc8fbb9664f6b325a0576c2ef8454dc8414e5",
+  "prompts": {},
+  "humans": {
+    "h_b17cb63ef8b364": {
+      "author": "linewell"
+    }
+  }
+}
