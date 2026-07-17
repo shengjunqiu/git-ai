@@ -1,0 +1,66 @@
+src/observability/mod.rs
+  d637061b13f88c61 20-29,31-36,88
+src/git/repo_storage.rs
+  d637061b13f88c61 186,194-227
+Cargo.toml
+  d637061b13f88c61 54,83-85
+src/authorship/virtual_attribution.rs
+  d637061b13f88c61 2135
+src/commands/blame.rs
+  d637061b13f88c61 1705,1757
+tests/integration/rebase_benchmark.rs
+  d637061b13f88c61 807,1436,2750
+src/commands/git_handlers.rs
+  d637061b13f88c61 333,338-341
+tests/windows_oauth_login.rs
+  d637061b13f88c61 51,194,199-201
+src/daemon/telemetry_handle.rs
+  d637061b13f88c61 218-222,224-237
+src/commands/status.rs
+  d637061b13f88c61 210
+src/mdm/agents/codebuddy.rs
+  d637061b13f88c61 61,76
+src/commands/diff.rs
+  d637061b13f88c61 1772-1773,1782-1783
+src/config.rs
+  d637061b13f88c61 12
+src/commands/flush_metrics_db.rs
+  d637061b13f88c61 11,89-100,104-105,108-125,130-133
+src/authorship/post_commit.rs
+  d637061b13f88c61 88-95,99-109,244-249,319-326,626
+src/authorship/authorship_log_serialization.rs
+  d637061b13f88c61 168,292
+tests/integration/repos/test_repo.rs
+  d637061b13f88c61 7,20,211-223,248-277,279-282
+src/daemon/telemetry_worker.rs
+  d637061b13f88c61 19,149-155,157,170-177,181,213,249-258,317-319,324-325,327-330,363-387,394,401,404-405,407-419,422,424,427-428,431,434-438,536,539-549,551-564,566,568,571-585,593-599,978-980,992,1001,1004,1006-1007,1078,1082,1085,1566
+src/metrics/db.rs
+  d637061b13f88c61 324-358,643-664
+src/daemon/mod.rs
+  d637061b13f88c61 39,50-51,106,2511-2517,2534-2540,6386-6396,6922-6930,7143-7228,7343-7347,7498-7502
+tests/daemon_mode.rs
+  d637061b13f88c61 4687-4774
+src/api/metrics.rs
+  d637061b13f88c61 17-18,21-22,27,58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "8e34512a4215dd1351cbbf2a6d860d7ae8d04d8e",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 829,
+      "total_deletions": 397,
+      "accepted_lines": 30935,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/539371d7c4208f0088feeec47cf6ef00920e071f0c50d07264274b456e37500c"
+    }
+  }
+}
