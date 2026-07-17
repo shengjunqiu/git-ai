@@ -1,0 +1,26 @@
+docs/plans/windows-trae-codebuddy-qoder-hooks-fix-task-plan.md
+  d637061b13f88c61 742,1011-1031
+src/commands/upgrade.rs
+  d637061b13f88c61 24-26,528-531,583-586,588-592,608,614-615,1132-1143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "development:1.3.12",
+  "base_commit_sha": "29af2b68c8f19a62e7716758d470bc423c456065",
+  "prompts": {
+    "d637061b13f88c61": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f69e0-456e-7201-9372-c2144b4c9864",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 77,
+      "total_deletions": 30,
+      "accepted_lines": 1894,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/e273386c18e5125dcb23ab67046e5080867fbf8a46572630d17bb6f5926ae227"
+    }
+  }
+}
