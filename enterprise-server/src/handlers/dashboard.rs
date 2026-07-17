@@ -325,6 +325,7 @@ impl ProjectAggregate {
             "total_ai": self.total_ai,
             "total_human": self.total_human(),
             "pct_ai": self.pct_ai(),
+            "is_unassigned": self.repo_url.trim().is_empty(),
         })
     }
 }
@@ -1675,6 +1676,8 @@ pub async fn aggregate_projects(
     let metrics_project_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
                 CASE
+                    WHEN BTRIM(COALESCE(repo_url, '')) = '' THEN
+                        'unassigned:missing-repo-url'
                     WHEN BTRIM(repo_url) ~ '^[^@/]+@[^:]+:.+' THEN
                         'sha256:' || encode(sha256(convert_to(
                             regexp_replace(
@@ -1705,15 +1708,20 @@ pub async fn aggregate_projects(
                         'sha256:' || encode(sha256(convert_to(BTRIM(repo_url), 'UTF8')), 'hex')
                 END AS project_key,
                 NULL::bigint AS project_id,
-                MIN(BTRIM(repo_url)) AS repo_url,
-                MIN(NULLIF(
-                    regexp_replace(
-                        regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
-                        '\.git$',
-                        ''
-                    ),
-                    ''
-                )) AS project_name,
+                MIN(BTRIM(COALESCE(repo_url, ''))) AS repo_url,
+                MIN(
+                    CASE
+                        WHEN BTRIM(COALESCE(repo_url, '')) = '' THEN '未关联项目'
+                        ELSE NULLIF(
+                            regexp_replace(
+                                regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
+                                '\.git$',
+                                ''
+                            ),
+                            ''
+                        )
+                    END
+                ) AS project_name,
                 NULL::text AS branch,
                 NULL::text AS organization,
                 NULL::text AS department,
@@ -1722,7 +1730,6 @@ pub async fn aggregate_projects(
                 COALESCE(SUM(ai_lines), 0)::bigint AS total_ai
             FROM metrics_daily_rollups
             WHERE tool_model = ''
-              AND repo_url != ''
               AND ($1::uuid IS NULL OR user_id = $1)
               AND ($2::uuid IS NULL OR org_id = $2)
               AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
@@ -1745,6 +1752,8 @@ pub async fn aggregate_projects(
             FROM (
                 SELECT
                     CASE
+                        WHEN BTRIM(COALESCE(repo_url, '')) = '' THEN
+                            'unassigned:missing-repo-url'
                         WHEN BTRIM(repo_url) ~ '^[^@/]+@[^:]+:.+' THEN
                             'sha256:' || encode(sha256(convert_to(
                                 regexp_replace(
@@ -1774,15 +1783,18 @@ pub async fn aggregate_projects(
                         ELSE
                             'sha256:' || encode(sha256(convert_to(BTRIM(repo_url), 'UTF8')), 'hex')
                     END AS project_key,
-                    BTRIM(repo_url) AS repo_url,
-                    NULLIF(
-                        regexp_replace(
-                            regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
-                            '\.git$',
+                    BTRIM(COALESCE(repo_url, '')) AS repo_url,
+                    CASE
+                        WHEN BTRIM(COALESCE(repo_url, '')) = '' THEN '未关联项目'
+                        ELSE NULLIF(
+                            regexp_replace(
+                                regexp_replace(regexp_replace(BTRIM(repo_url), '/+$', ''), '^.*/', ''),
+                                '\.git$',
+                                ''
+                            ),
                             ''
-                        ),
-                        ''
-                    ) AS project_name,
+                        )
+                    END AS project_name,
                     COALESCE(
                         NULLIF(BTRIM(raw_attrs->>'branch'), ''),
                         NULLIF(BTRIM(raw_attrs->>'5'), '')
@@ -1790,7 +1802,7 @@ pub async fn aggregate_projects(
                     git_diff_added_lines,
                     ai_additions
                 FROM metrics_events
-                WHERE event_type = 1 AND repo_url IS NOT NULL AND repo_url != ''
+                WHERE event_type = 1
                   AND ($1::uuid IS NULL OR user_id = $1)
                   AND ($2::uuid IS NULL OR org_id = $2)
                   AND ($3::text IS NULL OR org_id = (SELECT id FROM organizations WHERE slug = $3))
@@ -2967,6 +2979,117 @@ mod tests {
         detail_projects.sort();
         rollup_projects.sort();
         assert_eq!(rollup_projects, detail_projects);
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn project_aggregates_include_unassigned_metrics() -> anyhow::Result<()> {
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let state = db.state()?;
+        let (user_id, org_id) = insert_test_identity(&db.pool).await?;
+
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            user_id,
+            org_id,
+            1_700_000_000,
+            "https://example.com/git-ai.git",
+            "assigned-commit",
+            56,
+            53,
+            "codex::gpt-5",
+            53,
+            0,
+            0,
+        )
+        .await?;
+        insert_dashboard_metric_row_with_tool(
+            &db.pool,
+            user_id,
+            org_id,
+            1_700_000_100,
+            "",
+            "unassigned-commit",
+            13,
+            11,
+            "codebuddy::unknown",
+            11,
+            0,
+            0,
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE metrics_events SET repo_url = NULL \
+             WHERE user_id = $1 AND commit_sha = 'unassigned-commit'",
+        )
+        .bind(user_id)
+        .execute(&db.pool)
+        .await?;
+
+        for use_rollups in [false, true] {
+            let mut aggregate_state = state.clone();
+            aggregate_state.config.dashboard_use_rollups = use_rollups;
+            let auth = global_admin_auth(user_id);
+
+            let Json(summary) = aggregate_summary(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(aggregate_query(None, None, None, None)),
+            )
+            .await?;
+            assert_eq!(summary["total_projects"].as_i64(), Some(1));
+            assert_eq!(summary["total_commits"].as_i64(), Some(2));
+            assert_eq!(summary["total_code_lines"].as_i64(), Some(69));
+            assert_eq!(summary["total_ai_lines"].as_i64(), Some(64));
+            assert_eq!(summary["total_human_lines"].as_i64(), Some(5));
+
+            let Json(project_page) = aggregate_projects(
+                State(aggregate_state),
+                auth,
+                Query(aggregate_query(None, None, Some(10), None)),
+            )
+            .await?;
+            let projects = project_page["projects"]
+                .as_array()
+                .expect("projects should be an array");
+            assert_eq!(projects.len(), 2);
+            assert_eq!(
+                projects
+                    .iter()
+                    .map(|project| project["total_code"].as_i64().unwrap_or_default())
+                    .sum::<i64>(),
+                69
+            );
+            assert_eq!(
+                projects
+                    .iter()
+                    .map(|project| project["total_ai"].as_i64().unwrap_or_default())
+                    .sum::<i64>(),
+                64
+            );
+            assert_eq!(
+                projects
+                    .iter()
+                    .map(|project| project["total_human"].as_i64().unwrap_or_default())
+                    .sum::<i64>(),
+                5
+            );
+
+            let unassigned = projects
+                .iter()
+                .find(|project| project["is_unassigned"] == true)
+                .expect("unassigned project aggregate should be present");
+            assert_eq!(unassigned["project_name"].as_str(), Some("未关联项目"));
+            assert_eq!(unassigned["repo_url"].as_str(), Some(""));
+            assert_eq!(unassigned["total_commits"].as_i64(), Some(1));
+            assert_eq!(unassigned["total_code"].as_i64(), Some(13));
+            assert_eq!(unassigned["total_ai"].as_i64(), Some(11));
+            assert_eq!(unassigned["total_human"].as_i64(), Some(2));
+        }
 
         db.cleanup().await?;
         Ok(())

@@ -766,8 +766,11 @@ async function loadProjects() {
             const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
             const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
             const branch = escapeHtml(p.branch || '—');
+            const unassignedBadge = p.is_unassigned
+                ? ' <span class="badge unassigned" title="这些提交来自未配置 Git remote 的仓库，暂时无法确定所属项目">未关联</span>'
+                : '';
             return `<tr>
-                <td title="${displayUrl}"><strong>${displayName}</strong></td>
+                <td title="${displayUrl}"><strong>${displayName}</strong>${unassignedBadge}</td>
                 <td>${branch}</td>
                 <td>${fmt(p.total_commits)}</td>
                 <td>${fmt(p.total_ai)}</td>

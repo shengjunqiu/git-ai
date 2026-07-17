@@ -127,6 +127,7 @@ tr:hover { background: var(--bg-card-hover); }
 .badge.active { background: rgba(52,211,153,0.2); color: var(--success); }
 .badge.revoked { background: rgba(248,113,113,0.2); color: var(--danger); }
 .badge.role { background: rgba(129,140,248,0.2); color: var(--accent); }
+.badge.unassigned { background: rgba(251,191,36,0.18); color: #d97706; }
 .department-code { display: inline-flex; padding: 0.18rem 0.5rem; border: 1px solid rgba(129,140,248,0.22);
                    border-radius: 5px; color: var(--accent); background: rgba(129,140,248,0.1);
                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
