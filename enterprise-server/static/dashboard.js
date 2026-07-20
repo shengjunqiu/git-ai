@@ -268,6 +268,9 @@ let lastRefreshAttemptAt = null;
 let lastRefreshSuccessAt = null;
 const successfulSections = new Set();
 let departmentTreeRows = [];
+let currentDepartmentLevelRows = [];
+const departmentLevelCache = new Map();
+const DEPARTMENT_LEVEL_CACHE_MS = 30000;
 let activeDepartmentParentId = null;
 const TABLE_PAGE_SIZE = 25;
 const tablePageState = {};
@@ -1699,32 +1702,70 @@ async function loadAdminOrganizations(signal = currentSectionRequestSignal()) {
 
 async function loadDepartments({ signal, mode }) {
     setTableLoading('departments-table', 6, { mode });
-    const nextDepartmentTreeRows = await fetchAllPaginated(
-        '/api/v1/aggregate/departments',
+    const departmentUrl = activeDepartmentParentId && isAdmin
+        ? `/api/v1/aggregate/departments?parent_id=${encodeURIComponent(activeDepartmentParentId)}`
+        : '/api/v1/aggregate/departments';
+    const data = await fetchPaginatedJson(
         'departments',
+        departmentUrl,
+        '加载部门数据失败',
         signal,
     );
-    departmentTreeRows = nextDepartmentTreeRows;
-    if (departmentTreeRows.length === 0) {
+    if (isAdmin && activeDepartmentParentId && data.parent_exists === false) {
         activeDepartmentParentId = null;
+        resetTablePage('departments');
+        return loadDepartments({ signal, mode });
+    }
+
+    const nextDepartmentLevelRows = pageItems(data, 'departments');
+    mergeDepartmentNodes(nextDepartmentLevelRows);
+    currentDepartmentLevelRows = nextDepartmentLevelRows;
+    departmentLevelCache.set(departmentLevelCacheKey(), {
+        expiresAt: Date.now() + DEPARTMENT_LEVEL_CACHE_MS,
+        rows: nextDepartmentLevelRows,
+    });
+    if (currentDepartmentLevelRows.length === 0) {
         renderDepartmentBreadcrumb();
         replaceHtmlIfChanged(
             document.getElementById('departments-table'),
-            `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`,
+            `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${activeDepartmentParentId ? '当前层级暂无下级部门' : (isAdmin ? '暂无部门数据' : '当前账号尚未分配部门')}</p></div></td></tr>`,
         );
+        renderPaginationControls('departments');
         return;
     }
 
-    if (activeDepartmentParentId && !departmentTreeRows.some(dept => dept.id === activeDepartmentParentId)) {
-        activeDepartmentParentId = null;
-    }
     renderDepartmentLevel();
+    renderPaginationControls('departments');
+}
+
+function departmentLevelCacheKey() {
+    const state = getTablePageState('departments');
+    const cursor = state.cursors[state.page - 1] || '';
+    return `${activeDepartmentParentId || 'root'}:${state.page}:${cursor}`;
+}
+
+function mergeDepartmentNodes(rows) {
+    const byId = new Map(departmentTreeRows.map(department => [department.id, department]));
+    rows.forEach(department => byId.set(department.id, department));
+    departmentTreeRows = Array.from(byId.values());
+}
+
+function renderCachedDepartmentLevel() {
+    const cached = departmentLevelCache.get(departmentLevelCacheKey());
+    if (!cached || cached.expiresAt <= Date.now()) return false;
+    currentDepartmentLevelRows = cached.rows;
+    mergeDepartmentNodes(cached.rows);
+    renderDepartmentLevel();
+    renderPaginationControls('departments');
+    return true;
 }
 
 function openDepartmentLevel(parentId) {
     if (!isAdmin) return;
     activeDepartmentParentId = parentId || null;
-    renderDepartmentLevel();
+    resetTablePage('departments');
+    renderCachedDepartmentLevel();
+    loadSection('departments', { mode: RefreshMode.INITIAL });
 }
 
 function backDepartmentLevel() {
@@ -1732,7 +1773,9 @@ function backDepartmentLevel() {
     if (!activeDepartmentParentId) return;
     const current = departmentTreeRows.find(dept => dept.id === activeDepartmentParentId);
     activeDepartmentParentId = current?.parent_id || null;
-    renderDepartmentLevel();
+    resetTablePage('departments');
+    renderCachedDepartmentLevel();
+    loadSection('departments', { mode: RefreshMode.INITIAL });
 }
 
 function renderDepartmentBreadcrumb() {
@@ -1775,9 +1818,8 @@ function renderDepartmentBreadcrumb() {
 
 function renderDepartmentLevel() {
     renderDepartmentBreadcrumb();
-    const departments = (isAdmin
-        ? departmentTreeRows.filter(dept => (dept.parent_id || null) === activeDepartmentParentId)
-        : departmentTreeRows.slice())
+    const departments = currentDepartmentLevelRows
+        .slice()
         .sort((left, right) => {
             const prefixDifference = departmentCodePrefixRank(left.code) - departmentCodePrefixRank(right.code);
             if (prefixDifference !== 0) return prefixDifference;

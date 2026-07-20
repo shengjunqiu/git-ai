@@ -620,20 +620,22 @@ Make enterprise dashboard navigation responsive
 
 ### 5.1 部门按层加载
 
+执行记录：[`enterprise-frontend-department-loading.md`](./enterprise-frontend-department-loading.md)
+
 步骤：
 
-- [ ] 为部门聚合接口增加明确的 `parent_id` 或层级查询语义。
-- [ ] 根层级只返回根部门和 `has_children`。
-- [ ] 展开子部门时才请求下一层。
-- [ ] 非管理员只返回允许查看的部门范围。
-- [ ] 面包屑使用已加载节点或专用 ancestor 信息。
-- [ ] 当前层级结果可以短期缓存。
+- [x] 为部门聚合接口增加明确的 `parent_id` 或层级查询语义。
+- [x] 根层级只返回根部门和 `has_children`。
+- [x] 展开子部门时才请求下一层。
+- [x] 非管理员只返回允许查看的部门范围。
+- [x] 面包屑使用已加载节点或专用 ancestor 信息。
+- [x] 当前层级结果可以短期缓存。
 - [ ] 创建部门表单使用按组织、关键词搜索接口。
-- [ ] 不再通过 `fetchAllPaginated()` 获取整棵树。
+- [x] 不再通过 `fetchAllPaginated()` 获取整棵树。
 
 验收标准：
 
-- [ ] 部门页面首屏只发一个有界请求。
+- [x] 部门页面首屏只发一个有界请求。
 - [ ] 10,000 个部门下首屏请求量不随总部门数线性增长。
 - [ ] 当前层级、面包屑和创建父部门选择行为不变。
 

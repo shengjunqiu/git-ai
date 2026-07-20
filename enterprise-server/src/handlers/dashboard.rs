@@ -192,6 +192,7 @@ fn dashboard_asset_content_type(path: &std::path::Path) -> &'static str {
 #[derive(Debug, Deserialize)]
 pub struct AggregateQuery {
     pub org: Option<String>,
+    pub parent_id: Option<Uuid>,
     pub since: Option<String>,
     pub until: Option<String>,
     pub sort_by: Option<String>,
@@ -210,6 +211,7 @@ struct OrganizationAggregateCursor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DepartmentAggregateCursor {
     v: u8,
+    parent_id: Option<Uuid>,
     org_name: String,
     sort_path: Vec<String>,
     department_id: Uuid,
@@ -1409,9 +1411,49 @@ pub async fn aggregate_departments(
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, DASHBOARD_MAX_LIMIT);
     let cursor: Option<DepartmentAggregateCursor> =
         decode_dashboard_cursor(query.cursor.as_deref())?;
+    let requested_parent_id = if restrict_department {
+        None
+    } else {
+        query.parent_id
+    };
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.parent_id != requested_parent_id)
+    {
+        return Err(AppError::BadRequest(
+            "Department cursor does not match the requested parent".into(),
+        ));
+    }
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
     let cursor_sort_path = cursor.as_ref().map(|cursor| cursor.sort_path.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
+    let requested_parent_exists = if let Some(parent_id) = requested_parent_id {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(\
+                SELECT 1 \
+                FROM departments d \
+                JOIN organizations o ON o.id = d.org_id \
+                WHERE d.id = $1 \
+                  AND ($2::text IS NULL OR o.slug = $2) \
+                  AND ($3::uuid IS NULL OR o.id = $3)\
+            )",
+        )
+        .bind(parent_id)
+        .bind(&query.org)
+        .bind(org_filter)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?
+    } else {
+        true
+    };
+    if !requested_parent_exists {
+        return Ok(Json(json!({
+            "departments": [],
+            "parent_exists": false,
+            "pagination": pagination_meta(limit, false, None),
+        })));
+    }
 
     let metrics_department_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
@@ -1508,7 +1550,13 @@ pub async fn aggregate_departments(
         department_page AS MATERIALIZED (
             SELECT tree.*
             FROM department_tree tree
-            WHERE ($4::boolean = FALSE OR tree.id = $5::uuid)
+            WHERE (
+                ($4::boolean = TRUE AND tree.id = $5::uuid)
+                OR (
+                    $4::boolean = FALSE
+                    AND tree.parent_id IS NOT DISTINCT FROM $10::uuid
+                )
+            )
               AND (
                   $6::text IS NULL
                   OR tree.org_name > $6::text
@@ -1604,6 +1652,7 @@ pub async fn aggregate_departments(
     .bind(cursor_sort_path)
     .bind(cursor_department_id)
     .bind(fetch_limit(limit))
+    .bind(requested_parent_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1615,6 +1664,7 @@ pub async fn aggregate_departments(
             .map(|(id, _, _, _, _, org_name, _, sort_path, _, _, _, _)| {
                 encode_cursor(&DepartmentAggregateCursor {
                     v: CURSOR_VERSION,
+                    parent_id: requested_parent_id,
                     org_name: org_name.clone(),
                     sort_path: sort_path.clone(),
                     department_id: *id,
@@ -1667,6 +1717,7 @@ pub async fn aggregate_departments(
 
     Ok(Json(json!({
         "departments": result,
+        "parent_exists": true,
         "pagination": pagination_meta(limit, has_more, next_cursor),
     })))
 }
@@ -3413,38 +3464,57 @@ mod tests {
             assert_eq!(root["w_total"].as_i64(), Some(112));
             assert_eq!(root["w_ai"].as_i64(), Some(43));
             assert_eq!(root["pct_ai"].as_f64(), Some(43.0 / 112.0 * 100.0));
-            assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
+            assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(false));
 
-            let Json(page) = aggregate_departments(
+            let mut children_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            children_query.parent_id = Some(root_id);
+            let Json(children_page) = aggregate_departments(
                 State(aggregate_state.clone()),
                 auth.clone(),
-                Query(aggregate_query(
-                    Some(org_slug.clone()),
-                    None,
-                    Some(10),
-                    None,
-                )),
+                Query(children_query),
             )
             .await?;
-
-            let departments = page["departments"]
+            let children = children_page["departments"]
                 .as_array()
                 .expect("departments should be an array");
             assert_eq!(
-                departments
+                children
                     .iter()
                     .map(|department| department["department"].as_str().unwrap())
                     .collect::<Vec<_>>(),
-                vec!["Root", "Sibling", "Child", "Leaf"]
+                vec!["Sibling", "Child"]
             );
             assert_eq!(
-                departments
+                children
                     .iter()
                     .map(|department| department["depth"].as_i64().unwrap())
                     .collect::<Vec<_>>(),
-                vec![1, 2, 2, 3]
+                vec![2, 2]
             );
 
+            let mut leaf_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            leaf_query.parent_id = Some(child_id);
+            let Json(leaf_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(leaf_query),
+            )
+            .await?;
+            assert_eq!(
+                string_values(&leaf_page, "departments", "department"),
+                vec!["Leaf"]
+            );
+
+            let departments = std::iter::once(root.clone())
+                .chain(children.iter().cloned())
+                .chain(
+                    leaf_page["departments"]
+                        .as_array()
+                        .expect("leaf departments should be an array")
+                        .iter()
+                        .cloned(),
+                )
+                .collect::<Vec<_>>();
             let expected = [
                 ("Root", 5, 112, 43, 43.0 / 112.0 * 100.0, false),
                 ("Child", 3, 62, 21, 21.0 / 62.0 * 100.0, false),
@@ -3466,15 +3536,52 @@ mod tests {
                 assert_eq!(department["is_leaf"].as_bool(), Some(is_leaf));
             }
 
+            let mut first_child_query =
+                aggregate_query(Some(org_slug.clone()), None, Some(1), None);
+            first_child_query.parent_id = Some(root_id);
+            let Json(first_child_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(first_child_query),
+            )
+            .await?;
+            let mut mismatched_cursor_query = aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(1),
+                Some(required_next_cursor(&first_child_page)),
+            );
+            mismatched_cursor_query.parent_id = Some(child_id);
+            let cursor_error = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(mismatched_cursor_query),
+            )
+            .await
+            .expect_err("a department cursor must not be reused for another parent");
+            assert!(matches!(cursor_error, AppError::BadRequest(_)));
+
+            let mut missing_parent_query =
+                aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            missing_parent_query.parent_id = Some(Uuid::new_v4());
+            let Json(missing_parent_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(missing_parent_query),
+            )
+            .await?;
+            assert_eq!(missing_parent_page["parent_exists"].as_bool(), Some(false));
+            assert!(missing_parent_page["departments"]
+                .as_array()
+                .expect("missing parent departments should be an array")
+                .is_empty());
+
+            let mut developer_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            developer_query.parent_id = Some(sibling_id);
             let Json(developer_page) = aggregate_departments(
                 State(aggregate_state),
                 department_member_auth(child_user, org_id, &org_slug, child_id),
-                Query(aggregate_query(
-                    Some(org_slug.clone()),
-                    None,
-                    Some(10),
-                    None,
-                )),
+                Query(developer_query),
             )
             .await?;
             let developer_departments = developer_page["departments"]
@@ -4194,6 +4301,7 @@ mod tests {
     ) -> AggregateQuery {
         AggregateQuery {
             org,
+            parent_id: None,
             since,
             until: None,
             sort_by: None,
