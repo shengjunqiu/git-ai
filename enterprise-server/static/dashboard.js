@@ -401,6 +401,117 @@ if (!isAdmin) {
 }
 document.getElementById('sidebar-gitai').style.display = 'none';
 
+const mobileNavigationMediaQuery = window.matchMedia('(max-width: 768px)');
+const mobileMenuButton = document.getElementById('mobile-menu-button');
+const sidebarCloseButton = document.getElementById('sidebar-close-button');
+const dashboardSidebar = document.getElementById('dashboard-sidebar');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const dashboardMain = document.getElementById('dashboard-main');
+const mobileTopbar = document.querySelector('.mobile-topbar');
+let mobileNavigationReturnFocus = null;
+
+function mobileNavigationFocusableElements() {
+    return Array.from(
+        dashboardSidebar.querySelectorAll(
+            'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+    ).filter(element => {
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+}
+
+function isMobileNavigationOpen() {
+    return mobileNavigationMediaQuery.matches && dashboardSidebar.classList.contains('open');
+}
+
+function openMobileNavigation(trigger = mobileMenuButton) {
+    if (!mobileNavigationMediaQuery.matches || isMobileNavigationOpen()) return;
+    mobileNavigationReturnFocus = trigger;
+    dashboardSidebar.inert = false;
+    dashboardSidebar.setAttribute('aria-hidden', 'false');
+    dashboardSidebar.classList.add('open');
+    sidebarBackdrop.classList.add('open');
+    document.body.classList.add('mobile-nav-open');
+    dashboardMain.inert = true;
+    mobileTopbar.inert = true;
+    mobileMenuButton.setAttribute('aria-expanded', 'true');
+    mobileMenuButton.setAttribute('aria-label', '导航菜单已打开');
+    requestAnimationFrame(() => {
+        const focusTarget = dashboardSidebar.querySelector('.nav-item.active')
+            || mobileNavigationFocusableElements()[0];
+        focusTarget?.focus();
+    });
+}
+
+function closeMobileNavigation({ restoreFocus = true } = {}) {
+    const wasOpen = dashboardSidebar.classList.contains('open');
+    dashboardSidebar.classList.remove('open');
+    sidebarBackdrop.classList.remove('open');
+    document.body.classList.remove('mobile-nav-open');
+    dashboardMain.inert = false;
+    mobileTopbar.inert = false;
+    mobileMenuButton.setAttribute('aria-expanded', 'false');
+    mobileMenuButton.setAttribute('aria-label', '打开导航菜单');
+
+    if (wasOpen && restoreFocus) {
+        const focusTarget = mobileNavigationReturnFocus?.isConnected
+            ? mobileNavigationReturnFocus
+            : mobileMenuButton;
+        focusTarget.focus({ preventScroll: true });
+    }
+
+    if (mobileNavigationMediaQuery.matches) {
+        dashboardSidebar.inert = true;
+        dashboardSidebar.setAttribute('aria-hidden', 'true');
+    } else {
+        dashboardSidebar.inert = false;
+        dashboardSidebar.removeAttribute('aria-hidden');
+    }
+}
+
+function handleMobileNavigationKeydown(event) {
+    if (!isMobileNavigationOpen()) return;
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeMobileNavigation();
+        return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = mobileNavigationFocusableElements();
+    if (focusable.length === 0) {
+        event.preventDefault();
+        dashboardSidebar.focus();
+        return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+function syncMobileNavigation() {
+    closeMobileNavigation({ restoreFocus: false });
+}
+
+function initializeMobileNavigation() {
+    mobileMenuButton.addEventListener('click', () => openMobileNavigation());
+    sidebarCloseButton.addEventListener('click', () => closeMobileNavigation());
+    sidebarBackdrop.addEventListener('click', () => closeMobileNavigation());
+    document.addEventListener('keydown', handleMobileNavigationKeydown);
+    if (mobileNavigationMediaQuery.addEventListener) {
+        mobileNavigationMediaQuery.addEventListener('change', syncMobileNavigation);
+    } else {
+        mobileNavigationMediaQuery.addListener(syncMobileNavigation);
+    }
+    syncMobileNavigation();
+}
+
 function startAutoRefresh() {
     stopAutoRefresh();
     refreshInterval = setInterval(() => refreshCurrentSection(), AUTO_REFRESH_MS);
@@ -466,11 +577,13 @@ function showSection(event, id) {
     event.preventDefault();
     if (!canAccessDashboardSection(id)) return false;
     activateDashboardSection(id, { updateUrl: true });
+    closeMobileNavigation();
     return false;
 }
 
 window.addEventListener('popstate', () => {
     activateDashboardSection(dashboardSectionFromLocation());
+    closeMobileNavigation({ restoreFocus: false });
 });
 
 function clearSectionError(id) {
@@ -2140,6 +2253,7 @@ function closeModal() {
 }
 
 // --- Init ---
+initializeMobileNavigation();
 const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);

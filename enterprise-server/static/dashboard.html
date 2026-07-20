@@ -13,7 +13,24 @@
 </head>
 <body>
     <div class="layout">
-        <aside class="sidebar">
+        <header class="mobile-topbar">
+            <button id="mobile-menu-button" class="mobile-menu-button" type="button"
+                    aria-controls="dashboard-sidebar" aria-expanded="false" aria-label="打开导航菜单">
+                <span aria-hidden="true">☰</span>
+            </button>
+            <div class="mobile-brand">AI编码统计</div>
+            <div class="mobile-account">
+                <span class="mobile-account-name">__GITAI_USER_NAME__</span>
+                <a class="mobile-logout" href="/logout">退出</a>
+            </div>
+        </header>
+
+        <aside id="dashboard-sidebar" class="sidebar" aria-label="Dashboard 导航">
+            <div class="sidebar-mobile-header">
+                <span>导航菜单</span>
+                <button id="sidebar-close-button" class="sidebar-close-button" type="button"
+                        aria-label="关闭导航菜单">×</button>
+            </div>
             <div class="sidebar-logo"><span>AI编码统计</span></div>
             <div class="sidebar-subtitle">AI 代码归属分析平台</div>
 
@@ -82,8 +99,9 @@
                 </button>
             </div>
         </aside>
+        <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
 
-        <main class="main">
+        <main id="dashboard-main" class="main">
             <!-- Overview Section -->
             <div id="section-overview" class="section active">
                 <div class="page-header">
@@ -176,10 +194,12 @@
                     </div>
                 </div>
                 <div class="table-card">
-                    <table>
-                        <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="org-table"><tr><td colspan="5">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="组织统计表，可横向滚动">
+                        <table>
+                            <thead><tr><th>组织名称</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                            <tbody id="org-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="org-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -204,10 +224,12 @@
                     </div>
                 </div>
                 <div class="table-card">
-                    <table>
-                        <thead><tr><th>开发者</th><th>部门</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th><th>操作</th></tr></thead>
-                        <tbody id="dev-table"><tr><td colspan="8">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="开发者统计表，可横向滚动">
+                        <table>
+                            <thead><tr><th>开发者</th><th>部门</th><th>提交数</th><th>总代码行</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th><th>操作</th></tr></thead>
+                            <tbody id="dev-table"><tr><td colspan="8">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="dev-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -221,10 +243,12 @@
                     </div>
                 </div>
                 <div class="table-card">
-                    <table>
-                        <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
-                        <tbody id="proj-table"><tr><td colspan="6">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="项目统计表，可横向滚动">
+                        <table>
+                            <thead><tr><th>项目名称</th><th>分支</th><th>提交数</th><th>AI 代码行</th><th>非 AI 代码行</th><th>AI 占比</th></tr></thead>
+                            <tbody id="proj-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="proj-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -238,10 +262,12 @@
                     </div>
                 </div>
                 <div class="table-card">
-                    <table>
-                        <thead><tr><th>工具 / 模型</th><th>AI 代码行</th><th>混合代码行</th><th>AI 采纳数</th><th>AI 总代码</th></tr></thead>
-                        <tbody id="tools-table"><tr><td colspan="5">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="AI 工具统计表，可横向滚动">
+                        <table>
+                            <thead><tr><th>工具 / 模型</th><th>AI 代码行</th><th>混合代码行</th><th>AI 采纳数</th><th>AI 总代码</th></tr></thead>
+                            <tbody id="tools-table"><tr><td colspan="5">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="tools-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -260,10 +286,12 @@
                         <div id="users-bulk-selection" class="refresh-info">选择未授权用户后可批量授权</div>
                         <button id="users-bulk-authorize" class="btn btn-primary btn-sm" onclick="bulkAuthorizeGitTrackingUpload(this)" disabled>一键授权 Git 追踪上传</button>
                     </div>
-                    <table>
-                        <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" onchange="toggleAllGitTrackingUsers(this.checked)" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
-                        <tbody id="users-table"><tr><td colspan="7">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="用户管理表，可横向滚动">
+                        <table>
+                            <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" onchange="toggleAllGitTrackingUsers(this.checked)" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody id="users-table"><tr><td colspan="7">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="users-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -284,10 +312,12 @@
                             <div id="departments-breadcrumb" style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap"><strong>全部部门</strong></div>
                         </div>
                     </div>
-                    <table>
-                        <thead><tr><th>组织</th><th>部门编号</th><th>部门</th><th>提交数</th><th>AI 代码占比</th><th>总代码行</th></tr></thead>
-                        <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="部门统计表，可横向滚动">
+                        <table>
+                            <thead><tr><th>组织</th><th>部门编号</th><th>部门</th><th>提交数</th><th>AI 代码占比</th><th>总代码行</th></tr></thead>
+                            <tbody id="departments-table"><tr><td colspan="6">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -301,10 +331,12 @@
                     <button class="btn btn-primary" onclick="showCreateApiKeyModal()">+ 创建密钥</button>
                 </div>
                 <div class="table-card">
-                    <table>
-                        <thead><tr><th>名称</th><th>前缀</th><th>权限范围</th><th>创建时间</th><th>过期时间</th><th>最后使用</th><th>操作</th></tr></thead>
-                        <tbody id="apikeys-table"><tr><td colspan="7">加载中...</td></tr></tbody>
-                    </table>
+                    <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="API 密钥管理表，可横向滚动">
+                        <table>
+                            <thead><tr><th>名称</th><th>前缀</th><th>权限范围</th><th>创建时间</th><th>过期时间</th><th>最后使用</th><th>操作</th></tr></thead>
+                            <tbody id="apikeys-table"><tr><td colspan="7">加载中...</td></tr></tbody>
+                        </table>
+                    </div>
                     <div id="apikeys-pagination" class="table-pagination"></div>
                 </div>
             </div>
@@ -343,7 +375,7 @@
                 <div class="stats-grid" id="release-channel-stats"></div>
                 <div class="table-card">
                     <div class="table-header"><div class="table-title">已上传版本</div></div>
-                    <div class="table-scroll">
+                    <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="CLI 版本发布表，可横向滚动">
                         <table>
                             <thead><tr><th>版本</th><th>状态</th><th>文件</th><th>校验值</th><th>操作</th></tr></thead>
                             <tbody id="release-table"><tr><td colspan="5">加载中...</td></tr></tbody>
@@ -399,7 +431,7 @@
 
                 <div class="table-card">
                     <div class="table-header"><div class="table-title">文件与版本</div></div>
-                    <div class="table-scroll">
+                    <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="文件版本管理表，可横向滚动">
                         <table>
                             <thead><tr><th>文件</th><th>当前版本</th><th>历史版本</th><th>访问权限</th><th>操作</th></tr></thead>
                             <tbody id="managed-files-table"><tr><td colspan="5">加载中...</td></tr></tbody>
