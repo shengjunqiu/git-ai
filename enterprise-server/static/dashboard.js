@@ -208,13 +208,6 @@ function escapeHtml(value) {
     div.textContent = value ?? '';
     return div.innerHTML;
 }
-function jsString(value) {
-    return JSON.stringify(String(value ?? ''))
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
 function escapeAttribute(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -717,6 +710,9 @@ function handleDashboardAction(event) {
         case 'change-developer-sorting':
             changeDeveloperSorting();
             break;
+        case 'show-developer-git-info':
+            showDeveloperGitInfo(actionElement.dataset.developerId);
+            break;
         case 'show-create-user':
             showCreateUserModal();
             break;
@@ -757,6 +753,9 @@ function handleDashboardAction(event) {
             break;
         case 'back-department-level':
             backDepartmentLevel();
+            break;
+        case 'open-department-level':
+            openDepartmentLevel(actionElement.dataset.departmentId || null);
             break;
         case 'show-create-api-key':
             showCreateApiKeyModal();
@@ -807,6 +806,33 @@ function handleDashboardAction(event) {
                 actionElement.dataset.fileDescription,
                 actionElement.dataset.filePublic === 'true',
             );
+            break;
+        case 'close-modal-backdrop':
+            if (event.target === actionElement) closeModal();
+            break;
+        case 'close-modal':
+            closeModal();
+            break;
+        case 'create-user':
+            createUser();
+            break;
+        case 'create-department':
+            createDepartment();
+            break;
+        case 'copy-api-key':
+            copyKey();
+            break;
+        case 'create-api-key':
+            createApiKey();
+            break;
+        case 'create-api-key-for-user':
+            createApiKeyForUser();
+            break;
+        case 'save-managed-file-settings':
+            saveManagedFileSettings();
+            break;
+        case 'copy-help-command':
+            copyHelpCommand(actionElement);
             break;
         default:
             break;
@@ -1451,7 +1477,7 @@ async function loadDevs({ signal, mode }) {
             const emailDisplay = escapeHtml(dev.email || '—');
             const nameDisplay = escapeHtml(dev.name || '');
             const departmentDisplay = escapeHtml(dev.department || '未设置');
-            const actionDevId = jsString(devId);
+            const actionDevId = escapeAttribute(devId);
             const label = dev.name && dev.name !== dev.email
                 ? `<strong>${nameDisplay}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${emailDisplay}</span>`
                 : `<strong>${emailDisplay}</strong>`;
@@ -1469,7 +1495,7 @@ async function loadDevs({ signal, mode }) {
                 <td>${fmt(ai)}</td>
                 <td>${fmt(dev.human_added_lines)}</td>
                 <td>${pctBar(dev.pct_ai)} <span style="font-size:0.8rem">${clampPercent(dev.pct_ai).toFixed(1)}%</span></td>
-                <td><button class="btn btn-sm" onclick="showDeveloperGitInfo(${actionDevId})">Git 信息</button></td>
+                <td><button class="btn btn-sm" data-action="show-developer-git-info" data-developer-id="${actionDevId}">Git 信息</button></td>
             </tr>`;
         }).join('');
         developerGitInfo = nextDeveloperGitInfo;
@@ -1504,7 +1530,7 @@ function showDeveloperGitInfo(devId) {
         : '<div class="empty-state"><div class="empty-icon">ℹ️</div><p>暂无 Git 用户名和邮箱信息</p></div>';
 
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">Git 信息</div>
             <div class="detail-list">
@@ -1515,7 +1541,7 @@ function showDeveloperGitInfo(devId) {
             <div class="form-label">Git 用户名和邮箱</div>
             <div class="git-identity-list">${gitList}</div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
+                <button class="btn" data-action="close-modal">关闭</button>
             </div>
         </div>
     </div>`;
@@ -1748,7 +1774,7 @@ async function setGitTrackingUploadAuthorization(userId, userName, authorized, b
 
 function showCreateUserModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">创建用户</div>
             <div class="form-group">
@@ -1782,8 +1808,8 @@ function showCreateUserModal() {
                 </label>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">取消</button>
-                <button class="btn btn-primary" onclick="createUser()">创建</button>
+                <button class="btn" data-action="close-modal">取消</button>
+                <button class="btn btn-primary" data-action="create-user">创建</button>
             </div>
         </div>
     </div>`;
@@ -2122,14 +2148,14 @@ function renderDepartmentBreadcrumb() {
     trail.reverse();
 
     const parts = [activeDepartmentParentId
-        ? '<button class="btn btn-sm" onclick="openDepartmentLevel(null)">全部部门</button>'
+        ? '<button class="btn btn-sm" data-action="open-department-level">全部部门</button>'
         : '<strong>全部部门</strong>'];
     trail.forEach((dept, index) => {
         parts.push('<span style="color:var(--text-muted)">/</span>');
         if (index === trail.length - 1) {
             parts.push(`<strong>${escapeHtml(dept.department || '—')}</strong>`);
         } else {
-            parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel(${jsString(dept.id)})">${escapeHtml(dept.department || '—')}</button>`);
+            parts.push(`<button class="btn btn-sm" data-action="open-department-level" data-department-id="${escapeAttribute(dept.id)}">${escapeHtml(dept.department || '—')}</button>`);
         }
     });
     replaceHtmlIfChanged(breadcrumb, parts.join(' '));
@@ -2167,7 +2193,7 @@ function renderDepartmentLevel() {
             const orgName = escapeHtml(dept.organization || '—');
             const nodeIcon = isAdmin && dept.has_children ? '›' : '•';
             const rowAction = isAdmin && dept.has_children
-                ? ` onclick="openDepartmentLevel(${jsString(dept.id)})" style="cursor:pointer"`
+                ? ` class="department-row-action" data-action="open-department-level" data-department-id="${escapeAttribute(dept.id)}"`
                 : '';
             const total = dept.w_total || 0;
             const pct = clampPercent(departmentAiPercentage(dept) * 100);
@@ -2196,7 +2222,7 @@ function departmentAiPercentage(department) {
 
 async function showCreateDepartmentModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">新增部门</div>
             <div class="form-group">
@@ -2224,8 +2250,8 @@ async function showCreateDepartmentModal() {
                 <div id="create-dept-parent-status" class="option-search-status" role="status" aria-live="polite">请先选择组织</div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">取消</button>
-                <button class="btn btn-primary" onclick="createDepartment()">新增</button>
+                <button class="btn" data-action="close-modal">取消</button>
+                <button class="btn btn-primary" data-action="create-department">新增</button>
             </div>
         </div>
     </div>`;
@@ -2448,7 +2474,7 @@ async function loadApiKeys({ signal, mode }) {
 
 function showCreateApiKeyModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">创建 API 密钥</div>
             <div class="form-group">
@@ -2475,12 +2501,12 @@ function showCreateApiKeyModal() {
             <div id="new-key-result" style="display:none">
                 <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
                 <div class="api-key-display" id="new-key-value">
-                    <button class="copy-btn" onclick="copyKey()">复制</button>
+                    <button class="copy-btn" data-action="copy-api-key">复制</button>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
-                <button class="btn btn-primary" id="create-key-btn" onclick="createApiKey()">创建</button>
+                <button class="btn" data-action="close-modal">关闭</button>
+                <button class="btn btn-primary" id="create-key-btn" data-action="create-api-key">创建</button>
             </div>
         </div>
     </div>`;
@@ -2489,7 +2515,7 @@ function showCreateApiKeyModal() {
 function showCreateApiKeyForUser(userId, userName) {
     const safeUserName = escapeHtml(userName);
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">为用户「${safeUserName}」创建 API 密钥</div>
             <input type="hidden" id="create-key-user-id" value="${escapeAttribute(userId)}" />
@@ -2517,12 +2543,12 @@ function showCreateApiKeyForUser(userId, userName) {
             <div id="new-key-result" style="display:none">
                 <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
                 <div class="api-key-display" id="new-key-value">
-                    <button class="copy-btn" onclick="copyKey()">复制</button>
+                    <button class="copy-btn" data-action="copy-api-key">复制</button>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
-                <button class="btn btn-primary" id="create-key-btn" onclick="createApiKeyForUser()">创建</button>
+                <button class="btn" data-action="close-modal">关闭</button>
+                <button class="btn btn-primary" id="create-key-btn" data-action="create-api-key-for-user">创建</button>
             </div>
         </div>
     </div>`;
@@ -3160,14 +3186,14 @@ async function deleteManagedFileVersion(slug, version) {
 
 function showEditManagedFileModal(slug, name, description, isPublic) {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">文件设置</div>
             <div class="form-group"><label class="form-label">文件标识</label><input id="edit-file-slug" class="form-input" value="${escapeAttribute(slug)}" disabled /></div>
             <div class="form-group"><label class="form-label">显示名称</label><input id="edit-file-name" class="form-input" value="${escapeAttribute(name)}" /></div>
             <div class="form-group"><label class="form-label">说明</label><input id="edit-file-description" class="form-input" value="${escapeAttribute(description)}" /></div>
             <label class="checkbox-label"><input id="edit-file-public" type="checkbox" ${isPublic ? 'checked' : ''} /> 公开下载（无需登录）</label>
-            <div class="form-actions"><button class="btn" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveManagedFileSettings()">保存</button></div>
+            <div class="form-actions"><button class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" data-action="save-managed-file-settings">保存</button></div>
         </div>
     </div>`;
 }
