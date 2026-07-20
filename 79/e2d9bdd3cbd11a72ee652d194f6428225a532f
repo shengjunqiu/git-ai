@@ -1,0 +1,32 @@
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 271-273,1705-1708,1710-1711,1714,1716-1727,1731,1733,1738-1760,1766-1768,1776-1778,1821-1822
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 623-624,627-632,634,638
+enterprise-server/static/dashboard.html
+  69e86842745e0e94 324
+docs/enterprise/enterprise-frontend-department-loading.md
+  69e86842745e0e94 1-51
+enterprise-server/src/handlers/dashboard.rs
+  69e86842745e0e94 195,214,1414-1426,1430-1456,1553-1559,1655,1667,1720,3467,3469-3471,3474,3477,3481,3485,3488,3492-3505,3508-3517,3539-3580,3584,4304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "79e2d9bdd3cbd11a72ee652d194f6428225a532f",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 258,
+      "total_deletions": 54,
+      "accepted_lines": 248,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/a90c9724f5ffdd82242d83dc387e763c2d6168a1a6832e4b1a360a4b0b662c8d"
+    }
+  }
+}

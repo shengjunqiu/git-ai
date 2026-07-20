@@ -1,0 +1,56 @@
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 275-282,286-288,294-299,303-305,311-316,320-322,328-335,339-341,347-349,358-360,364-366,375-378
+enterprise-server/src/auth/middleware.rs
+  69e86842745e0e94 1,3,5,422-514,594-674
+enterprise-server/src/config.rs
+  69e86842745e0e94 2,118,129-131,133,250-287,407-436,473
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 2-9,377,393-394,400,653,714,785,868-869,875,882-884,1042,1078,1236,1273,1276,1313,1361,1428,1486,1538,1568,1583-1597,1600-1601,1798,1821,1824,1956-1959,1963
+enterprise-server/src/routes.rs
+  69e86842745e0e94 399-402
+enterprise-server/static/dashboard.html
+  69e86842745e0e94 7,457,462,464,470,476,507,509,515,525,530-537,546-551,559-564,579-580,582,587,600,615,650-651
+enterprise-server/src/handlers/dashboard.rs
+  69e86842745e0e94 30,37,70-73,91-96,115-117,2868-2895
+enterprise-server/.env.example
+  69e86842745e0e94 8-9,11-12
+enterprise-server/deploy/docker-compose.yml
+  69e86842745e0e94 26
+enterprise-server/deploy/.env.example
+  69e86842745e0e94 14,16-17
+enterprise-server/docker-compose.yml
+  69e86842745e0e94 21
+docs/enterprise/enterprise-server-deployment.md
+  69e86842745e0e94 98,102,105,108-109,112-115,242,245,252,327-328,331-332,338,351
+docs/enterprise/installation-guide-zh.md
+  69e86842745e0e94 9-14,22,26,29-34,37,40-46,58,66,125,131,140,148,151-155,168,171-175,194,197-203,227,232,238,253,270,315,382,388,396,402,405
+docs/enterprise/enterprise-frontend-security-audit.md
+  69e86842745e0e94 1-72
+docs/guides/developer-end-to-end-workflow.md
+  69e86842745e0e94 47,53,68,153,163,179,191,201,215,382,389,396,410,431,468,495,514
+docs/user-guide.md
+  69e86842745e0e94 5,7,13,35,38-42,49,52-56,69,72-78,92,98,190,215,224
+enterprise-server/README.md
+  69e86842745e0e94 36-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "3c4fce489881f174f4a363930d72d67111907d84",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 682,
+      "total_deletions": 232,
+      "accepted_lines": 654,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/9df12d8c89ee77ce4664ff1fc6e9d962bf99809ed47479548a9f4c45510373df"
+    }
+  }
+}

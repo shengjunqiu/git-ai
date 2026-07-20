@@ -1,0 +1,26 @@
+docs/enterprise/dashboard-auto-refresh-flicker-optimization-task-plan.md
+  53b806d0be5d529f 1-630
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  53b806d0be5d529f 1-1308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "bb1ef0ee2441918a57d078ff8b5ff055ba5ffe53",
+  "prompts": {
+    "53b806d0be5d529f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6f28-0123-7200-a465-5ea4e44f3278",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 1938,
+      "total_deletions": 0,
+      "accepted_lines": 1938,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/5586d1ead08c80c911bb92b4351e148a3382a4b3f52294b01b2f7e029cd77e40"
+    }
+  }
+}
