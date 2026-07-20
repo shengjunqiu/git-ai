@@ -759,16 +759,16 @@ Cache enterprise static assets efficiently
 
 步骤：
 
-- [ ] 用 `<script type="application/json" id="dashboard-bootstrap">` 或 `data-*` 提供启动数据。
-- [ ] JSON 内容必须使用安全序列化，防止 `</script>` 提前结束。
+- [x] 用 `<script type="application/json" id="dashboard-bootstrap">` 或 `data-*` 提供启动数据。
+- [x] JSON 内容必须使用安全序列化，防止 `</script>` 提前结束。
 - [x] 删除未使用的 `name`、`email` 和 `currentUserId`。
-- [ ] 管理员角色可以由服务端渲染栏目或通过安全 bootstrap 数据提供。
-- [ ] 管理员内容默认隐藏，避免角色判断执行前闪现。
+- [x] 管理员角色可以由服务端渲染栏目或通过安全 bootstrap 数据提供。
+- [x] 管理员内容默认隐藏，避免角色判断执行前闪现。
 
 验收标准：
 
-- [ ] 页面 head/body 中不再需要可执行内联脚本。
-- [ ] 非管理员不会收到不必要的管理页面 DOM，或管理内容默认不可见。
+- [x] 页面 head/body 中不再需要可执行内联脚本。
+- [x] 非管理员不会收到不必要的管理页面 DOM，或管理内容默认不可见。
 
 ### 6.3 提取无 UI 基础模块
 

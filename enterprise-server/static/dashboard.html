@@ -6,11 +6,9 @@
     <title>AI编码统计</title>
     <script src="/static/assets/vendor/chart.js/chart.umd.js?v=__GITAI_CHART_JS_VERSION__"></script>
     <link rel="stylesheet" href="/static/dashboard.css?v=__GITAI_DASHBOARD_CSS_VERSION__">
-    <script>
-        const isAdmin = __GITAI_IS_ADMIN__;
-    </script>
+    <script type="application/json" id="dashboard-bootstrap">__GITAI_DASHBOARD_BOOTSTRAP__</script>
 </head>
-<body>
+<body class="__GITAI_DASHBOARD_ROLE_CLASS__">
     <div class="layout">
         <header class="mobile-topbar">
             <button id="mobile-menu-button" class="mobile-menu-button" type="button"
@@ -40,7 +38,7 @@
             <a class="nav-item" href="/me?section=trends" data-action="navigate-section" data-section="trends">
                 <span class="nav-icon">📈</span> 趋势分析
             </a>
-            <a class="nav-item" id="org-nav-item" href="/me?section=organizations" data-action="navigate-section" data-section="organizations">
+            <a class="nav-item admin-only" id="org-nav-item" href="/me?section=organizations" data-action="navigate-section" data-section="organizations">
                 <span class="nav-icon">🏢</span> 组织
             </a>
             <a class="nav-item" href="/me?section=departments" data-action="navigate-section" data-section="departments">
@@ -56,11 +54,11 @@
                 <span class="nav-icon">🤖</span> AI 工具
             </a>
 
-            <div class="nav-section" id="admin-nav-section">系统管理</div>
-            <a class="nav-item" id="admin-nav-users" href="/me?section=users" data-action="navigate-section" data-section="users">
+            <div class="nav-section admin-only" id="admin-nav-section">系统管理</div>
+            <a class="nav-item admin-only" id="admin-nav-users" href="/me?section=users" data-action="navigate-section" data-section="users">
                 <span class="nav-icon">👤</span> 用户管理
             </a>
-            <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-action="navigate-section" data-section="apikeys">
+            <a class="nav-item admin-only" id="admin-nav-apikeys" href="/me?section=apikeys" data-action="navigate-section" data-section="apikeys">
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
             <a class="nav-item admin-only" href="/me?section=releases" data-action="navigate-section" data-section="releases">
@@ -123,12 +121,12 @@
                     </div>
                 </div>
                 <div class="stats-grid" id="overview-stats">
-                    <div class="stat-card" id="gitai-status-card" style="display:none"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
+                    <div class="stat-card member-only" id="gitai-status-card"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
                     <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
-                    <div class="stat-card" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
+                    <div class="stat-card admin-only" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
                     <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
                 </div>
 
@@ -188,7 +186,7 @@
             </div>
 
             <!-- Organizations Section -->
-            <div id="section-organizations" class="section">
+            <div id="section-organizations" class="section admin-only">
                 <div class="page-header">
                     <div>
                         <div class="page-title">组织</div>

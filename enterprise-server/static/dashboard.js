@@ -1,3 +1,17 @@
+function readDashboardBootstrap() {
+    const element = document.getElementById('dashboard-bootstrap');
+    if (!element) return Object.freeze({ isAdmin: false });
+    try {
+        const value = JSON.parse(element.textContent || '{}');
+        return Object.freeze({ isAdmin: value?.isAdmin === true });
+    } catch {
+        return Object.freeze({ isAdmin: false });
+    }
+}
+
+const dashboardBootstrap = readDashboardBootstrap();
+const isAdmin = dashboardBootstrap.isAdmin;
+
 class ApiRequestError extends Error {
     constructor(message, { status = null, requestId = null, cause = null } = {}) {
         super(message, cause ? { cause } : undefined);
@@ -476,19 +490,7 @@ function cancelOptionRequests() {
     optionRequestControllers.clear();
 }
 
-// Role-based UI: hide admin sections for non-admin users
-if (!isAdmin) {
-    document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
-    document.getElementById('admin-nav-section').style.display = 'none';
-    document.getElementById('admin-nav-users').style.display = 'none';
-    document.getElementById('admin-nav-apikeys').style.display = 'none';
-    const orgNavItem = document.getElementById('org-nav-item');
-    if (orgNavItem) orgNavItem.style.display = 'none';
-    const orgSection = document.getElementById('section-organizations');
-    if (orgSection) orgSection.style.display = 'none';
-    document.getElementById('gitai-status-card').style.display = '';
-    document.getElementById('developer-count-card').style.display = 'none';
-}
+// Role-based UI is rendered by the server and enforced before this script runs.
 document.getElementById('sidebar-gitai').style.display = 'none';
 
 const mobileNavigationMediaQuery = window.matchMedia('(max-width: 768px)');

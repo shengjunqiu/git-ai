@@ -210,6 +210,12 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
     let dashboard_js_version = dashboard_asset_file_version(static_dir, "dashboard.js")?;
 
     let is_admin = auth.is_admin();
+    let dashboard_bootstrap = serialize_script_safe_json(&DashboardBootstrap { is_admin })?;
+    let dashboard_role_class = if is_admin {
+        "dashboard-role-admin"
+    } else {
+        "dashboard-role-member"
+    };
     let user_initial = auth
         .name
         .chars()
@@ -246,14 +252,32 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
             "__GITAI_MANAGED_FILE_MAX_MIB__",
             &(crate::handlers::managed_files::MANAGED_FILE_MAX_BYTES / 1024 / 1024).to_string(),
         )
-        .replace(
-            "__GITAI_IS_ADMIN__",
-            if is_admin { "true" } else { "false" },
-        )
+        .replace("__GITAI_DASHBOARD_BOOTSTRAP__", &dashboard_bootstrap)
+        .replace("__GITAI_DASHBOARD_ROLE_CLASS__", dashboard_role_class)
         .replace("__GITAI_USER_NAME__", &html_escape(&auth.name))
         .replace("__GITAI_USER_EMAIL__", &html_escape(&auth.email))
         .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
         .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardBootstrap {
+    is_admin: bool,
+}
+
+fn serialize_script_safe_json<T: Serialize>(value: &T) -> Result<String, AppError> {
+    let json = serde_json::to_string(value).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to serialize dashboard bootstrap data: {error}"
+        ))
+    })?;
+    Ok(json
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
 }
 
 fn render_dashboard_help_template(public_base_url: &str) -> Result<String, AppError> {
@@ -3281,11 +3305,52 @@ mod tests {
         )));
         assert!(html.contains(&format!(r#"href="/static/dashboard.css?v={css_version}""#)));
         assert!(html.contains(&format!(r#"src="/static/dashboard.js?v={js_version}""#)));
+        assert!(html.contains(
+            r#"<script type="application/json" id="dashboard-bootstrap">{"isAdmin":true}</script>"#
+        ));
+        assert!(html.contains(r#"<body class="dashboard-role-admin">"#));
+        assert!(!html.contains("const isAdmin"));
         assert!(html.contains("&lt;Admin &quot;A&quot; &amp; &#39;B&#39;&gt;"));
         assert!(!html.contains("117.147.213.234"));
         assert!(!html.contains("cdn.jsdelivr.net"));
         assert!(!html.contains("__GITAI_"));
         assert!(!help.contains("__GITAI_"));
+    }
+
+    #[test]
+    fn dashboard_bootstrap_json_cannot_terminate_its_script_element() {
+        let hostile = json!({
+            "value": "</script><script>alert('xss')</script>&\u{2028}\u{2029}"
+        });
+
+        let serialized = serialize_script_safe_json(&hostile).unwrap();
+
+        assert!(!serialized.contains('<'));
+        assert!(!serialized.contains('>'));
+        assert!(!serialized.contains('&'));
+        assert!(!serialized.contains('\u{2028}'));
+        assert!(!serialized.contains('\u{2029}'));
+        assert_eq!(serde_json::from_str::<Value>(&serialized).unwrap(), hostile);
+    }
+
+    #[test]
+    fn dashboard_member_role_is_hidden_before_javascript_runs() {
+        let auth = department_member_auth(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "engineering",
+            Uuid::new_v4(),
+        )
+        .0;
+
+        let html = render_dashboard_template(&auth).unwrap();
+
+        assert!(html.contains(
+            r#"<script type="application/json" id="dashboard-bootstrap">{"isAdmin":false}</script>"#
+        ));
+        assert!(html.contains(r#"<body class="dashboard-role-member">"#));
+        assert!(html.contains(r#"class="nav-item admin-only" id="org-nav-item""#));
+        assert!(!html.contains("const isAdmin"));
     }
 
     #[test]

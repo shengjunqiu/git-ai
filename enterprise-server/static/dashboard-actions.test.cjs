@@ -5,6 +5,10 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
+const dashboardCss = fs.readFileSync(
+    path.join(__dirname, 'dashboard.css'),
+    'utf8',
+);
 const dashboardSource = fs.readFileSync(
     path.join(__dirname, 'dashboard.js'),
     'utf8',
@@ -23,6 +27,16 @@ function actionSource() {
 function escapeAttributeSource() {
     const startMarker = 'function escapeAttribute';
     const endMarker = 'function fmtTimeAgo';
+    const start = dashboardSource.indexOf(startMarker);
+    const end = dashboardSource.indexOf(endMarker, start);
+    assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
+    assert.notEqual(end, -1, `missing source marker: ${endMarker}`);
+    return dashboardSource.slice(start, end);
+}
+
+function bootstrapSource() {
+    const startMarker = 'function readDashboardBootstrap';
+    const endMarker = 'class ApiRequestError';
     const start = dashboardSource.indexOf(startMarker);
     const end = dashboardSource.indexOf(endMarker, start);
     assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
@@ -326,6 +340,52 @@ test('dashboard templates contain no inline event handlers', () => {
         (html.match(/data-action="copy-help-command"/g) || []).length,
         30,
     );
+});
+
+test('dashboard role uses inert bootstrap JSON and fails closed', () => {
+    assert.match(
+        html,
+        /<script type="application\/json" id="dashboard-bootstrap">__GITAI_DASHBOARD_BOOTSTRAP__<\/script>/,
+    );
+    assert.doesNotMatch(html, /const\s+isAdmin\s*=/);
+    assert.match(html, /<body class="__GITAI_DASHBOARD_ROLE_CLASS__">/);
+    assert.match(
+        dashboardCss,
+        /\.dashboard-role-member \.admin-only,\s*\.dashboard-role-admin \.member-only\s*\{\s*display:\s*none\s*!important;\s*\}/,
+    );
+    for (const id of [
+        'org-nav-item',
+        'admin-nav-section',
+        'admin-nav-users',
+        'admin-nav-apikeys',
+        'developer-count-card',
+        'section-organizations',
+    ]) {
+        assert.match(
+            html,
+            new RegExp(`class="[^"]*admin-only[^"]*"[^>]*id="${id}"|id="${id}"[^>]*class="[^"]*admin-only[^"]*"`),
+            id,
+        );
+    }
+
+    function parseBootstrap(textContent) {
+        const context = vm.createContext({
+            document: {
+                getElementById: () => textContent === null ? null : { textContent },
+            },
+        });
+        vm.runInContext(
+            `${bootstrapSource()}
+globalThis.bootstrapForTest = readDashboardBootstrap();`,
+            context,
+        );
+        return context.bootstrapForTest;
+    }
+
+    assert.equal(parseBootstrap('{"isAdmin":true}').isAdmin, true);
+    assert.equal(parseBootstrap('{"isAdmin":"true"}').isAdmin, false);
+    assert.equal(parseBootstrap('{invalid').isAdmin, false);
+    assert.equal(parseBootstrap(null).isAdmin, false);
 });
 
 test('dashboard action listeners are registered once per delegated event type', () => {
