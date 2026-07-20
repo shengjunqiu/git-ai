@@ -662,21 +662,23 @@ Make enterprise dashboard navigation responsive
 
 ### 5.3 优化静态资源传输
 
+执行记录：[`enterprise-frontend-static-asset-caching.md`](./enterprise-frontend-static-asset-caching.md)
+
 步骤：
 
-- [ ] 为静态资源增加 ETag 或 Last-Modified。
-- [ ] 对匹配的条件请求返回 304。
-- [ ] 确认 Gzip/Brotli 压缩层实际启用。
-- [ ] HTML 保持短缓存或 `no-cache`。
-- [ ] 版本化 JS/CSS 可以使用更长缓存。
-- [ ] 如果没有内容 hash，先使用 ETag，不要错误设置不可变长期缓存。
-- [ ] 记录 Chart.js 和自有资源的缓存策略。
+- [x] 为静态资源增加 ETag 或 Last-Modified。
+- [x] 对匹配的条件请求返回 304。
+- [x] 确认 Gzip/Brotli 压缩层实际启用。
+- [x] HTML 保持短缓存或 `no-cache`。
+- [x] 版本化 JS/CSS 可以使用更长缓存。
+- [x] 如果没有内容 hash，先使用 ETag，不要错误设置不可变长期缓存。
+- [x] 记录 Chart.js 和自有资源的缓存策略。
 
 验收标准：
 
-- [ ] 第二次加载 JS/CSS 返回 304 或命中缓存。
-- [ ] 压缩响应大小有记录。
-- [ ] 发布新版本后不会长期使用旧资源。
+- [x] 第二次加载 JS/CSS 返回 304 或命中缓存。
+- [x] 压缩响应大小有记录。
+- [x] 发布新版本后不会长期使用旧资源。
 
 ### 5.4 减少初始 DOM 和无用脚本
 
@@ -712,9 +714,9 @@ Make enterprise dashboard navigation responsive
 ### 阶段 5 验证
 
 - [ ] 记录部门数据 100、1,000、10,000 条时的请求数和响应时间。
-- [ ] 记录静态资源首次和二次加载传输量。
-- [ ] 记录 Gzip/Brotli 前后大小。
-- [ ] 验证所有下拉选择不会静默截断。
+- [x] 记录静态资源首次和二次加载传输量。
+- [x] 记录 Gzip/Brotli 前后大小。
+- [x] 验证所有下拉选择不会静默截断。
 
 建议提交拆分：
 

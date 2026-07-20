@@ -1,6 +1,6 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse, Json, Redirect};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -20,6 +20,9 @@ use crate::routes::AppState;
 const TREND_DAY_BUCKET_LIMIT: i64 = 366;
 const TREND_WEEK_BUCKET_LIMIT: i64 = 260;
 const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
+const DASHBOARD_HTML_CACHE_CONTROL: &str = "no-cache";
+const DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL: &str = "public, max-age=0, must-revalidate";
+const DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 /// GET / — Redirect to the dashboard entry point.
 pub async fn dashboard_root() -> Redirect {
@@ -28,20 +31,28 @@ pub async fn dashboard_root() -> Redirect {
 
 /// GET /me — Dashboard home page
 pub async fn dashboard_me(State(state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
-    // If not authenticated, redirect to login page
-    let auth = match auth.0 {
-        Some(a) => a,
-        None => return Redirect::to("/auth/login?return_to=/me").into_response(),
+    let response = match auth.0 {
+        Some(auth) => match render_dashboard_template(&auth, &state.config.base_url) {
+            Ok(html) => Html(html).into_response(),
+            Err(error) => error.into_response(),
+        },
+        None => Redirect::to("/auth/login?return_to=/me").into_response(),
     };
 
-    match render_dashboard_template(&auth, &state.config.base_url) {
-        Ok(html) => Html(html).into_response(),
-        Err(error) => error.into_response(),
-    }
+    with_dashboard_html_cache_control(response)
 }
 
 /// GET /static/*path — Dashboard static assets.
-pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl IntoResponse {
+#[derive(Debug, Default, Deserialize)]
+pub struct DashboardStaticAssetQuery {
+    pub v: Option<String>,
+}
+
+pub async fn dashboard_static_asset(
+    Path(asset_path): Path<String>,
+    Query(query): Query<DashboardStaticAssetQuery>,
+    request_headers: HeaderMap,
+) -> Response {
     let relative_path = match sanitize_static_asset_path(&asset_path) {
         Some(path) => path,
         None => return StatusCode::NOT_FOUND.into_response(),
@@ -57,14 +68,80 @@ pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl Into
     };
 
     let content_type = dashboard_asset_content_type(&file_path);
-    (
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        bytes,
-    )
-        .into_response()
+    let version = dashboard_asset_version(&bytes);
+    let etag = dashboard_asset_etag(&version);
+    let cache_control = dashboard_asset_cache_control(&file_path, query.v.as_deref(), &version);
+    let mut response = if if_none_match_matches(&request_headers, &etag) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        bytes.into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    headers.insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("SHA256 ETag is a valid header value"),
+    );
+    if dashboard_asset_is_compressible(content_type) {
+        headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    }
+    response
+}
+
+fn with_dashboard_html_cache_control(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(DASHBOARD_HTML_CACHE_CONTROL),
+    );
+    response
+}
+
+fn dashboard_asset_version(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn dashboard_asset_etag(version: &str) -> String {
+    format!(r#"W/"sha256-{version}""#)
+}
+
+fn dashboard_asset_is_compressible(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || matches!(
+            content_type.split(';').next().unwrap_or(content_type),
+            "application/javascript" | "application/json" | "image/svg+xml"
+        )
+}
+
+fn dashboard_asset_cache_control(
+    path: &std::path::Path,
+    requested_version: Option<&str>,
+    current_version: &str,
+) -> &'static str {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("html") {
+        return DASHBOARD_HTML_CACHE_CONTROL;
+    }
+    if requested_version == Some(current_version) {
+        DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL
+    } else {
+        DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+    }
+}
+
+fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
+    let current_etag = current_etag.strip_prefix("W/").unwrap_or(current_etag);
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == current_etag
+        })
 }
 
 fn render_dashboard_template(
@@ -79,6 +156,13 @@ fn render_dashboard_template(
             error
         ))
     })?;
+    let static_dir = template_path.parent().ok_or_else(|| {
+        AppError::Internal("Dashboard template path has no parent directory".to_string())
+    })?;
+    let chart_js_version =
+        dashboard_asset_file_version(static_dir, "assets/vendor/chart.js/chart.umd.js")?;
+    let dashboard_css_version = dashboard_asset_file_version(static_dir, "dashboard.css")?;
+    let dashboard_js_version = dashboard_asset_file_version(static_dir, "dashboard.js")?;
 
     let is_admin = auth.is_admin();
     let user_initial = auth
@@ -96,6 +180,9 @@ fn render_dashboard_template(
     };
 
     Ok(template
+        .replace("__GITAI_CHART_JS_VERSION__", &chart_js_version)
+        .replace("__GITAI_DASHBOARD_CSS_VERSION__", &dashboard_css_version)
+        .replace("__GITAI_DASHBOARD_JS_VERSION__", &dashboard_js_version)
         .replace(
             "__GITAI_IS_ADMIN__",
             if is_admin { "true" } else { "false" },
@@ -115,6 +202,21 @@ fn render_dashboard_template(
         .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label))
         .replace("__GITAI_PUBLIC_BASE_URL__", &html_escape(public_base_url))
         .replace("__GITAI_INSTALL_SECURITY_NOTICE__", install_security_notice))
+}
+
+fn dashboard_asset_file_version(
+    static_dir: &std::path::Path,
+    relative_path: &str,
+) -> Result<String, AppError> {
+    let file_path = static_dir.join(relative_path);
+    let bytes = std::fs::read(&file_path).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to read dashboard asset {}: {}",
+            file_path.display(),
+            error
+        ))
+    })?;
+    Ok(dashboard_asset_version(&bytes))
 }
 
 pub fn dashboard_static_dir() -> Result<std::path::PathBuf, AppError> {
@@ -2904,8 +3006,16 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, MetricsRollupWriteMode};
     use crate::models::user::{AuthIdentity, AuthMethod};
+    use crate::routes::response_has_compressible_content_type;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
     use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
+    use tower::ServiceExt;
+    use tower_http::compression::predicate::{Predicate, SizeAbove};
+    use tower_http::compression::{CompressionLayer, CompressionLevel};
     use uuid::Uuid;
 
     #[tokio::test]
@@ -2916,6 +3026,174 @@ mod tests {
         assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/me");
     }
 
+    #[tokio::test]
+    async fn dashboard_static_assets_revalidate_version_and_compress() {
+        let app = Router::new()
+            .route("/static/{*path}", get(dashboard_static_asset))
+            .layer(
+                CompressionLayer::new()
+                    .gzip(true)
+                    .br(true)
+                    .quality(CompressionLevel::Precise(5))
+                    .compress_when(SizeAbove::new(256).and(response_has_compressible_content_type)),
+            );
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(
+            first.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+        );
+        let etag = first.headers().get(header::ETAG).unwrap().clone();
+        assert!(etag.to_str().unwrap().starts_with(r#"W/"sha256-"#));
+        let raw_body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let version = dashboard_asset_version(&raw_body);
+
+        let not_modified = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js")
+                    .header(header::IF_NONE_MATCH, etag.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(not_modified.headers().get(header::ETAG).unwrap(), &etag);
+        assert_eq!(
+            not_modified.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+        assert!(to_bytes(not_modified.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let versioned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/static/dashboard.js?v={version}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            versioned.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL
+        );
+
+        let stale_version = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js?v=stale")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stale_version.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+        );
+
+        for asset_path in [
+            "dashboard.css",
+            "dashboard.js",
+            "assets/vendor/chart.js/chart.umd.js",
+        ] {
+            let identity = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/static/{asset_path}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let identity_body = to_bytes(identity.into_body(), usize::MAX).await.unwrap();
+            let mut compressed_sizes = Vec::new();
+            for encoding in ["gzip", "br"] {
+                let compressed = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/static/{asset_path}"))
+                            .header(header::ACCEPT_ENCODING, encoding)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    compressed.headers().get(header::CONTENT_ENCODING).unwrap(),
+                    encoding
+                );
+                assert!(compressed
+                    .headers()
+                    .get_all(header::VARY)
+                    .iter()
+                    .any(|value| value.as_bytes().eq_ignore_ascii_case(b"accept-encoding")));
+                let body = to_bytes(compressed.into_body(), usize::MAX).await.unwrap();
+                assert!(body.len() < identity_body.len());
+                compressed_sizes.push(body.len());
+            }
+            println!(
+                "{asset_path} transfer bytes: identity={}, gzip={}, br={}",
+                identity_body.len(),
+                compressed_sizes[0],
+                compressed_sizes[1]
+            );
+        }
+
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .uri("/static/assets/vendor/chart.js/LICENSE.md")
+                    .header(header::ACCEPT_ENCODING, "br")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(binary.headers().get(header::CONTENT_ENCODING).is_none());
+    }
+
+    #[test]
+    fn dashboard_cache_helpers_handle_html_and_weak_etags() {
+        let html_path = std::path::Path::new("dashboard.html");
+        assert_eq!(
+            dashboard_asset_cache_control(html_path, Some("same"), "same"),
+            DASHBOARD_HTML_CACHE_CONTROL
+        );
+        let response = with_dashboard_html_cache_control(StatusCode::OK.into_response());
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_HTML_CACHE_CONTROL
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static(r#""other", W/"sha256-current""#),
+        );
+        assert!(if_none_match_matches(&headers, r#"W/"sha256-current""#));
+    }
+
     #[test]
     fn dashboard_template_uses_trusted_public_url_and_escapes_dynamic_text() {
         let mut auth = global_admin_auth(Uuid::new_v4()).0;
@@ -2923,10 +3201,20 @@ mod tests {
         auth.email = r#"admin+<test>&"@example.com"#.into();
 
         let html = render_dashboard_template(&auth, "https://git-ai.example.com/").unwrap();
+        let static_dir = dashboard_static_dir().unwrap();
+        let chart_version =
+            dashboard_asset_file_version(&static_dir, "assets/vendor/chart.js/chart.umd.js")
+                .unwrap();
+        let css_version = dashboard_asset_file_version(&static_dir, "dashboard.css").unwrap();
+        let js_version = dashboard_asset_file_version(&static_dir, "dashboard.js").unwrap();
 
         assert!(html.contains("git-ai login --server https://git-ai.example.com"));
         assert!(html.contains(r#"href="/auth/register""#));
-        assert!(html.contains(r#"src="/static/assets/vendor/chart.js/chart.umd.js""#));
+        assert!(html.contains(&format!(
+            r#"src="/static/assets/vendor/chart.js/chart.umd.js?v={chart_version}""#
+        )));
+        assert!(html.contains(&format!(r#"href="/static/dashboard.css?v={css_version}""#)));
+        assert!(html.contains(&format!(r#"src="/static/dashboard.js?v={js_version}""#)));
         assert!(html.contains("&lt;Admin &quot;A&quot; &amp; &#39;B&#39;&gt;"));
         assert!(!html.contains("117.147.213.234"));
         assert!(!html.contains("cdn.jsdelivr.net"));

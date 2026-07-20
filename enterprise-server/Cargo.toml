@@ -11,7 +11,7 @@ axum = { version = "0.8", features = ["macros", "ws", "multipart"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-br", "compression-gzip", "limit"] }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "postgres", "json", "chrono", "uuid"] }
