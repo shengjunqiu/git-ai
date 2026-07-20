@@ -3201,6 +3201,8 @@ mod tests {
             "dashboard.css",
             "dashboard.js",
             "dashboard/api.js",
+            "dashboard/render.js",
+            "dashboard/state.js",
             "assets/vendor/chart.js/chart.umd.js",
         ] {
             let identity = app

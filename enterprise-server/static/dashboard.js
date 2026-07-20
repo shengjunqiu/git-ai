@@ -5,6 +5,27 @@ import {
     InvalidResponseError,
     createApiClient,
 } from './dashboard/api.js';
+import {
+    clampPercent,
+    escapeAttribute,
+    escapeHtml,
+    fmt,
+    fmtTimeAgo,
+    formatRefreshTime,
+    pctBar,
+    replaceHtmlIfChanged,
+    setClassNameIfChanged,
+    setDisplayIfChanged,
+    setTextIfChanged,
+    setTitleIfChanged,
+} from './dashboard/render.js';
+import {
+    ADMIN_ONLY_DASHBOARD_SECTIONS,
+    DASHBOARD_DEFAULT_SECTION,
+    DASHBOARD_SECTIONS,
+    RefreshMode,
+    createDashboardState,
+} from './dashboard/state.js';
 
 function readDashboardBootstrap() {
     const element = document.getElementById('dashboard-bootstrap');
@@ -23,73 +44,10 @@ const { apiRequest } = createApiClient({
     fetchImpl: window.fetch.bind(window),
     location: window.location,
 });
-
-const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
-function finiteNumber(value, fallback = 0) {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : fallback;
-}
-function clampPercent(value) {
-    return Math.min(100, Math.max(0, finiteNumber(value)));
-}
-const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${clampPercent(pct)}%"></div></div>`;
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value ?? '';
-    return div.innerHTML;
-}
-function escapeAttribute(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-function fmtTimeAgo(value) {
-    if (!value) return '从未';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '未知';
-    const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-    if (seconds < 60) return '刚刚';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes} 分钟前`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} 小时前`;
-    const days = Math.floor(hours / 24);
-    return `${days} 天前`;
-}
+const appState = createDashboardState();
 
 // --- Auto refresh ---
-let refreshInterval = null;
 const AUTO_REFRESH_MS = 60000; // 60 seconds
-const RefreshMode = Object.freeze({
-    INITIAL: 'initial',
-    MANUAL: 'manual',
-    AUTO: 'auto',
-});
-const DASHBOARD_DEFAULT_SECTION = 'overview';
-const DASHBOARD_SECTIONS = [
-    'overview',
-    'trends',
-    'organizations',
-    'departments',
-    'developers',
-    'projects',
-    'tools',
-    'users',
-    'apikeys',
-    'releases',
-    'files',
-    'help',
-];
-const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys', 'releases', 'files'];
-let currentSection = 'overview';
-const sectionRefreshes = new Map();
-const queuedManualRefreshes = new Map();
-let lastRefreshAttemptAt = null;
-let lastRefreshSuccessAt = null;
-const successfulSections = new Set();
 let departmentTreeRows = [];
 let currentDepartmentLevelRows = [];
 const departmentLevelCache = new Map();
@@ -112,7 +70,7 @@ function isSilentRefresh(options) {
 }
 
 function currentSectionRequestSignal() {
-    return sectionRefreshes.get(currentSection)?.controller.signal;
+    return appState.sectionRefreshes.get(appState.currentSection)?.controller.signal;
 }
 
 function refreshCollisionAction(mode, hasInFlight) {
@@ -176,19 +134,6 @@ function pageItems(data, field) {
     return (data[field] || []).slice(0, TABLE_PAGE_SIZE);
 }
 
-function replaceHtmlIfChanged(element, nextHtml) {
-    if (!element) return false;
-    let comparableHtml = nextHtml;
-    if (typeof element.cloneNode === 'function') {
-        const comparisonElement = element.cloneNode(false);
-        comparisonElement.innerHTML = nextHtml;
-        comparableHtml = comparisonElement.innerHTML;
-    }
-    if (element.innerHTML === comparableHtml) return false;
-    element.innerHTML = nextHtml;
-    return true;
-}
-
 function setTableLoading(tbodyId, colspan, options) {
     if (isSilentRefresh(options)) return;
     replaceHtmlIfChanged(
@@ -226,7 +171,7 @@ async function goToTablePage(key, direction) {
 
 function reloadPaginatedTable(key) {
     if (!tablePagerContainers[key]) return Promise.resolve();
-    return loadSection(currentSection, { mode: RefreshMode.MANUAL });
+    return loadSection(appState.currentSection, { mode: RefreshMode.MANUAL });
 }
 
 const OPTION_PAGE_LIMIT = 100;
@@ -422,7 +367,7 @@ function initializeMobileNavigation() {
 
 function startAutoRefresh() {
     stopAutoRefresh();
-    refreshInterval = setInterval(
+    appState.refreshInterval = setInterval(
         () => {
             if (!document.hidden) refreshCurrentSection({ mode: RefreshMode.AUTO });
         },
@@ -430,22 +375,21 @@ function startAutoRefresh() {
     );
 }
 function stopAutoRefresh() {
-    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
-}
-function formatRefreshTime(value) {
-    if (!value) return '—';
-    return value.toLocaleTimeString('zh-CN', { hour12: false });
+    if (appState.refreshInterval) {
+        clearInterval(appState.refreshInterval);
+        appState.refreshInterval = null;
+    }
 }
 
 function updateRefreshTime({ stale = false } = {}) {
     const status = document.getElementById('last-refresh');
-    status.textContent = `最后成功: ${formatRefreshTime(lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(lastRefreshAttemptAt)}`;
+    status.textContent = `最后成功: ${formatRefreshTime(appState.lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(appState.lastRefreshAttemptAt)}`;
     status.title = stale ? '后台刷新失败，当前显示的数据可能已过期' : '';
     document.querySelector('.refresh-dot')?.classList.toggle('stale', stale);
 }
 
 async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
-    const sectionId = currentSection;
+    const sectionId = appState.currentSection;
     return loadSection(sectionId, { mode });
 }
 
@@ -482,7 +426,7 @@ function updateDashboardSectionUrl(id, replace = false) {
 
 function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } = {}) {
     const nextSection = canAccessDashboardSection(id) ? id : DASHBOARD_DEFAULT_SECTION;
-    currentSection = nextSection;
+    appState.currentSection = nextSection;
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.getElementById('section-' + nextSection).classList.add('active');
@@ -682,8 +626,8 @@ function showSectionLoadError(id, error, { background = false } = {}) {
         error,
     });
     if (error instanceof AuthExpiredError) return;
-    if (background && successfulSections.has(id)) {
-        if (currentSection === id) {
+    if (background && appState.successfulSections.has(id)) {
+        if (appState.currentSection === id) {
             updateRefreshTime({ stale: true });
             showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
         }
@@ -706,20 +650,20 @@ function showSectionLoadError(id, error, { background = false } = {}) {
 }
 
 function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
-    const existingRefresh = sectionRefreshes.get(id);
+    const existingRefresh = appState.sectionRefreshes.get(id);
     const collisionAction = refreshCollisionAction(mode, Boolean(existingRefresh));
     if (collisionAction === 'skip') return Promise.resolve(false);
     if (collisionAction === 'queue') {
-        const existingQueuedRefresh = queuedManualRefreshes.get(id);
+        const existingQueuedRefresh = appState.queuedManualRefreshes.get(id);
         if (existingQueuedRefresh) return existingQueuedRefresh;
 
         // A manual refresh wins over an in-flight AUTO by running once after it settles.
         // Repeated clicks share this queued promise instead of adding more requests.
         const queuedRefresh = existingRefresh.promise.then(() => {
-            queuedManualRefreshes.delete(id);
+            appState.queuedManualRefreshes.delete(id);
             return loadSection(id, { mode: RefreshMode.MANUAL });
         });
-        queuedManualRefreshes.set(id, queuedRefresh);
+        appState.queuedManualRefreshes.set(id, queuedRefresh);
         return queuedRefresh;
     }
     if (collisionAction === 'replace') existingRefresh.controller.abort();
@@ -728,18 +672,18 @@ function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
     const refresh = { controller, promise: null };
     refresh.promise = performSectionLoad(id, { mode, controller })
         .finally(() => {
-            if (sectionRefreshes.get(id) === refresh) {
-                sectionRefreshes.delete(id);
+            if (appState.sectionRefreshes.get(id) === refresh) {
+                appState.sectionRefreshes.delete(id);
             }
         });
-    sectionRefreshes.set(id, refresh);
+    appState.sectionRefreshes.set(id, refresh);
     return refresh.promise;
 }
 
 async function performSectionLoad(id, { mode, controller }) {
-    const background = isSilentRefresh({ mode }) && successfulSections.has(id);
-    if (currentSection === id) {
-        lastRefreshAttemptAt = new Date();
+    const background = isSilentRefresh({ mode }) && appState.successfulSections.has(id);
+    if (appState.currentSection === id) {
+        appState.lastRefreshAttemptAt = new Date();
         updateRefreshTime({ stale: false });
     }
     const loaders = {
@@ -759,13 +703,13 @@ async function performSectionLoad(id, { mode, controller }) {
     try {
         await loaders[id]({ mode, signal: controller.signal });
         if (controller.signal.aborted) return false;
-        successfulSections.add(id);
+        appState.successfulSections.add(id);
         clearSectionError(id);
-        if (!isAdmin && currentSection === id) {
+        if (!isAdmin && appState.currentSection === id) {
             await loadClientStatus({ mode, signal: controller.signal, sectionId: id });
         }
-        if (currentSection === id) {
-            lastRefreshSuccessAt = new Date();
+        if (appState.currentSection === id) {
+            appState.lastRefreshSuccessAt = new Date();
             updateRefreshTime({ stale: false });
         }
         return true;
@@ -877,31 +821,6 @@ let trendChartType = null;
 let agentComparisonChart = null;
 const chartDataSignatures = new WeakMap();
 let developerGitInfo = new Map();
-
-function setDisplayIfChanged(element, display) {
-    if (!element || element.style.display === display) return false;
-    element.style.display = display;
-    return true;
-}
-
-function setTextIfChanged(element, text) {
-    const nextText = String(text);
-    if (!element || element.textContent === nextText) return false;
-    element.textContent = nextText;
-    return true;
-}
-
-function setClassNameIfChanged(element, className) {
-    if (!element || element.className === className) return false;
-    element.className = className;
-    return true;
-}
-
-function setTitleIfChanged(element, title) {
-    if (!element || element.title === title) return false;
-    element.title = title;
-    return true;
-}
 
 function chartDataSignature(labels, datasets) {
     return JSON.stringify({ labels, datasets });
@@ -1044,7 +963,7 @@ function renderOverviewDevelopers(data) {
     replaceHtmlIfChanged(document.getElementById('top-developers'), nextHtml);
 }
 
-async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
+async function loadClientStatus({ signal, mode, sectionId = appState.currentSection }) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -1055,7 +974,7 @@ async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
     if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
     try {
         const d = await apiRequest('/api/v1/client/status', { signal });
-        if (currentSection !== sectionId) return;
+        if (appState.currentSection !== sectionId) return;
         if (!d.detected) {
             if (overviewStatusEl) {
                 setTextIfChanged(overviewStatusEl, '未检测到');
@@ -1115,7 +1034,7 @@ async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
     } catch(error) {
         if (error instanceof AbortError || error instanceof AuthExpiredError) throw error;
         console.error('Client status request failed', error);
-        if (currentSection !== sectionId) return;
+        if (appState.currentSection !== sectionId) return;
         if (isSilentRefresh({ mode })) return;
         if (overviewStatusEl) {
             setTextIfChanged(overviewStatusEl, '检测失败');
@@ -2390,7 +2309,7 @@ async function createApiKey() {
         document.getElementById('create-key-btn').style.display = 'none';
         showToast('API 密钥创建成功', 'success');
         resetTablePage('apikeys');
-        if (currentSection === 'apikeys') loadSection('apikeys');
+        if (appState.currentSection === 'apikeys') loadSection('apikeys');
     } catch(e) {
         showToast(`创建失败：${e.message}`, 'error');
     }
@@ -2416,7 +2335,9 @@ async function createApiKeyForUser() {
         showToast('API 密钥创建成功', 'success');
         resetTablePage('users');
         resetTablePage('apikeys');
-        if (['users', 'apikeys'].includes(currentSection)) loadSection(currentSection);
+        if (['users', 'apikeys'].includes(appState.currentSection)) {
+            loadSection(appState.currentSection);
+        }
     } catch(e) {
         showToast(`创建失败：${e.message}`, 'error');
     }

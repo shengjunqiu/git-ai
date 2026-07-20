@@ -13,20 +13,17 @@ const dashboardSource = fs.readFileSync(
     path.join(__dirname, 'dashboard.js'),
     'utf8',
 );
+const renderSource = fs.readFileSync(
+    path.join(__dirname, 'dashboard', 'render.js'),
+    'utf8',
+);
+const renderModulePromise = import(
+    `data:text/javascript;base64,${Buffer.from(renderSource).toString('base64')}`
+);
 
 function actionSource() {
     const startMarker = 'function dashboardActionElement';
     const endMarker = "window.addEventListener('popstate'";
-    const start = dashboardSource.indexOf(startMarker);
-    const end = dashboardSource.indexOf(endMarker, start);
-    assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
-    assert.notEqual(end, -1, `missing source marker: ${endMarker}`);
-    return dashboardSource.slice(start, end);
-}
-
-function escapeAttributeSource() {
-    const startMarker = 'function escapeAttribute';
-    const endMarker = 'function fmtTimeAgo';
     const start = dashboardSource.indexOf(startMarker);
     const end = dashboardSource.indexOf(endMarker, start);
     assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
@@ -244,13 +241,11 @@ test('dynamic management actions preserve special characters from dataset values
     ]);
 });
 
-test('dynamic action attributes escape HTML-significant characters', () => {
-    const context = vm.createContext({});
-    vm.runInContext(`${escapeAttributeSource()}
-globalThis.escapeAttributeForTest = escapeAttribute;`, context);
+test('dynamic action attributes escape HTML-significant characters', async () => {
+    const { escapeAttribute } = await renderModulePromise;
 
     assert.equal(
-        context.escapeAttributeForTest(`研发 "A&B" <核心> '组'`),
+        escapeAttribute(`研发 "A&B" <核心> '组'`),
         '研发 &quot;A&amp;B&quot; &lt;核心&gt; &#39;组&#39;',
     );
     for (const marker of [
@@ -398,6 +393,8 @@ test('dashboard request infrastructure is loaded as an explicit module', () => {
         /createApiClient\(\{\s*fetchImpl: window\.fetch\.bind\(window\),\s*location: window\.location,/,
     );
     assert.doesNotMatch(dashboardSource, /class ApiRequestError/);
+    assert.match(dashboardSource, /from '\.\/dashboard\/render\.js';/);
+    assert.match(dashboardSource, /from '\.\/dashboard\/state\.js';/);
     assert.match(
         html,
         /<script type="module" src="\/static\/dashboard\.js\?v=__GITAI_DASHBOARD_JS_VERSION__"><\/script>/,

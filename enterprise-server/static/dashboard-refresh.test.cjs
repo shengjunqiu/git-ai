@@ -8,6 +8,20 @@ const dashboardSource = fs.readFileSync(
     path.join(__dirname, 'dashboard.js'),
     'utf8',
 );
+const renderSource = fs.readFileSync(
+    path.join(__dirname, 'dashboard', 'render.js'),
+    'utf8',
+);
+const stateSource = fs.readFileSync(
+    path.join(__dirname, 'dashboard', 'state.js'),
+    'utf8',
+);
+const renderModulePromise = import(
+    `data:text/javascript;base64,${Buffer.from(renderSource).toString('base64')}`
+);
+const stateModulePromise = import(
+    `data:text/javascript;base64,${Buffer.from(stateSource).toString('base64')}`
+);
 
 function sourceBetween(startMarker, endMarker) {
     const start = dashboardSource.indexOf(startMarker);
@@ -17,7 +31,11 @@ function sourceBetween(startMarker, endMarker) {
     return dashboardSource.slice(start, end);
 }
 
-function createHarness() {
+async function createHarness() {
+    const [renderModule, stateModule] = await Promise.all([
+        renderModulePromise,
+        stateModulePromise,
+    ]);
     const elements = new Map();
     const context = vm.createContext({
         AbortController,
@@ -26,6 +44,8 @@ function createHarness() {
         Promise,
         Set,
         WeakMap,
+        RefreshMode: stateModule.RefreshMode,
+        replaceHtmlIfChanged: renderModule.replaceHtmlIfChanged,
         document: {
             getElementById(id) {
                 return elements.get(id) || null;
@@ -33,11 +53,11 @@ function createHarness() {
         },
     });
     const refreshSource = sourceBetween(
-        'const RefreshMode = Object.freeze',
+        'function isSilentRefresh',
         'function getTablePageState',
     );
     const tableSource = sourceBetween(
-        'function replaceHtmlIfChanged',
+        'function setTableLoading',
         'function renderPaginationControls',
     );
     const chartSource = sourceBetween(
@@ -82,8 +102,8 @@ function createHtmlElement(initialHtml = '') {
     };
 }
 
-test('AUTO skips loading while INITIAL and MANUAL retain loading feedback', () => {
-    const harness = createHarness();
+test('AUTO skips loading while INITIAL and MANUAL retain loading feedback', async () => {
+    const harness = await createHarness();
     const autoElement = createHtmlElement('<tr><td>已有数据</td></tr>');
     harness.elements.set('auto-table', autoElement);
     harness.setTableLoading('auto-table', 2, { mode: harness.RefreshMode.AUTO });
@@ -99,8 +119,8 @@ test('AUTO skips loading while INITIAL and MANUAL retain loading feedback', () =
     }
 });
 
-test('HTML replacement writes once only when normalized content changes', () => {
-    const harness = createHarness();
+test('HTML replacement writes once only when normalized content changes', async () => {
+    const harness = await createHarness();
     const element = createHtmlElement('<tr><td>稳定内容</td></tr>');
 
     assert.equal(
@@ -120,8 +140,8 @@ test('HTML replacement writes once only when normalized content changes', () => 
     assert.equal(element.writes(), 1);
 });
 
-test('refresh collision policy skips AUTO and queues one MANUAL refresh', () => {
-    const harness = createHarness();
+test('refresh collision policy skips AUTO and queues one MANUAL refresh', async () => {
+    const harness = await createHarness();
 
     assert.equal(
         harness.refreshCollisionAction(harness.RefreshMode.AUTO, true),
@@ -141,8 +161,8 @@ test('refresh collision policy skips AUTO and queues one MANUAL refresh', () => 
     );
 });
 
-test('unchanged chart data keeps the instance idle and AUTO updates without animation', () => {
-    const harness = createHarness();
+test('unchanged chart data keeps the instance idle and AUTO updates without animation', async () => {
+    const harness = await createHarness();
     const updates = [];
     const chart = {
         data: {

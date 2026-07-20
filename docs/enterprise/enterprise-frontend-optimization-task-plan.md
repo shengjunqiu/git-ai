@@ -775,11 +775,11 @@ Cache enterprise static assets efficiently
 建议顺序：
 
 - [x] `api.js`
-- [ ] `state.js`
+- [x] `state.js`
 - [ ] `router.js`
 - [ ] `pagination.js`
 - [ ] `refresh.js`
-- [ ] `render.js`
+- [x] `render.js`
 
 要求：
 
