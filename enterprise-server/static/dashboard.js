@@ -754,8 +754,90 @@ function getTimeRangeLabel() {
 // --- Chart instances ---
 let overviewTrendChart = null;
 let trendChart = null;
+let trendChartType = null;
 let agentComparisonChart = null;
+const chartDataSignatures = new WeakMap();
 let developerGitInfo = new Map();
+
+function setDisplayIfChanged(element, display) {
+    if (!element || element.style.display === display) return false;
+    element.style.display = display;
+    return true;
+}
+
+function chartDataSignature(labels, datasets) {
+    return JSON.stringify({ labels, datasets });
+}
+
+function rememberChartData(chart, labels, datasets) {
+    chartDataSignatures.set(chart, chartDataSignature(labels, datasets));
+}
+
+function updateChartDataIfChanged(chart, labels, datasets, options) {
+    const nextSignature = chartDataSignature(labels, datasets);
+    if (chartDataSignatures.get(chart) === nextSignature) return false;
+
+    chart.data.labels = [...labels];
+    chart.data.datasets = datasets.map(dataset => ({
+        ...dataset,
+        data: [...(dataset.data || [])],
+    }));
+    chartDataSignatures.set(chart, nextSignature);
+    if (isSilentRefresh(options)) chart.update('none');
+    else chart.update();
+    return true;
+}
+
+function createOverviewTrendChart(canvas, labels, datasets) {
+    const chart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: {
+                x: { ticks: { color: '#64748b', maxRotation: 45 }, grid: { color: '#1e293b' } },
+                y: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+            }
+        }
+    });
+    rememberChartData(chart, labels, datasets);
+    return chart;
+}
+
+function createTrendChart(canvas, type, labels, datasets) {
+    const chart = new Chart(canvas.getContext('2d'), {
+        type,
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: {
+                x: { ticks: { color: '#64748b', maxRotation: 45 }, grid: { color: '#1e293b' } },
+                y: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+            }
+        }
+    });
+    rememberChartData(chart, labels, datasets);
+    return chart;
+}
+
+function createAgentComparisonChart(canvas, labels, datasets) {
+    const chart = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: {
+                x: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+            }
+        }
+    });
+    rememberChartData(chart, labels, datasets);
+    return chart;
+}
 
 // --- Overview ---
 async function loadOverview({ signal, mode }) {
@@ -889,7 +971,7 @@ async function loadClientStatus({ signal }) {
     }
 }
 
-async function loadOverviewTrend({ signal }) {
+async function loadOverviewTrend({ signal, mode }) {
         const d = await apiRequest(
             withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'),
             { signal },
@@ -898,45 +980,30 @@ async function loadOverviewTrend({ signal }) {
         const canvas = document.getElementById('overview-trend-chart');
         const empty = document.getElementById('overview-trend-empty');
         if (data.length === 0) {
-            if (overviewTrendChart) {
-                overviewTrendChart.destroy();
-                overviewTrendChart = null;
-            }
-            canvas.style.display = 'none';
-            empty.style.display = 'block';
+            setDisplayIfChanged(canvas, 'none');
+            setDisplayIfChanged(empty, 'block');
             return;
         }
-        canvas.style.display = 'block';
-        empty.style.display = 'none';
+        setDisplayIfChanged(canvas, 'block');
+        setDisplayIfChanged(empty, 'none');
 
         const labels = data.map(p => p.period);
         const aiValues = data.map(p => p.ai_lines);
         const humanValues = data.map(p => p.human_lines);
+        const datasets = [
+            { label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 },
+            { label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 },
+        ];
 
-        if (overviewTrendChart) overviewTrendChart.destroy();
-        const ctx = canvas.getContext('2d');
-        overviewTrendChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    { label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 },
-                    { label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 },
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { labels: { color: '#94a3b8' } } },
-                scales: {
-                    x: { ticks: { color: '#64748b', maxRotation: 45 }, grid: { color: '#1e293b' } },
-                    y: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
-                }
-            }
-        });
+        if (!overviewTrendChart) {
+            overviewTrendChart = createOverviewTrendChart(canvas, labels, datasets);
+        } else {
+            updateChartDataIfChanged(overviewTrendChart, labels, datasets, { mode });
+        }
 }
 
 // --- Trends ---
-async function loadTrends({ signal }) {
+async function loadTrends({ signal, mode }) {
     const metric = document.getElementById('trend-metric').value;
     const granularity = document.getElementById('trend-granularity').value;
 
@@ -954,77 +1021,60 @@ async function loadTrends({ signal }) {
         const empty = document.getElementById('trend-chart-empty');
 
         if (data.length === 0) {
-            if (trendChart) {
-                trendChart.destroy();
-                trendChart = null;
+            setDisplayIfChanged(canvas, 'none');
+            setDisplayIfChanged(empty, 'block');
+        } else {
+            setDisplayIfChanged(canvas, 'block');
+            setDisplayIfChanged(empty, 'none');
+
+            const labels = data.map(p => p.period);
+            const values = data.map(p => p.value);
+            const isSinglePoint = data.length === 1;
+            const nextChartType = isSinglePoint ? 'bar' : 'line';
+            const datasets = [{
+                label: metricLabels[metric],
+                data: values,
+                borderColor: '#818cf8',
+                backgroundColor: isSinglePoint ? 'rgba(129,140,248,0.7)' : 'rgba(129,140,248,0.15)',
+                fill: !isSinglePoint, tension: 0.3, pointRadius: 4,
+                borderWidth: isSinglePoint ? 1 : 2,
+            }];
+
+            if (!trendChart || trendChartType !== nextChartType) {
+                if (trendChart) trendChart.destroy();
+                trendChart = createTrendChart(canvas, nextChartType, labels, datasets);
+                trendChartType = nextChartType;
+            } else {
+                updateChartDataIfChanged(trendChart, labels, datasets, { mode });
             }
-            canvas.style.display = 'none';
-            empty.style.display = 'block';
-            return;
         }
-
-        canvas.style.display = 'block';
-        empty.style.display = 'none';
-
-        const labels = data.map(p => p.period);
-        const values = data.map(p => p.value);
-        const isSinglePoint = data.length === 1;
-
-        if (trendChart) trendChart.destroy();
-        const ctx = canvas.getContext('2d');
-        trendChart = new Chart(ctx, {
-            type: isSinglePoint ? 'bar' : 'line',
-            data: {
-                labels,
-                datasets: [{
-                    label: metricLabels[metric],
-                    data: values,
-                    borderColor: '#818cf8',
-                    backgroundColor: isSinglePoint ? 'rgba(129,140,248,0.7)' : 'rgba(129,140,248,0.15)',
-                    fill: !isSinglePoint, tension: 0.3, pointRadius: 4,
-                    borderWidth: isSinglePoint ? 1 : 2,
-                }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { labels: { color: '#94a3b8' } } },
-                scales: {
-                    x: { ticks: { color: '#64748b', maxRotation: 45 }, grid: { color: '#1e293b' } },
-                    y: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
-                }
-            }
-        });
 
     // Agent comparison chart
         const comparisonData = await apiRequest('/api/v1/aggregate/agent-comparison', { signal });
         const comps = (comparisonData.comparisons || []).slice(0, 10);
-        if (comps.length > 0) {
+        const comparisonCanvas = document.getElementById('agent-comparison-chart');
+        const comparisonEmpty = document.getElementById('agent-comparison-empty');
+        if (comps.length === 0) {
+            setDisplayIfChanged(comparisonCanvas, 'none');
+            setDisplayIfChanged(comparisonEmpty, 'block');
+        } else {
+            setDisplayIfChanged(comparisonCanvas, 'block');
+            setDisplayIfChanged(comparisonEmpty, 'none');
             const labels = comps.map(c => c.tool_model);
             const aiData = comps.map(c => c.ai_additions || 0);
+            const datasets = [{
+                label: 'AI 代码行数',
+                data: aiData,
+                backgroundColor: 'rgba(129,140,248,0.7)',
+                borderColor: '#818cf8',
+                borderWidth: 1,
+            }];
 
-            if (agentComparisonChart) agentComparisonChart.destroy();
-            const ctx = document.getElementById('agent-comparison-chart').getContext('2d');
-            agentComparisonChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels,
-                    datasets: [{
-                        label: 'AI 代码行数',
-                        data: aiData,
-                        backgroundColor: 'rgba(129,140,248,0.7)',
-                        borderColor: '#818cf8',
-                        borderWidth: 1,
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-                    plugins: { legend: { labels: { color: '#94a3b8' } } },
-                    scales: {
-                        x: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
-                        y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
-                    }
-                }
-            });
+            if (!agentComparisonChart) {
+                agentComparisonChart = createAgentComparisonChart(comparisonCanvas, labels, datasets);
+            } else {
+                updateChartDataIfChanged(agentComparisonChart, labels, datasets, { mode });
+            }
         }
 }
 
