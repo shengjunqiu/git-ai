@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use url::Url;
 
 const DEFAULT_METRICS_ROLLUP_WORKER_INTERVAL_SECONDS: u64 = 5;
 const DEFAULT_METRICS_ROLLUP_WORKER_BATCH_SIZE: i64 = 100;
@@ -114,6 +115,7 @@ pub struct EnvConfig {
     pub rate_limit_default_max_requests: Option<u32>,
     pub rate_limit_default_window_seconds: Option<u64>,
     pub base_url: Option<String>,
+    pub allow_insecure_public_url: Option<bool>,
     // Telemetry
     pub sentry_dsn: Option<String>,
     pub posthog_host: Option<String>,
@@ -124,8 +126,11 @@ impl AppConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
         let env: EnvConfig = envy::from_env()?;
+        let allow_insecure_public_url = env.allow_insecure_public_url.unwrap_or(false);
+        let mut config = Self::from_env_config(env);
+        config.base_url = validate_public_base_url(&config.base_url, allow_insecure_public_url)?;
 
-        Ok(Self::from_env_config(env))
+        Ok(config)
     }
 
     fn from_env_config(env: EnvConfig) -> Self {
@@ -240,6 +245,44 @@ fn max_requests(value: Option<u32>, default: u32) -> u32 {
 
 fn window_seconds(value: Option<u64>, default: u64) -> u64 {
     value.unwrap_or(default).max(1)
+}
+
+fn validate_public_base_url(value: &str, allow_insecure: bool) -> anyhow::Result<String> {
+    let mut url = Url::parse(value)
+        .map_err(|error| anyhow::anyhow!("BASE_URL must be an absolute URL: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        anyhow::bail!("BASE_URL must use http or https");
+    }
+    if url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        anyhow::bail!("BASE_URL must be an origin without credentials, path, query, or fragment");
+    }
+    if url.scheme() == "http" && !is_loopback_host(url.host_str().unwrap_or_default()) {
+        if !allow_insecure {
+            anyhow::bail!(
+                "BASE_URL must use HTTPS outside localhost; set ALLOW_INSECURE_PUBLIC_URL=true only for an explicitly accepted development deployment"
+            );
+        }
+        tracing::warn!(
+            base_url = %url,
+            "ALLOW_INSECURE_PUBLIC_URL is enabled; credentials and installers can be intercepted"
+        );
+    }
+
+    url.set_path("");
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 #[cfg(test)]
@@ -361,6 +404,36 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn public_base_url_requires_https_outside_loopback() {
+        assert_eq!(
+            validate_public_base_url("https://git-ai.example.com/", false).unwrap(),
+            "https://git-ai.example.com"
+        );
+        assert_eq!(
+            validate_public_base_url("http://127.0.0.1:8080", false).unwrap(),
+            "http://127.0.0.1:8080"
+        );
+        assert!(validate_public_base_url("http://git-ai.example.com", false).is_err());
+        assert_eq!(
+            validate_public_base_url("http://git-ai.example.com", true).unwrap(),
+            "http://git-ai.example.com"
+        );
+    }
+
+    #[test]
+    fn public_base_url_rejects_untrusted_url_components() {
+        for value in [
+            "javascript:alert(1)",
+            "https://user:secret@git-ai.example.com",
+            "https://git-ai.example.com/prefix",
+            "https://git-ai.example.com/?redirect=evil",
+            "https://git-ai.example.com/#fragment",
+        ] {
+            assert!(validate_public_base_url(value, false).is_err(), "{value}");
+        }
+    }
+
     fn minimal_env_config() -> EnvConfig {
         EnvConfig {
             database_url: "postgresql://localhost/test".to_string(),
@@ -397,6 +470,7 @@ mod tests {
             rate_limit_default_max_requests: None,
             rate_limit_default_window_seconds: None,
             base_url: None,
+            allow_insecure_public_url: None,
             sentry_dsn: None,
             posthog_host: None,
             posthog_api_key: None,

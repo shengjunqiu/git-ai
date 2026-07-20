@@ -1,6 +1,6 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse, Json, Redirect};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -20,6 +20,9 @@ use crate::routes::AppState;
 const TREND_DAY_BUCKET_LIMIT: i64 = 366;
 const TREND_WEEK_BUCKET_LIMIT: i64 = 260;
 const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
+const DASHBOARD_HTML_CACHE_CONTROL: &str = "no-cache";
+const DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL: &str = "public, max-age=0, must-revalidate";
+const DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 /// GET / — Redirect to the dashboard entry point.
 pub async fn dashboard_root() -> Redirect {
@@ -27,21 +30,29 @@ pub async fn dashboard_root() -> Redirect {
 }
 
 /// GET /me — Dashboard home page
-pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
-    // If not authenticated, redirect to login page
-    let auth = match auth.0 {
-        Some(a) => a,
-        None => return Redirect::to("/auth/login?return_to=/me").into_response(),
+pub async fn dashboard_me(State(state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
+    let response = match auth.0 {
+        Some(auth) => match render_dashboard_template(&auth, &state.config.base_url) {
+            Ok(html) => Html(html).into_response(),
+            Err(error) => error.into_response(),
+        },
+        None => Redirect::to("/auth/login?return_to=/me").into_response(),
     };
 
-    match render_dashboard_template(&auth) {
-        Ok(html) => Html(html).into_response(),
-        Err(error) => error.into_response(),
-    }
+    with_dashboard_html_cache_control(response)
 }
 
 /// GET /static/*path — Dashboard static assets.
-pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl IntoResponse {
+#[derive(Debug, Default, Deserialize)]
+pub struct DashboardStaticAssetQuery {
+    pub v: Option<String>,
+}
+
+pub async fn dashboard_static_asset(
+    Path(asset_path): Path<String>,
+    Query(query): Query<DashboardStaticAssetQuery>,
+    request_headers: HeaderMap,
+) -> Response {
     let relative_path = match sanitize_static_asset_path(&asset_path) {
         Some(path) => path,
         None => return StatusCode::NOT_FOUND.into_response(),
@@ -57,17 +68,86 @@ pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl Into
     };
 
     let content_type = dashboard_asset_content_type(&file_path);
-    (
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        bytes,
-    )
-        .into_response()
+    let version = dashboard_asset_version(&bytes);
+    let etag = dashboard_asset_etag(&version);
+    let cache_control = dashboard_asset_cache_control(&file_path, query.v.as_deref(), &version);
+    let mut response = if if_none_match_matches(&request_headers, &etag) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        bytes.into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    headers.insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("SHA256 ETag is a valid header value"),
+    );
+    if dashboard_asset_is_compressible(content_type) {
+        headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    }
+    response
 }
 
-fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result<String, AppError> {
+fn with_dashboard_html_cache_control(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(DASHBOARD_HTML_CACHE_CONTROL),
+    );
+    response
+}
+
+fn dashboard_asset_version(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn dashboard_asset_etag(version: &str) -> String {
+    format!(r#"W/"sha256-{version}""#)
+}
+
+fn dashboard_asset_is_compressible(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || matches!(
+            content_type.split(';').next().unwrap_or(content_type),
+            "application/javascript" | "application/json" | "image/svg+xml"
+        )
+}
+
+fn dashboard_asset_cache_control(
+    path: &std::path::Path,
+    requested_version: Option<&str>,
+    current_version: &str,
+) -> &'static str {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("html") {
+        return DASHBOARD_HTML_CACHE_CONTROL;
+    }
+    if requested_version == Some(current_version) {
+        DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL
+    } else {
+        DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+    }
+}
+
+fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
+    let current_etag = current_etag.strip_prefix("W/").unwrap_or(current_etag);
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == current_etag
+        })
+}
+
+fn render_dashboard_template(
+    auth: &crate::models::user::AuthIdentity,
+    public_base_url: &str,
+) -> Result<String, AppError> {
     let template_path = dashboard_template_path()?;
     let template = std::fs::read_to_string(&template_path).map_err(|error| {
         AppError::Internal(format!(
@@ -76,6 +156,13 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
             error
         ))
     })?;
+    let static_dir = template_path.parent().ok_or_else(|| {
+        AppError::Internal("Dashboard template path has no parent directory".to_string())
+    })?;
+    let chart_js_version =
+        dashboard_asset_file_version(static_dir, "assets/vendor/chart.js/chart.umd.js")?;
+    let dashboard_css_version = dashboard_asset_file_version(static_dir, "dashboard.css")?;
+    let dashboard_js_version = dashboard_asset_file_version(static_dir, "dashboard.js")?;
 
     let is_admin = auth.is_admin();
     let user_initial = auth
@@ -85,8 +172,17 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
         .unwrap_or('G')
         .to_string();
     let user_role_label = if is_admin { "管理员" } else { "开发者" };
+    let public_base_url = public_base_url.trim_end_matches('/');
+    let install_security_notice = if public_base_url.starts_with("https://") {
+        r#"<div class="help-callout success"><strong>可信下载边界</strong><p>安装脚本、SHA256SUMS 和客户端二进制均从本页配置的同一 HTTPS 服务下载。请先核对脚本哈希，再执行本地文件。</p></div>"#
+    } else {
+        r#"<div class="help-callout warning"><strong>当前部署使用不安全的 HTTP</strong><p>网络中的第三方可能篡改安装脚本或登录流量。此地址只应在已明确接受风险的隔离开发环境使用；生产部署必须配置 HTTPS。下面的命令不会把下载内容直接传给 shell。</p></div>"#
+    };
 
     Ok(template
+        .replace("__GITAI_CHART_JS_VERSION__", &chart_js_version)
+        .replace("__GITAI_DASHBOARD_CSS_VERSION__", &dashboard_css_version)
+        .replace("__GITAI_DASHBOARD_JS_VERSION__", &dashboard_js_version)
         .replace(
             "__GITAI_IS_ADMIN__",
             if is_admin { "true" } else { "false" },
@@ -103,7 +199,24 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
             &json_string_literal(&auth.email),
         )
         .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
-        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label))
+        .replace("__GITAI_PUBLIC_BASE_URL__", &html_escape(public_base_url))
+        .replace("__GITAI_INSTALL_SECURITY_NOTICE__", install_security_notice))
+}
+
+fn dashboard_asset_file_version(
+    static_dir: &std::path::Path,
+    relative_path: &str,
+) -> Result<String, AppError> {
+    let file_path = static_dir.join(relative_path);
+    let bytes = std::fs::read(&file_path).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to read dashboard asset {}: {}",
+            file_path.display(),
+            error
+        ))
+    })?;
+    Ok(dashboard_asset_version(&bytes))
 }
 
 pub fn dashboard_static_dir() -> Result<std::path::PathBuf, AppError> {
@@ -181,6 +294,7 @@ fn dashboard_asset_content_type(path: &std::path::Path) -> &'static str {
 #[derive(Debug, Deserialize)]
 pub struct AggregateQuery {
     pub org: Option<String>,
+    pub parent_id: Option<Uuid>,
     pub since: Option<String>,
     pub until: Option<String>,
     pub sort_by: Option<String>,
@@ -199,6 +313,7 @@ struct OrganizationAggregateCursor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DepartmentAggregateCursor {
     v: u8,
+    parent_id: Option<Uuid>,
     org_name: String,
     sort_path: Vec<String>,
     department_id: Uuid,
@@ -1398,9 +1513,49 @@ pub async fn aggregate_departments(
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, DASHBOARD_MAX_LIMIT);
     let cursor: Option<DepartmentAggregateCursor> =
         decode_dashboard_cursor(query.cursor.as_deref())?;
+    let requested_parent_id = if restrict_department {
+        None
+    } else {
+        query.parent_id
+    };
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.parent_id != requested_parent_id)
+    {
+        return Err(AppError::BadRequest(
+            "Department cursor does not match the requested parent".into(),
+        ));
+    }
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
     let cursor_sort_path = cursor.as_ref().map(|cursor| cursor.sort_path.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
+    let requested_parent_exists = if let Some(parent_id) = requested_parent_id {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(\
+                SELECT 1 \
+                FROM departments d \
+                JOIN organizations o ON o.id = d.org_id \
+                WHERE d.id = $1 \
+                  AND ($2::text IS NULL OR o.slug = $2) \
+                  AND ($3::uuid IS NULL OR o.id = $3)\
+            )",
+        )
+        .bind(parent_id)
+        .bind(&query.org)
+        .bind(org_filter)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?
+    } else {
+        true
+    };
+    if !requested_parent_exists {
+        return Ok(Json(json!({
+            "departments": [],
+            "parent_exists": false,
+            "pagination": pagination_meta(limit, false, None),
+        })));
+    }
 
     let metrics_department_rows = if state.config.dashboard_use_rollups {
         r#"SELECT
@@ -1497,7 +1652,13 @@ pub async fn aggregate_departments(
         department_page AS MATERIALIZED (
             SELECT tree.*
             FROM department_tree tree
-            WHERE ($4::boolean = FALSE OR tree.id = $5::uuid)
+            WHERE (
+                ($4::boolean = TRUE AND tree.id = $5::uuid)
+                OR (
+                    $4::boolean = FALSE
+                    AND tree.parent_id IS NOT DISTINCT FROM $10::uuid
+                )
+            )
               AND (
                   $6::text IS NULL
                   OR tree.org_name > $6::text
@@ -1593,6 +1754,7 @@ pub async fn aggregate_departments(
     .bind(cursor_sort_path)
     .bind(cursor_department_id)
     .bind(fetch_limit(limit))
+    .bind(requested_parent_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Database(e))?;
@@ -1604,6 +1766,7 @@ pub async fn aggregate_departments(
             .map(|(id, _, _, _, _, org_name, _, sort_path, _, _, _, _)| {
                 encode_cursor(&DepartmentAggregateCursor {
                     v: CURSOR_VERSION,
+                    parent_id: requested_parent_id,
                     org_name: org_name.clone(),
                     sort_path: sort_path.clone(),
                     department_id: *id,
@@ -1656,6 +1819,7 @@ pub async fn aggregate_departments(
 
     Ok(Json(json!({
         "departments": result,
+        "parent_exists": true,
         "pagination": pagination_meta(limit, has_more, next_cursor),
     })))
 }
@@ -2842,8 +3006,16 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, MetricsRollupWriteMode};
     use crate::models::user::{AuthIdentity, AuthMethod};
+    use crate::routes::response_has_compressible_content_type;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
     use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
+    use tower::ServiceExt;
+    use tower_http::compression::predicate::{Predicate, SizeAbove};
+    use tower_http::compression::{CompressionLayer, CompressionLevel};
     use uuid::Uuid;
 
     #[tokio::test]
@@ -2852,6 +3024,212 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/me");
+    }
+
+    #[tokio::test]
+    async fn dashboard_static_assets_revalidate_version_and_compress() {
+        let app = Router::new()
+            .route("/static/{*path}", get(dashboard_static_asset))
+            .layer(
+                CompressionLayer::new()
+                    .gzip(true)
+                    .br(true)
+                    .quality(CompressionLevel::Precise(5))
+                    .compress_when(SizeAbove::new(256).and(response_has_compressible_content_type)),
+            );
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(
+            first.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+        );
+        let etag = first.headers().get(header::ETAG).unwrap().clone();
+        assert!(etag.to_str().unwrap().starts_with(r#"W/"sha256-"#));
+        let raw_body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let version = dashboard_asset_version(&raw_body);
+
+        let not_modified = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js")
+                    .header(header::IF_NONE_MATCH, etag.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(not_modified.headers().get(header::ETAG).unwrap(), &etag);
+        assert_eq!(
+            not_modified.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+        assert!(to_bytes(not_modified.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let versioned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/static/dashboard.js?v={version}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            versioned.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL
+        );
+
+        let stale_version = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/dashboard.js?v=stale")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stale_version.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL
+        );
+
+        for asset_path in [
+            "dashboard.css",
+            "dashboard.js",
+            "assets/vendor/chart.js/chart.umd.js",
+        ] {
+            let identity = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/static/{asset_path}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let identity_body = to_bytes(identity.into_body(), usize::MAX).await.unwrap();
+            let mut compressed_sizes = Vec::new();
+            for encoding in ["gzip", "br"] {
+                let compressed = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/static/{asset_path}"))
+                            .header(header::ACCEPT_ENCODING, encoding)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    compressed.headers().get(header::CONTENT_ENCODING).unwrap(),
+                    encoding
+                );
+                assert!(compressed
+                    .headers()
+                    .get_all(header::VARY)
+                    .iter()
+                    .any(|value| value.as_bytes().eq_ignore_ascii_case(b"accept-encoding")));
+                let body = to_bytes(compressed.into_body(), usize::MAX).await.unwrap();
+                assert!(body.len() < identity_body.len());
+                compressed_sizes.push(body.len());
+            }
+            println!(
+                "{asset_path} transfer bytes: identity={}, gzip={}, br={}",
+                identity_body.len(),
+                compressed_sizes[0],
+                compressed_sizes[1]
+            );
+        }
+
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .uri("/static/assets/vendor/chart.js/LICENSE.md")
+                    .header(header::ACCEPT_ENCODING, "br")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(binary.headers().get(header::CONTENT_ENCODING).is_none());
+    }
+
+    #[test]
+    fn dashboard_cache_helpers_handle_html_and_weak_etags() {
+        let html_path = std::path::Path::new("dashboard.html");
+        assert_eq!(
+            dashboard_asset_cache_control(html_path, Some("same"), "same"),
+            DASHBOARD_HTML_CACHE_CONTROL
+        );
+        let response = with_dashboard_html_cache_control(StatusCode::OK.into_response());
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            DASHBOARD_HTML_CACHE_CONTROL
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static(r#""other", W/"sha256-current""#),
+        );
+        assert!(if_none_match_matches(&headers, r#"W/"sha256-current""#));
+    }
+
+    #[test]
+    fn dashboard_template_uses_trusted_public_url_and_escapes_dynamic_text() {
+        let mut auth = global_admin_auth(Uuid::new_v4()).0;
+        auth.name = r#"<Admin "A" & 'B'>"#.into();
+        auth.email = r#"admin+<test>&"@example.com"#.into();
+
+        let html = render_dashboard_template(&auth, "https://git-ai.example.com/").unwrap();
+        let static_dir = dashboard_static_dir().unwrap();
+        let chart_version =
+            dashboard_asset_file_version(&static_dir, "assets/vendor/chart.js/chart.umd.js")
+                .unwrap();
+        let css_version = dashboard_asset_file_version(&static_dir, "dashboard.css").unwrap();
+        let js_version = dashboard_asset_file_version(&static_dir, "dashboard.js").unwrap();
+
+        assert!(html.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(html.contains(r#"href="/auth/register""#));
+        assert!(html.contains(&format!(
+            r#"src="/static/assets/vendor/chart.js/chart.umd.js?v={chart_version}""#
+        )));
+        assert!(html.contains(&format!(r#"href="/static/dashboard.css?v={css_version}""#)));
+        assert!(html.contains(&format!(r#"src="/static/dashboard.js?v={js_version}""#)));
+        assert!(html.contains("&lt;Admin &quot;A&quot; &amp; &#39;B&#39;&gt;"));
+        assert!(!html.contains("117.147.213.234"));
+        assert!(!html.contains("cdn.jsdelivr.net"));
+        assert!(!html.contains("__GITAI_"));
+    }
+
+    #[test]
+    fn dashboard_template_warns_for_explicit_http_development_url() {
+        let auth = global_admin_auth(Uuid::new_v4()).0;
+
+        let html = render_dashboard_template(&auth, "http://127.0.0.1:8080").unwrap();
+
+        assert!(html.contains("当前部署使用不安全的 HTTP"));
+        assert!(!html.contains("| bash"));
+        assert!(!html.contains("| iex"));
     }
 
     #[test]
@@ -3374,38 +3752,57 @@ mod tests {
             assert_eq!(root["w_total"].as_i64(), Some(112));
             assert_eq!(root["w_ai"].as_i64(), Some(43));
             assert_eq!(root["pct_ai"].as_f64(), Some(43.0 / 112.0 * 100.0));
-            assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(true));
+            assert_eq!(root_page["pagination"]["has_more"].as_bool(), Some(false));
 
-            let Json(page) = aggregate_departments(
+            let mut children_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            children_query.parent_id = Some(root_id);
+            let Json(children_page) = aggregate_departments(
                 State(aggregate_state.clone()),
                 auth.clone(),
-                Query(aggregate_query(
-                    Some(org_slug.clone()),
-                    None,
-                    Some(10),
-                    None,
-                )),
+                Query(children_query),
             )
             .await?;
-
-            let departments = page["departments"]
+            let children = children_page["departments"]
                 .as_array()
                 .expect("departments should be an array");
             assert_eq!(
-                departments
+                children
                     .iter()
                     .map(|department| department["department"].as_str().unwrap())
                     .collect::<Vec<_>>(),
-                vec!["Root", "Sibling", "Child", "Leaf"]
+                vec!["Sibling", "Child"]
             );
             assert_eq!(
-                departments
+                children
                     .iter()
                     .map(|department| department["depth"].as_i64().unwrap())
                     .collect::<Vec<_>>(),
-                vec![1, 2, 2, 3]
+                vec![2, 2]
             );
 
+            let mut leaf_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            leaf_query.parent_id = Some(child_id);
+            let Json(leaf_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(leaf_query),
+            )
+            .await?;
+            assert_eq!(
+                string_values(&leaf_page, "departments", "department"),
+                vec!["Leaf"]
+            );
+
+            let departments = std::iter::once(root.clone())
+                .chain(children.iter().cloned())
+                .chain(
+                    leaf_page["departments"]
+                        .as_array()
+                        .expect("leaf departments should be an array")
+                        .iter()
+                        .cloned(),
+                )
+                .collect::<Vec<_>>();
             let expected = [
                 ("Root", 5, 112, 43, 43.0 / 112.0 * 100.0, false),
                 ("Child", 3, 62, 21, 21.0 / 62.0 * 100.0, false),
@@ -3427,15 +3824,52 @@ mod tests {
                 assert_eq!(department["is_leaf"].as_bool(), Some(is_leaf));
             }
 
+            let mut first_child_query =
+                aggregate_query(Some(org_slug.clone()), None, Some(1), None);
+            first_child_query.parent_id = Some(root_id);
+            let Json(first_child_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(first_child_query),
+            )
+            .await?;
+            let mut mismatched_cursor_query = aggregate_query(
+                Some(org_slug.clone()),
+                None,
+                Some(1),
+                Some(required_next_cursor(&first_child_page)),
+            );
+            mismatched_cursor_query.parent_id = Some(child_id);
+            let cursor_error = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(mismatched_cursor_query),
+            )
+            .await
+            .expect_err("a department cursor must not be reused for another parent");
+            assert!(matches!(cursor_error, AppError::BadRequest(_)));
+
+            let mut missing_parent_query =
+                aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            missing_parent_query.parent_id = Some(Uuid::new_v4());
+            let Json(missing_parent_page) = aggregate_departments(
+                State(aggregate_state.clone()),
+                auth.clone(),
+                Query(missing_parent_query),
+            )
+            .await?;
+            assert_eq!(missing_parent_page["parent_exists"].as_bool(), Some(false));
+            assert!(missing_parent_page["departments"]
+                .as_array()
+                .expect("missing parent departments should be an array")
+                .is_empty());
+
+            let mut developer_query = aggregate_query(Some(org_slug.clone()), None, Some(10), None);
+            developer_query.parent_id = Some(sibling_id);
             let Json(developer_page) = aggregate_departments(
                 State(aggregate_state),
                 department_member_auth(child_user, org_id, &org_slug, child_id),
-                Query(aggregate_query(
-                    Some(org_slug.clone()),
-                    None,
-                    Some(10),
-                    None,
-                )),
+                Query(developer_query),
             )
             .await?;
             let developer_departments = developer_page["departments"]
@@ -4155,6 +4589,7 @@ mod tests {
     ) -> AggregateQuery {
         AggregateQuery {
             org,
+            parent_id: None,
             since,
             until: None,
             sort_by: None,

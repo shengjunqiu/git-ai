@@ -1,7 +1,8 @@
-use axum::extract::{FromRequestParts, Request};
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::request::Parts;
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use std::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -418,6 +419,99 @@ fn cookie_value(parts: &Parts, name: &str) -> Option<String> {
     })
 }
 
+/// Apply browser hardening headers and enforce same-origin requests for
+/// cookie-authenticated admin mutations.
+pub async fn browser_security_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let rejection = validate_admin_mutation_origin(
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+        &state.config.base_url,
+    )
+    .err();
+    let mut response = match rejection {
+        Some(error) => error.into_response(),
+        None => next.run(request).await,
+    };
+    apply_browser_security_headers(response.headers_mut());
+    response
+}
+
+fn validate_admin_mutation_origin(
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+    public_base_url: &str,
+) -> Result<(), AppError> {
+    if !path.starts_with("/api/admin/")
+        || !matches!(
+            *method,
+            Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+        )
+        || !uses_ambient_cookie_auth(headers)
+    {
+        return Ok(());
+    }
+
+    let supplied_origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| AppError::Forbidden("Origin header required".into()))?;
+    let supplied_origin = url::Url::parse(supplied_origin)
+        .map_err(|_| AppError::Forbidden("Invalid Origin header".into()))?;
+    let configured_origin = url::Url::parse(public_base_url)
+        .map_err(|_| AppError::Internal("Invalid configured BASE_URL".into()))?;
+    if supplied_origin.origin() != configured_origin.origin() {
+        return Err(AppError::Forbidden(
+            "Cross-origin admin mutation rejected".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn uses_ambient_cookie_auth(headers: &HeaderMap) -> bool {
+    let Some(cookies) = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    cookies.split(';').any(|cookie| {
+        let name = cookie
+            .trim()
+            .split_once('=')
+            .map(|(name, _)| name)
+            .unwrap_or_default();
+        matches!(name, "access_token") || name == sessions::WEB_SESSION_COOKIE
+    })
+}
+
+fn apply_browser_security_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        HeaderName::from_static("content-security-policy-report-only"),
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+}
+
 /// Middleware to add request ID for tracing
 pub async fn request_id_middleware(request: Request, next: Next) -> Response {
     let request_id = Uuid::new_v4().to_string();
@@ -495,5 +589,86 @@ mod request_id_tests {
             .to_str()
             .unwrap();
         assert!(Uuid::parse_str(request_id).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod browser_security_tests {
+    use super::{apply_browser_security_headers, validate_admin_mutation_origin};
+    use axum::http::{header, HeaderMap, HeaderValue, Method};
+
+    #[test]
+    fn adds_dashboard_security_headers() {
+        let mut headers = HeaderMap::new();
+        apply_browser_security_headers(&mut headers);
+
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert_eq!(headers["referrer-policy"], "no-referrer");
+        assert_eq!(headers["x-frame-options"], "DENY");
+        let csp = headers["content-security-policy-report-only"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn cookie_authenticated_admin_mutations_require_configured_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("web_session=test-session"),
+        );
+
+        assert!(validate_admin_mutation_origin(
+            &Method::POST,
+            "/api/admin/users",
+            &headers,
+            "https://git-ai.example.com",
+        )
+        .is_err());
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.example"),
+        );
+        assert!(validate_admin_mutation_origin(
+            &Method::POST,
+            "/api/admin/users",
+            &headers,
+            "https://git-ai.example.com",
+        )
+        .is_err());
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://git-ai.example.com"),
+        );
+        assert!(validate_admin_mutation_origin(
+            &Method::POST,
+            "/api/admin/users",
+            &headers,
+            "https://git-ai.example.com",
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn bearer_admin_mutations_and_safe_requests_do_not_require_origin() {
+        let headers = HeaderMap::new();
+        assert!(validate_admin_mutation_origin(
+            &Method::POST,
+            "/api/admin/releases/publish",
+            &headers,
+            "https://git-ai.example.com",
+        )
+        .is_ok());
+        assert!(validate_admin_mutation_origin(
+            &Method::GET,
+            "/api/admin/users/list",
+            &headers,
+            "https://git-ai.example.com",
+        )
+        .is_ok());
     }
 }

@@ -1,7 +1,10 @@
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, Extensions, HeaderMap, StatusCode, Version};
 use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
+use tower_http::compression::predicate::{Predicate, SizeAbove};
+use tower_http::compression::{CompressionLayer, CompressionLevel};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -27,12 +30,45 @@ pub fn auth_password_limiter(config: &AppConfig) -> std::sync::Arc<tokio::sync::
     ))
 }
 
+pub(crate) fn response_has_compressible_content_type(
+    _status: StatusCode,
+    _version: Version,
+    headers: &HeaderMap,
+    _extensions: &Extensions,
+) -> bool {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    content_type.starts_with("text/")
+        || matches!(
+            content_type.as_str(),
+            "application/javascript"
+                | "application/json"
+                | "application/wasm"
+                | "application/xhtml+xml"
+                | "application/xml"
+                | "image/svg+xml"
+        )
+        || content_type.ends_with("+json")
+        || content_type.ends_with("+xml")
+}
+
 /// Build the complete router with all routes
 pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
+    let compression = CompressionLayer::new()
+        .gzip(true)
+        .br(true)
+        .quality(CompressionLevel::Precise(5))
+        .compress_when(SizeAbove::new(256).and(response_has_compressible_content_type));
 
     Router::new()
         .route("/", get(crate::handlers::dashboard::dashboard_root))
@@ -393,8 +429,13 @@ pub fn build_router(state: AppState) -> Router {
             crate::services::rate_limit::rate_limit_middleware,
         ))
         .layer(TraceLayer::new_for_http())
+        .layer(compression)
         // Keep the request span outside TraceLayer so all downstream logs share its request ID.
         .layer(middleware::from_fn(request_id_middleware))
         .layer(cors)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::browser_security_middleware,
+        ))
         .with_state(state)
 }

@@ -2,15 +2,15 @@
 
 本文面向公司内部开发人员，介绍如何注册账号、安装 git-ai CLI、完成首次登录授权，以及配置常用编辑器和 AI 编程工具。
 
-> 公司 git-ai 服务地址：`https://117.147.213.234:38080`
+> 公司 git-ai 服务地址示例：`https://git-ai.example.com`
 >
-> 注册时必须使用公司企业邮箱。
+> 请以 Dashboard 帮助页显示的 HTTPS 地址为准；注册时必须使用公司企业邮箱。
 
 ## 1. 注册账号
 
 在浏览器中打开：
 
-<https://117.147.213.234:38080/auth/register>
+<https://git-ai.example.com/auth/register>
 
 按照页面提示填写姓名、企业邮箱和密码，并选择所属组织与部门。注册成功后请保持浏览器登录状态，后续 CLI 授权会直接使用当前账号。
 
@@ -32,24 +32,28 @@ git --version
 
 ### 3.1 macOS
 
-打开“终端”，执行：
+打开“终端”，下载脚本和同源校验清单，校验后执行：
 
 ```bash
-curl -fsSL \
-  https://117.147.213.234:38080/worker/releases/latest/download/install.sh |
-  bash
+base="https://git-ai.example.com/worker/releases/latest/download"
+curl -fSLo install.sh "$base/install.sh"
+curl -fSLo SHA256SUMS "$base/SHA256SUMS"
+grep '  install.sh$' SHA256SUMS | shasum -a 256 -c -
+bash ./install.sh
 ```
 
 安装器会自动识别 Intel 或 Apple Silicon 芯片，并将 git-ai 安装到 `~/.git-ai/bin/`。
 
 ### 3.2 Linux
 
-打开终端，执行：
+打开终端，下载脚本和同源校验清单，校验后执行：
 
 ```bash
-curl -fsSL \
-  https://117.147.213.234:38080/worker/releases/latest/download/install.sh |
-  bash
+base="https://git-ai.example.com/worker/releases/latest/download"
+curl -fSLo install.sh "$base/install.sh"
+curl -fSLo SHA256SUMS "$base/SHA256SUMS"
+grep '  install.sh$' SHA256SUMS | sha256sum -c -
+bash ./install.sh
 ```
 
 安装器会自动识别 x64 或 ARM64 架构，并将 git-ai 安装到 `~/.git-ai/bin/`。
@@ -62,10 +66,16 @@ curl -fsSL \
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 ```
 
-然后执行安装：
+然后下载脚本和同源校验清单，校验后执行：
 
 ```powershell
-irm "https://117.147.213.234:38080/worker/releases/latest/download/install.ps1" | iex
+$base = "https://git-ai.example.com/worker/releases/latest/download"
+Invoke-WebRequest "$base/install.ps1" -OutFile install.ps1
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+$expected = ((Select-String -Path SHA256SUMS -Pattern "  install.ps1$").Line -split "\s+")[0].ToLower()
+$actual = (Get-FileHash .\install.ps1 -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw "install.ps1 SHA256 mismatch" }
+& .\install.ps1
 ```
 
 git-ai 会安装到 `%USERPROFILE%\.git-ai\bin\`。
@@ -79,13 +89,13 @@ Windows 更新时请直接执行 `git-ai update`。不要通过 `git ai update` 
 macOS 和 Linux：
 
 ```bash
-~/.git-ai/bin/git-ai login --server https://117.147.213.234:38080
+~/.git-ai/bin/git-ai login --server https://git-ai.example.com
 ```
 
 Windows PowerShell：
 
 ```powershell
-& "$HOME\.git-ai\bin\git-ai.exe" login --server "https://117.147.213.234:38080"
+& "$HOME\.git-ai\bin\git-ai.exe" login --server "https://git-ai.example.com"
 ```
 
 命令执行后：
@@ -177,7 +187,7 @@ git-ai logout
 重新登录：
 
 ```bash
-git-ai login --server https://117.147.213.234:38080
+git-ai login --server https://git-ai.example.com
 ```
 
 如果浏览器中仍保留其他账号的登录状态，请先在网页端退出，再重新执行 CLI 登录。
@@ -202,7 +212,7 @@ source ~/.bashrc # bash
 使用以下命令打印授权地址，然后手动复制到浏览器：
 
 ```bash
-git-ai login --server https://117.147.213.234:38080 --no-browser
+git-ai login --server https://git-ai.example.com --no-browser
 ```
 
 ### 登录后身份不正确
@@ -211,5 +221,5 @@ git-ai login --server https://117.147.213.234:38080 --no-browser
 
 ```bash
 git-ai logout
-git-ai login --server https://117.147.213.234:38080
+git-ai login --server https://git-ai.example.com
 ```

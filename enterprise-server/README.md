@@ -33,7 +33,8 @@ cargo run
 | `S3_ACCESS_KEY` | S3 访问密钥 | `minioadmin` |
 | `S3_SECRET_KEY` | S3 秘密密钥 | `minioadmin` |
 | `LISTEN_ADDR` | 监听地址 | `0.0.0.0:8080` |
-| `BASE_URL` | 服务基础 URL | `http://localhost:8080` |
+| `BASE_URL` | 可信公开 Origin；用于 OAuth、Dashboard、CLI 安装命令和发布下载；生产必须使用 HTTPS | `http://localhost:8080` |
+| `ALLOW_INSECURE_PUBLIC_URL` | 仅开发环境显式允许非回环 HTTP 地址 | `false` |
 
 ## 客户端配置
 
