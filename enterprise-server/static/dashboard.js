@@ -6,6 +6,11 @@ import {
 } from './dashboard/api.js';
 import { createDashboardPagination } from './dashboard/pagination.js';
 import {
+    RefreshMode,
+    createDashboardRefresh,
+    isSilentRefresh,
+} from './dashboard/refresh.js';
+import {
     clampPercent,
     escapeAttribute,
     escapeHtml,
@@ -22,7 +27,6 @@ import {
 import { createDashboardRouter } from './dashboard/router.js';
 import {
     DASHBOARD_DEFAULT_SECTION,
-    RefreshMode,
     createDashboardState,
 } from './dashboard/state.js';
 
@@ -55,6 +59,42 @@ const { apiRequest } = createApiClient({
 });
 const appState = createDashboardState();
 const {
+    currentSectionRequestSignal,
+    getRefreshSnapshot,
+    handleVisibilityChange: handleDashboardVisibilityChange,
+    loadSection,
+    refreshCurrentSection,
+    startAutoRefresh,
+} = createDashboardRefresh({
+    currentSection: () => appState.currentSection,
+    isPageHidden: () => document.hidden,
+    loadSectionData: async (id, context) => {
+        const loaders = {
+            overview: loadOverview,
+            trends: loadTrends,
+            organizations: loadOrgs,
+            developers: loadDevs,
+            projects: loadProjects,
+            tools: loadTools,
+            users: loadUsers,
+            departments: loadDepartments,
+            apikeys: loadApiKeys,
+            releases: loadReleaseManagement,
+            files: loadManagedFiles,
+            help: loadHelp,
+        };
+        await loaders[id](context);
+    },
+    afterSectionSuccess: async (id, { mode, signal }) => {
+        if (!isAdmin && appState.currentSection === id) {
+            await loadClientStatus({ mode, signal, sectionId: id });
+        }
+    },
+    onSectionSuccess: clearSectionError,
+    onSectionError: showSectionLoadError,
+    onStatusChange: updateRefreshTime,
+});
+const {
     fetchPaginatedJson,
     getTablePageSnapshot,
     goToTablePage,
@@ -68,27 +108,11 @@ const {
 });
 
 // --- Auto refresh ---
-const AUTO_REFRESH_MS = 60000; // 60 seconds
 let departmentTreeRows = [];
 let currentDepartmentLevelRows = [];
 const departmentLevelCache = new Map();
 const DEPARTMENT_LEVEL_CACHE_MS = 30000;
 let activeDepartmentParentId = null;
-function isSilentRefresh(options) {
-    return options?.mode === RefreshMode.AUTO;
-}
-
-function currentSectionRequestSignal() {
-    return appState.sectionRefreshes.get(appState.currentSection)?.controller.signal;
-}
-
-function refreshCollisionAction(mode, hasInFlight) {
-    if (!hasInFlight) return 'start';
-    if (mode === RefreshMode.AUTO) return 'skip';
-    if (mode === RefreshMode.MANUAL) return 'queue';
-    return 'replace';
-}
-
 function setTableLoading(tbodyId, colspan, options) {
     if (isSilentRefresh(options)) return;
     replaceHtmlIfChanged(
@@ -288,38 +312,15 @@ function initializeMobileNavigation() {
     syncMobileNavigation();
 }
 
-function startAutoRefresh() {
-    stopAutoRefresh();
-    appState.refreshInterval = setInterval(
-        () => {
-            if (!document.hidden) refreshCurrentSection({ mode: RefreshMode.AUTO });
-        },
-        AUTO_REFRESH_MS,
-    );
-}
-function stopAutoRefresh() {
-    if (appState.refreshInterval) {
-        clearInterval(appState.refreshInterval);
-        appState.refreshInterval = null;
-    }
-}
-
-function updateRefreshTime({ stale = false } = {}) {
+function updateRefreshTime({
+    lastRefreshAttemptAt = null,
+    lastRefreshSuccessAt = null,
+    stale = false,
+} = {}) {
     const status = document.getElementById('last-refresh');
-    status.textContent = `最后成功: ${formatRefreshTime(appState.lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(appState.lastRefreshAttemptAt)}`;
+    status.textContent = `最后成功: ${formatRefreshTime(lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(lastRefreshAttemptAt)}`;
     status.title = stale ? '后台刷新失败，当前显示的数据可能已过期' : '';
     document.querySelector('.refresh-dot')?.classList.toggle('stale', stale);
-}
-
-async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
-    const sectionId = appState.currentSection;
-    return loadSection(sectionId, { mode });
-}
-
-function handleDashboardVisibilityChange() {
-    if (!document.hidden) {
-        refreshCurrentSection({ mode: RefreshMode.AUTO });
-    }
 }
 
 // --- Navigation ---
@@ -525,9 +526,9 @@ function showSectionLoadError(id, error, { background = false } = {}) {
         error,
     });
     if (error instanceof AuthExpiredError) return;
-    if (background && appState.successfulSections.has(id)) {
+    if (background) {
         if (appState.currentSection === id) {
-            updateRefreshTime({ stale: true });
+            updateRefreshTime({ ...getRefreshSnapshot(), stale: true });
             showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
         }
         return;
@@ -546,76 +547,6 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     retry.addEventListener('click', () => loadSection(id, { mode: RefreshMode.MANUAL }));
     banner.append(message, retry);
     section.prepend(banner);
-}
-
-function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
-    const existingRefresh = appState.sectionRefreshes.get(id);
-    const collisionAction = refreshCollisionAction(mode, Boolean(existingRefresh));
-    if (collisionAction === 'skip') return Promise.resolve(false);
-    if (collisionAction === 'queue') {
-        const existingQueuedRefresh = appState.queuedManualRefreshes.get(id);
-        if (existingQueuedRefresh) return existingQueuedRefresh;
-
-        // A manual refresh wins over an in-flight AUTO by running once after it settles.
-        // Repeated clicks share this queued promise instead of adding more requests.
-        const queuedRefresh = existingRefresh.promise.then(() => {
-            appState.queuedManualRefreshes.delete(id);
-            return loadSection(id, { mode: RefreshMode.MANUAL });
-        });
-        appState.queuedManualRefreshes.set(id, queuedRefresh);
-        return queuedRefresh;
-    }
-    if (collisionAction === 'replace') existingRefresh.controller.abort();
-
-    const controller = new AbortController();
-    const refresh = { controller, promise: null };
-    refresh.promise = performSectionLoad(id, { mode, controller })
-        .finally(() => {
-            if (appState.sectionRefreshes.get(id) === refresh) {
-                appState.sectionRefreshes.delete(id);
-            }
-        });
-    appState.sectionRefreshes.set(id, refresh);
-    return refresh.promise;
-}
-
-async function performSectionLoad(id, { mode, controller }) {
-    const background = isSilentRefresh({ mode }) && appState.successfulSections.has(id);
-    if (appState.currentSection === id) {
-        appState.lastRefreshAttemptAt = new Date();
-        updateRefreshTime({ stale: false });
-    }
-    const loaders = {
-        overview: loadOverview,
-        trends: loadTrends,
-        organizations: loadOrgs,
-        developers: loadDevs,
-        projects: loadProjects,
-        tools: loadTools,
-        users: loadUsers,
-        departments: loadDepartments,
-        apikeys: loadApiKeys,
-        releases: loadReleaseManagement,
-        files: loadManagedFiles,
-        help: loadHelp,
-    };
-    try {
-        await loaders[id]({ mode, signal: controller.signal });
-        if (controller.signal.aborted) return false;
-        appState.successfulSections.add(id);
-        clearSectionError(id);
-        if (!isAdmin && appState.currentSection === id) {
-            await loadClientStatus({ mode, signal: controller.signal, sectionId: id });
-        }
-        if (appState.currentSection === id) {
-            appState.lastRefreshSuccessAt = new Date();
-            updateRefreshTime({ stale: false });
-        }
-        return true;
-    } catch (error) {
-        showSectionLoadError(id, error, { background });
-        return false;
-    }
 }
 
 // --- Toast notifications ---
@@ -2888,5 +2819,5 @@ activateDashboardSection(initialSection);
 if (requestedInitialSection && requestedInitialSection !== initialSection) {
     updateDashboardSectionUrl(initialSection, true);
 }
-updateRefreshTime();
+updateRefreshTime(getRefreshSnapshot());
 startAutoRefresh();

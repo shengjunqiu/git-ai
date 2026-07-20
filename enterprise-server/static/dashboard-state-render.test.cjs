@@ -47,10 +47,9 @@ test('dashboard state instances are isolated and invalid sections fail closed', 
 
     assert.equal(first.currentSection, 'projects');
     assert.equal(second.currentSection, DASHBOARD_DEFAULT_SECTION);
-    first.successfulSections.add('projects');
-    first.sectionRefreshes.set('projects', { promise: Promise.resolve() });
-    assert.equal(second.successfulSections.size, 0);
-    assert.equal(second.sectionRefreshes.size, 0);
+    assert.notEqual(first, second);
+    first.currentSection = 'help';
+    assert.equal(second.currentSection, DASHBOARD_DEFAULT_SECTION);
     assert.equal(Object.isFrozen(DASHBOARD_SECTIONS), true);
     assert.equal(Object.isFrozen(ADMIN_ONLY_DASHBOARD_SECTIONS), true);
 });

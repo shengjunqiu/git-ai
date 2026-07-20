@@ -778,20 +778,20 @@ Cache enterprise static assets efficiently
 - [x] `state.js`
 - [x] `router.js`
 - [x] `pagination.js`
-- [ ] `refresh.js`
+- [x] `refresh.js`
 - [x] `render.js`
 
 要求：
 
-- [ ] 模块不依赖隐式全局变量。
-- [ ] 纯逻辑函数可以在 Node 中测试。
-- [ ] DOM selector 和 API URL 不散落在多个模块。
-- [ ] 循环依赖在 code review 中禁止合入。
+- [x] 模块不依赖隐式全局变量。
+- [x] 纯逻辑函数可以在 Node 中测试。
+- [x] DOM selector 和 API URL 不散落在多个模块。
+- [x] 循环依赖在 code review 中禁止合入。
 
 验收标准：
 
-- [ ] `dashboard.js` 不再承担所有基础设施职责。
-- [ ] 请求、分页、路由和刷新模块拥有独立测试边界。
+- [x] `dashboard.js` 不再承担所有基础设施职责。
+- [x] 请求、分页、路由和刷新模块拥有独立测试边界。
 
 ### 6.4 提取 UI 模块
 

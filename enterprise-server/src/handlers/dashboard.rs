@@ -3202,6 +3202,7 @@ mod tests {
             "dashboard.js",
             "dashboard/api.js",
             "dashboard/pagination.js",
+            "dashboard/refresh.js",
             "dashboard/render.js",
             "dashboard/router.js",
             "dashboard/state.js",

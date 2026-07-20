@@ -50,10 +50,10 @@ git diff --check
 
 ## 阶段 6.3 批次 2：状态与通用渲染
 
-- `state.js` 提供不可变的栏目/刷新常量，以及每次初始化均相互隔离的
-  `createDashboardState()`。
-- 跨栏目共享的当前栏目、刷新任务、排队中的手动刷新、成功栏目和刷新时间统一通过
-  `appState` 属性访问，避免对 ES module imported binding 重新赋值。
+- `state.js` 提供不可变的栏目常量，以及每次初始化均相互隔离的
+  `createDashboardState()`；最终仅保留入口协调所需的当前栏目。
+- 刷新模式、任务、排队中的手动刷新、成功栏目和刷新时间在批次 5 迁入
+  `refresh.js`，避免入口直接修改刷新状态。
 - 部门层级、分页、选项搜索、移动导航、图表和开发者详情等状态仍由对应功能持有。
 - `render.js` 提供数值/时间格式化、安全文本和属性转义，以及接收明确 element 参数的
   幂等 DOM 更新 helper。
@@ -94,3 +94,19 @@ git diff --check
 
 专项 Node 测试覆盖页大小限制、查询参数拼接、cursor 前进/回退及截断、loading 和边界
 保护、分页按钮状态、类型化错误传播与未知异常包装。
+
+## 阶段 6.3 批次 5：刷新
+
+- `refresh.js` 独立持有栏目刷新任务、手动刷新队列、成功栏目、刷新时间和自动刷新
+  timer；`RefreshMode` 与纯碰撞决策也由该模块导出。
+- 碰撞策略保持不变：正在刷新时 AUTO 直接跳过，重复 MANUAL 共享一个后续刷新
+  Promise，INITIAL 中止旧请求并立即替换。
+- 栏目加载顺序保持为：记录尝试时间、执行栏目 loader、检查取消、标记成功并清理错误、
+  加载客户端状态、记录成功时间。入口通过 callback 注入 loader、错误 UI 和状态 UI，
+  刷新模块不依赖 Dashboard DOM 或业务栏目实现。
+- 仅成功加载过的栏目发生 AUTO 失败时才按后台 stale 错误处理；切到后台的页面不会由
+  timer 或 visibility callback 发起请求。
+- `state.js` 不再暴露刷新 Map、Set、时间或 timer，入口只能读取冻结的刷新状态快照。
+
+专项 Node 测试覆盖碰撞策略、单次手动排队、INITIAL 取消替换、生命周期顺序、后台失败
+语义、刷新时间快照，以及页面可见性和 timer 的启停。

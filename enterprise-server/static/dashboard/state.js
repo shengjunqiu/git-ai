@@ -1,9 +1,3 @@
-export const RefreshMode = Object.freeze({
-    INITIAL: 'initial',
-    MANUAL: 'manual',
-    AUTO: 'auto',
-});
-
 export const DASHBOARD_DEFAULT_SECTION = 'overview';
 export const DASHBOARD_SECTIONS = Object.freeze([
     'overview',
@@ -33,11 +27,5 @@ export function createDashboardState(initialSection = DASHBOARD_DEFAULT_SECTION)
         : DASHBOARD_DEFAULT_SECTION;
     return {
         currentSection,
-        refreshInterval: null,
-        sectionRefreshes: new Map(),
-        queuedManualRefreshes: new Map(),
-        lastRefreshAttemptAt: null,
-        lastRefreshSuccessAt: null,
-        successfulSections: new Set(),
     };
 }
