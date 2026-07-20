@@ -806,10 +806,6 @@ try {
     Write-Warning "Close and reopen PowerShell, then run: Get-Command git -All"
 }
 
-Write-Success "Successfully installed git-ai into $installDir"
-Write-Success "You can now run 'git-ai' from your terminal"
-Write-Success "To update later on Windows, run 'git-ai update' (not 'git ai update')"
-
 # Configure Git Bash shell profiles so git-ai takes precedence over /mingw64/bin/git
 # Git Bash (MSYS2/MinGW) prepends its own directories to PATH, which shadows
 # the Windows PATH entry we set above. Writing to ~/.bashrc ensures git-ai's
@@ -957,11 +953,16 @@ if (-not $env:GIT_AI_TEST_DB_PATH -and -not $env:GITAI_TEST_DB_PATH) {
     }
 }
 
-Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow
-
 # If nonce exchange failed, run interactive login
 if ($needLogin) {
     Write-Host ''
     Write-Host 'Launching login...'
     & $finalExe login
 }
+
+# Only report installation success after all configuration, background-service
+# startup, fallback handling, and any required login have finished.
+Write-Success "Successfully installed git-ai into $installDir"
+Write-Success "You can now run 'git-ai' from your terminal"
+Write-Success "To update later on Windows, run 'git-ai update' (not 'git ai update')"
+Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow

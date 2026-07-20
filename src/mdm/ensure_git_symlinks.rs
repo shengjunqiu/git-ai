@@ -1,6 +1,8 @@
 use crate::error::GitAiError;
 use crate::git::repository::exec_git;
 use crate::mdm::utils::{git_ai_binary_name, git_shim_binary_name, managed_install_bin_dir};
+#[cfg(windows)]
+use crate::utils::LockFile;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -157,58 +159,16 @@ fn ensure_libexec_symlink_for_binary(exe_path: &Path) -> Result<(), GitAiError> 
     // Create symlink: base_dir/libexec -> /usr/libexec
     let symlink_path = base_dir.join("libexec");
 
-    // Remove existing symlink/junction if present
-    if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
-        // On Windows, junctions are directories, so use remove_dir
-        #[cfg(windows)]
-        {
-            if windows_junction_exists(&symlink_path)? {
-                junction::delete(&symlink_path).map_err(|e| {
-                    GitAiError::Generic(format!(
-                        "Failed to remove existing libexec junction {}: {}",
-                        symlink_path.display(),
-                        e
-                    ))
-                })?;
-            } else {
-                let metadata = symlink_path.symlink_metadata()?;
-                if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-                    // Older/failed installers can leave an ordinary empty
-                    // directory here. It is safe to migrate, but never delete
-                    // a non-empty directory that may contain user files.
-                    if fs::read_dir(&symlink_path)?.next().is_none() {
-                        fs::remove_dir(&symlink_path)?;
-                    } else {
-                        return Err(GitAiError::Generic(format!(
-                            "Refusing to replace non-empty libexec directory {}",
-                            symlink_path.display()
-                        )));
-                    }
-                } else if !metadata.file_type().is_symlink() {
-                    return Err(GitAiError::Generic(format!(
-                        "Refusing to replace non-link libexec path {}",
-                        symlink_path.display()
-                    )));
-                } else {
-                    // Windows uses remove_dir for directory symlinks. Broken
-                    // links cannot be followed to determine their kind, so
-                    // keep the safe remove_file fallback after verifying this
-                    // is a reparse link.
-                    if fs::remove_dir(&symlink_path).is_err() {
-                        fs::remove_file(&symlink_path)?;
-                    }
-                }
-            }
-        }
-        #[cfg(unix)]
-        std::fs::remove_file(&symlink_path)?;
-    }
+    #[cfg(windows)]
+    ensure_windows_junction(&symlink_path, libexec_target)?;
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(libexec_target, &symlink_path)?;
-
-    #[cfg(windows)]
-    create_junction(&symlink_path, libexec_target)?;
+    {
+        if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
+            std::fs::remove_file(&symlink_path)?;
+        }
+        std::os::unix::fs::symlink(libexec_target, &symlink_path)?;
+    }
 
     Ok(())
 }
@@ -228,20 +188,137 @@ fn windows_junction_exists(path: &Path) -> Result<bool, GitAiError> {
     }
 }
 
-/// Create a directory junction on Windows (doesn't require admin privileges)
 #[cfg(windows)]
-fn create_junction(
-    junction_path: &std::path::Path,
-    target: &std::path::Path,
-) -> Result<(), GitAiError> {
-    junction::create(target, junction_path).map_err(|e| {
+fn ensure_windows_junction(junction_path: &Path, target: &Path) -> Result<(), GitAiError> {
+    const MAX_CREATE_ATTEMPTS: usize = 2;
+    const LOCK_ATTEMPTS: usize = 200;
+    const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
+    let lock_path = junction_path
+        .parent()
+        .ok_or_else(|| GitAiError::Generic("Cannot get libexec parent directory".to_string()))?
+        .join(".libexec.lock");
+    let mut lock = None;
+    for _ in 0..LOCK_ATTEMPTS {
+        if let Some(acquired) = LockFile::try_acquire(&lock_path) {
+            lock = Some(acquired);
+            break;
+        }
+        std::thread::sleep(LOCK_RETRY_DELAY);
+    }
+    let _lock = lock.ok_or_else(|| {
         GitAiError::Generic(format!(
-            "Failed to create junction {} -> {}: {}",
-            junction_path.display(),
-            target.display(),
-            e
+            "Timed out waiting to update libexec junction {}",
+            junction_path.display()
         ))
-    })
+    })?;
+
+    for attempt in 0..MAX_CREATE_ATTEMPTS {
+        if !prepare_windows_junction_path(junction_path, target)? {
+            return Ok(());
+        }
+
+        match junction::create(target, junction_path) {
+            Ok(()) => return Ok(()),
+            // Another installer may have created the path after our inspection,
+            // or a failed junction attempt may have left an empty directory.
+            // Re-inspect once so a correct junction becomes success and a safe
+            // empty-directory residue can be migrated.
+            Err(error)
+                if error.raw_os_error() == Some(183) && attempt + 1 < MAX_CREATE_ATTEMPTS =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(GitAiError::Generic(format!(
+                    "Failed to create junction {} -> {}: {}",
+                    junction_path.display(),
+                    target.display(),
+                    error
+                )));
+            }
+        }
+    }
+
+    unreachable!("bounded Windows junction creation loop always returns")
+}
+
+#[cfg(windows)]
+fn prepare_windows_junction_path(junction_path: &Path, target: &Path) -> Result<bool, GitAiError> {
+    if windows_junction_exists(junction_path)? {
+        let existing_target = junction::get_target(junction_path).map_err(|error| {
+            GitAiError::Generic(format!(
+                "Failed to inspect existing libexec junction target {}: {}",
+                junction_path.display(),
+                error
+            ))
+        })?;
+        if paths_equal(&existing_target, target) {
+            return Ok(false);
+        }
+
+        match junction::delete(junction_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(GitAiError::Generic(format!(
+                    "Failed to remove existing libexec junction {}: {}",
+                    junction_path.display(),
+                    error
+                )));
+            }
+        }
+        return Ok(true);
+    }
+
+    let metadata = match junction_path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error.into()),
+    };
+
+    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+        // Older/failed installers and interrupted junction creation can leave
+        // an ordinary empty directory here. Never delete a non-empty directory
+        // that may contain user files.
+        let mut entries = match fs::read_dir(junction_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => return Err(error.into()),
+        };
+        if entries.next().transpose()?.is_some() {
+            return Err(GitAiError::Generic(format!(
+                "Refusing to replace non-empty libexec directory {}",
+                junction_path.display()
+            )));
+        }
+        match fs::remove_dir(junction_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        return Ok(true);
+    }
+
+    if !metadata.file_type().is_symlink() {
+        return Err(GitAiError::Generic(format!(
+            "Refusing to replace non-link libexec path {}",
+            junction_path.display()
+        )));
+    }
+
+    // Windows uses remove_dir for directory symlinks. Broken links cannot be
+    // followed to determine their kind, so keep the safe remove_file fallback
+    // after verifying this is a reparse link.
+    match fs::remove_dir(junction_path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(_) => match fs::remove_file(junction_path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(error) => Err(error.into()),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +368,95 @@ mod tests {
         fs::create_dir(&plain_dir).unwrap();
 
         assert!(!windows_junction_exists(&plain_dir).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_creation_migrates_empty_directory_and_is_idempotent() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("target");
+        let junction_path = temp.path().join("libexec");
+        fs::create_dir(&target).unwrap();
+        fs::create_dir(&junction_path).unwrap();
+
+        ensure_windows_junction(&junction_path, &target).unwrap();
+        ensure_windows_junction(&junction_path, &target).unwrap();
+
+        assert!(windows_junction_exists(&junction_path).unwrap());
+        assert!(paths_equal(
+            &junction::get_target(&junction_path).unwrap(),
+            &target
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_creation_replaces_stale_target() {
+        let temp = tempdir().unwrap();
+        let old_target = temp.path().join("old-target");
+        let new_target = temp.path().join("new-target");
+        let junction_path = temp.path().join("libexec");
+        fs::create_dir(&old_target).unwrap();
+        fs::create_dir(&new_target).unwrap();
+        junction::create(&old_target, &junction_path).unwrap();
+
+        ensure_windows_junction(&junction_path, &new_target).unwrap();
+
+        assert!(paths_equal(
+            &junction::get_target(&junction_path).unwrap(),
+            &new_target
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_junction_creation_refuses_non_empty_directory() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("target");
+        let junction_path = temp.path().join("libexec");
+        fs::create_dir(&target).unwrap();
+        fs::create_dir(&junction_path).unwrap();
+        fs::write(junction_path.join("user-file"), "keep me").unwrap();
+
+        let error = ensure_windows_junction(&junction_path, &target).unwrap_err();
+
+        assert!(error.to_string().contains("Refusing to replace non-empty"));
+        assert_eq!(
+            fs::read_to_string(junction_path.join("user-file")).unwrap(),
+            "keep me"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_windows_junction_creation_converges_on_target() {
+        use std::sync::{Arc, Barrier};
+
+        let temp = tempdir().unwrap();
+        let target = Arc::new(temp.path().join("target"));
+        let junction_path = Arc::new(temp.path().join("libexec"));
+        fs::create_dir(target.as_ref()).unwrap();
+        let barrier = Arc::new(Barrier::new(4));
+
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let target = Arc::clone(&target);
+                let junction_path = Arc::clone(&junction_path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    ensure_windows_junction(&junction_path, &target)
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert!(paths_equal(
+            &junction::get_target(junction_path.as_ref()).unwrap(),
+            target.as_ref()
+        ));
     }
 
     #[test]

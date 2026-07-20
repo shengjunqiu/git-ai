@@ -24,6 +24,38 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 fn windows_installer_runs_hidden(silent: bool) -> bool {
     silent
 }
+
+#[cfg(windows)]
+fn windows_install_wrapper(log_path: &str, script_path: &str, silent: bool) -> String {
+    let completion_message = if silent {
+        "git-ai automatic update completed successfully."
+    } else {
+        "git-ai update completed successfully. Press Enter to refresh the shell prompt."
+    };
+
+    format!(
+        "$logFile = '{}'; \
+         Start-Transcript -Path $logFile -Append -Force | Out-Null; \
+         Write-Host 'Running verified install script...'; \
+         $installSucceeded = $false; \
+         try {{ \
+             $ErrorActionPreference = 'Continue'; \
+             & '{}'; \
+             $installSucceeded = $true; \
+             Write-Host '{}'; \
+         }} catch {{ \
+             Write-Host \"Error: $_\"; \
+             Write-Host \"Stack trace: $($_.ScriptStackTrace)\"; \
+         }} finally {{ \
+             Stop-Transcript | Out-Null; \
+             Remove-Item -Path '{}' -Force -ErrorAction SilentlyContinue; \
+         }}; \
+         if (-not $installSucceeded) {{ exit 1 }}; \
+         exit 0",
+        log_path, script_path, completion_message, script_path
+    )
+}
+
 #[cfg(windows)]
 type WindowsHandle = *mut std::ffi::c_void;
 #[cfg(windows)]
@@ -553,23 +585,7 @@ fn run_install_script(script_content: &str, tag: &str, silent: bool) -> Result<(
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
         // PowerShell wrapper that executes the script file with logging
-        let ps_wrapper = format!(
-            "$logFile = '{}'; \
-             Start-Transcript -Path $logFile -Append -Force | Out-Null; \
-             Write-Host 'Running verified install script...'; \
-             try {{ \
-                 $ErrorActionPreference = 'Continue'; \
-                 & '{}'; \
-                 Write-Host 'Install script completed'; \
-             }} catch {{ \
-                 Write-Host \"Error: $_\"; \
-                 Write-Host \"Stack trace: $($_.ScriptStackTrace)\"; \
-             }} finally {{ \
-                 Stop-Transcript | Out-Null; \
-                 Remove-Item -Path '{}' -Force -ErrorAction SilentlyContinue; \
-             }}",
-            log_path_str, script_path_str, script_path_str
-        );
+        let ps_wrapper = windows_install_wrapper(&log_path_str, &script_path_str, silent);
 
         let spawn_powershell = |exe: &str| -> std::io::Result<std::process::Child> {
             let mut cmd = Command::new(exe);
@@ -1133,12 +1149,37 @@ mod tests {
     #[test]
     fn test_manual_windows_installer_keeps_live_output_visible() {
         assert!(!windows_installer_runs_hidden(false));
+        let wrapper = windows_install_wrapper("upgrade.log", "install.ps1", false);
+        assert!(wrapper.contains("$installSucceeded = $false"));
+        assert!(wrapper.contains("if (-not $installSucceeded) { exit 1 }"));
+        assert!(wrapper.contains("Press Enter to refresh the shell prompt."));
+        assert!(wrapper.ends_with("exit 0"));
     }
 
     #[cfg(windows)]
     #[test]
     fn test_automatic_windows_installer_stays_hidden() {
         assert!(windows_installer_runs_hidden(true));
+        let wrapper = windows_install_wrapper("upgrade.log", "install.ps1", true);
+        assert!(wrapper.contains("automatic update completed successfully"));
+        assert!(!wrapper.contains("Press Enter"));
+    }
+
+    #[test]
+    fn windows_install_script_reports_success_only_after_post_install_work() {
+        let script = include_str!("../../install.ps1");
+        let background_ready = script
+            .find("Write-Success 'Background service is ready'")
+            .expect("installer should report background service readiness");
+        let login = script
+            .find("& $finalExe login")
+            .expect("installer should retain the login fallback");
+        let installed = script
+            .find("Write-Success \"Successfully installed git-ai into $installDir\"")
+            .expect("installer should report final installation success");
+
+        assert!(installed > background_ready);
+        assert!(installed > login);
     }
 
     fn set_test_cache_dir(dir: &tempfile::TempDir) {
