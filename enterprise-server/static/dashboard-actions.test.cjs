@@ -48,6 +48,7 @@ function createHarness() {
         refreshCurrentSection: () => calls.push(['refresh']),
         goToTablePage: (key, direction) => calls.push(['table-page', key, direction]),
         changeDeveloperSorting: () => calls.push(['developer-sorting']),
+        showDeveloperGitInfo: developerId => calls.push(['developer-git-info', developerId]),
         showCreateUserModal: () => calls.push(['show-create-user']),
         bulkAuthorizeGitTrackingUpload: element => calls.push(['bulk-authorize', element]),
         toggleAllGitTrackingUsers: checked => calls.push(['toggle-all', checked]),
@@ -63,6 +64,7 @@ function createHarness() {
         deleteUser: (userId, userName) => calls.push(['delete-user', userId, userName]),
         showCreateDepartmentModal: () => calls.push(['show-create-department']),
         backDepartmentLevel: () => calls.push(['back-department']),
+        openDepartmentLevel: departmentId => calls.push(['open-department', departmentId]),
         showCreateApiKeyModal: () => calls.push(['show-create-api-key']),
         revokeApiKey: (keyId, keyName) => calls.push(['revoke-key', keyId, keyName]),
         renderSelectedReleaseFiles: () => calls.push(['render-release-files']),
@@ -82,6 +84,14 @@ function createHarness() {
         showEditManagedFileModal: (slug, name, description, isPublic) => {
             calls.push(['edit-file', slug, name, description, isPublic]);
         },
+        closeModal: () => calls.push(['close-modal']),
+        createUser: () => calls.push(['create-user']),
+        createDepartment: () => calls.push(['create-department']),
+        copyKey: () => calls.push(['copy-api-key']),
+        createApiKey: () => calls.push(['create-api-key']),
+        createApiKeyForUser: () => calls.push(['create-api-key-for-user']),
+        saveManagedFileSettings: () => calls.push(['save-file-settings']),
+        copyHelpCommand: element => calls.push(['copy-help-command', element]),
     });
     vm.runInContext(`${actionSource()}
 globalThis.actionTestExports = {
@@ -252,6 +262,70 @@ globalThis.escapeAttributeForTest = escapeAttribute;`, context);
     ]) {
         assert.equal(dashboardSource.includes(legacyHandler), false, legacyHandler);
     }
+});
+
+test('modal backdrop closes only when the overlay itself is clicked', () => {
+    const harness = createHarness();
+    const overlay = {
+        dataset: { action: 'close-modal-backdrop' },
+        closest() {
+            return this;
+        },
+    };
+    harness.handleDashboardAction({
+        type: 'click',
+        target: {
+            closest: () => overlay,
+        },
+    });
+    assert.deepEqual(harness.calls, []);
+
+    harness.handleDashboardAction({
+        type: 'click',
+        target: overlay,
+    });
+    assert.deepEqual(harness.calls, [['close-modal']]);
+});
+
+test('developer, department, modal, and help actions use the delegated dispatcher', () => {
+    const harness = createHarness();
+    const developer = actionEvent({
+        action: 'show-developer-git-info',
+        developerId: 'developer@example.com',
+    });
+    harness.handleDashboardAction(developer.event);
+    assert.deepEqual(
+        harness.calls.at(-1),
+        ['developer-git-info', 'developer@example.com'],
+    );
+
+    const department = actionEvent({
+        action: 'open-department-level',
+        departmentId: 'department-1',
+    });
+    harness.handleDashboardAction(department.event);
+    assert.deepEqual(
+        harness.calls.at(-1),
+        ['open-department', 'department-1'],
+    );
+
+    const help = actionEvent({ action: 'copy-help-command' });
+    harness.handleDashboardAction(help.event);
+    assert.deepEqual(
+        harness.calls.at(-1),
+        ['copy-help-command', help.actionElement],
+    );
+});
+
+test('dashboard templates contain no inline event handlers', () => {
+    const inlineHandler = /\bon(?:click|change|submit|input|keydown|keyup|focus|blur|load|error)\s*=/;
+    assert.doesNotMatch(html, inlineHandler);
+    assert.doesNotMatch(dashboardSource, inlineHandler);
+    assert.equal(dashboardSource.includes('function jsString'), false);
+    assert.equal(
+        (html.match(/data-action="copy-help-command"/g) || []).length,
+        30,
+    );
 });
 
 test('dashboard action listeners are registered once per delegated event type', () => {

@@ -742,18 +742,18 @@ Cache enterprise static assets efficiently
 
 - [x] 统计静态 HTML 中所有 `onclick`、`onchange` 和其他 inline handler。
 - [x] 统计动态模板中生成的 inline handler。
-- [ ] 为操作按钮增加 `data-action`。
-- [ ] 参数通过 `dataset` 或受控状态 Map 传递。
+- [x] 为操作按钮增加 `data-action`。
+- [x] 参数通过 `dataset` 或受控状态 Map 传递。
 - [x] 在栏目容器或 document 上注册一次事件监听器。
 - [x] 先迁移分页、导航和简单刷新。
 - [x] 再迁移用户、API Key、发布和文件管理操作。
-- [ ] 最后迁移模态框和帮助页复制按钮。
+- [x] 最后迁移模态框和帮助页复制按钮。
 
 验收标准：
 
-- [ ] HTML 和动态模板中不再出现 inline event handler。
-- [ ] 业务函数不需要挂到 `window`。
-- [ ] 包含特殊字符的名称不会破坏事件参数。
+- [x] HTML 和动态模板中不再出现 inline event handler。
+- [x] 业务函数不需要挂到 `window`。
+- [x] 包含特殊字符的名称不会破坏事件参数。
 
 ### 6.2 删除内联脚本变量
 
