@@ -406,21 +406,81 @@ function reloadPaginatedTable(key) {
     return loadSection(currentSection, { mode: RefreshMode.MANUAL });
 }
 
-async function fetchAllPaginated(url, field, signal) {
-    const values = [];
-    let cursor = null;
-    for (let page = 0; page < 50; page += 1) {
-        const params = new URLSearchParams({ limit: '100' });
-        if (cursor) params.set('cursor', cursor);
-        const d = await apiRequest(
-            `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`,
-            { signal },
-        );
-        values.push(...(d[field] || []));
-        if (!d.pagination?.has_more || !d.pagination?.next_cursor) break;
-        cursor = d.pagination.next_cursor;
+const OPTION_PAGE_LIMIT = 100;
+const OPTION_SEARCH_DELAY_MS = 250;
+const optionSearchTimers = new Map();
+const optionRequestControllers = new Map();
+
+function boundedOptionUrl(url, query = '') {
+    const params = new URLSearchParams({ limit: String(OPTION_PAGE_LIMIT) });
+    const normalizedQuery = String(query || '').trim();
+    if (normalizedQuery) params.set('q', normalizedQuery);
+    return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
+}
+
+async function fetchBoundedOptions(url, field, query, signal) {
+    const data = await apiRequest(boundedOptionUrl(url, query), { signal });
+    const items = data[field] || [];
+    return {
+        items: items.slice(0, OPTION_PAGE_LIMIT),
+        hasMore: Boolean(data.pagination?.has_more) || items.length > OPTION_PAGE_LIMIT,
+    };
+}
+
+function optionResultMessage(label, count, hasMore, query = '') {
+    const normalizedQuery = String(query || '').trim();
+    if (count === 0) {
+        return normalizedQuery ? `未找到匹配${label}` : `暂无可选${label}`;
     }
-    return values;
+    if (hasMore) {
+        return `结果超过 ${OPTION_PAGE_LIMIT} 个，仅显示前 ${OPTION_PAGE_LIMIT} 个，请继续输入关键词缩小范围`;
+    }
+    return normalizedQuery ? `找到 ${count} 个${label}` : `已加载 ${count} 个${label}`;
+}
+
+function setOptionStatus(id, message, state = '') {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.textContent = message;
+    element.className = `option-search-status${state ? ` ${state}` : ''}`;
+}
+
+function beginOptionRequest(key) {
+    optionRequestControllers.get(key)?.abort();
+    const controller = new AbortController();
+    optionRequestControllers.set(key, controller);
+    return controller;
+}
+
+function finishOptionRequest(key, controller) {
+    if (optionRequestControllers.get(key) === controller) {
+        optionRequestControllers.delete(key);
+    }
+}
+
+function scheduleOptionSearch(key, callback) {
+    cancelOptionRequest(key);
+    optionSearchTimers.set(key, setTimeout(() => {
+        optionSearchTimers.delete(key);
+        callback();
+    }, OPTION_SEARCH_DELAY_MS));
+}
+
+function cancelOptionRequest(key) {
+    clearTimeout(optionSearchTimers.get(key));
+    optionSearchTimers.delete(key);
+    const controller = optionRequestControllers.get(key);
+    controller?.abort();
+    if (optionRequestControllers.get(key) === controller) {
+        optionRequestControllers.delete(key);
+    }
+}
+
+function cancelOptionRequests() {
+    optionSearchTimers.forEach(timer => clearTimeout(timer));
+    optionSearchTimers.clear();
+    optionRequestControllers.forEach(controller => controller.abort());
+    optionRequestControllers.clear();
 }
 
 // Role-based UI: hide admin sections for non-admin users
@@ -1541,15 +1601,19 @@ function showCreateUserModal() {
             </div>
             <div class="form-group">
                 <label class="form-label">组织</label>
+                <input type="search" id="create-user-org-search" class="form-input option-search-input" placeholder="按组织名称或标识搜索" />
                 <select id="create-user-org" class="form-input" disabled>
                     <option value="">加载组织中...</option>
                 </select>
+                <div id="create-user-org-status" class="option-search-status loading" role="status" aria-live="polite">正在加载组织...</div>
             </div>
             <div class="form-group">
                 <label class="form-label">部门</label>
+                <input type="search" id="create-user-dept-search" class="form-input option-search-input" placeholder="按部门名称或编码搜索" disabled />
                 <select id="create-user-dept" class="form-input" disabled>
                     <option value="">请先选择组织</option>
                 </select>
+                <div id="create-user-dept-status" class="option-search-status" role="status" aria-live="polite">请先选择组织</div>
             </div>
             <div class="form-group">
                 <label style="display:flex;align-items:center;gap:0.5rem;color:var(--text-secondary);font-size:0.85rem;cursor:pointer">
@@ -1564,20 +1628,67 @@ function showCreateUserModal() {
         </div>
     </div>`;
     document.getElementById('create-user-org').addEventListener('change', event => {
+        const departmentSearch = document.getElementById('create-user-dept-search');
+        departmentSearch.value = '';
+        departmentSearch.disabled = !event.currentTarget.value;
         loadCreateUserDepartments(event.currentTarget.value);
+    });
+    document.getElementById('create-user-org-search').addEventListener('input', event => {
+        const query = event.currentTarget.value;
+        setOptionStatus('create-user-org-status', '正在搜索组织...', 'loading');
+        scheduleOptionSearch(
+            'create-user-org',
+            () => populateCreateUserOrganizations(query),
+        );
+    });
+    document.getElementById('create-user-dept-search').addEventListener('input', event => {
+        const query = event.currentTarget.value;
+        setOptionStatus('create-user-dept-status', '正在搜索部门...', 'loading');
+        scheduleOptionSearch(
+            'create-user-dept',
+            () => loadCreateUserDepartments(
+                document.getElementById('create-user-org')?.value,
+                query,
+            ),
+        );
     });
     populateCreateUserOrganizations();
 }
 
-async function populateCreateUserOrganizations() {
+async function populateCreateUserOrganizations(query = '') {
     const orgSelect = document.getElementById('create-user-org');
     const deptSelect = document.getElementById('create-user-dept');
+    const departmentSearch = document.getElementById('create-user-dept-search');
+    if (!orgSelect || !deptSelect) return;
+    const previousOrgId = orgSelect.value;
+    const controller = beginOptionRequest('create-user-org');
+    orgSelect.disabled = true;
+    setOptionStatus('create-user-org-status', '正在加载组织...', 'loading');
     try {
-        const orgs = await loadAdminOrganizations();
+        const normalizedQuery = String(query || '').trim();
+        const result = normalizedQuery
+            ? await fetchBoundedOptions(
+                '/api/admin/organizations/list?include_personal=false',
+                'organizations',
+                normalizedQuery,
+                controller.signal,
+            )
+            : await loadAdminOrganizations(controller.signal);
+        if (optionRequestControllers.get('create-user-org') !== controller) return;
+        const orgs = result.items;
         if (orgs.length === 0) {
+            cancelOptionRequest('create-user-dept');
             orgSelect.innerHTML = '<option value="">暂无可选组织</option>';
             deptSelect.innerHTML = '<option value="">暂无可选部门</option>';
-            showToast('请先创建组织', 'error');
+            deptSelect.disabled = true;
+            departmentSearch.disabled = true;
+            setOptionStatus(
+                'create-user-org-status',
+                optionResultMessage('组织', 0, false, normalizedQuery),
+                'empty',
+            );
+            setOptionStatus('create-user-dept-status', '请先选择组织');
+            if (!normalizedQuery) showToast('请先创建组织', 'error');
             return;
         }
 
@@ -1586,35 +1697,75 @@ async function populateCreateUserOrganizations() {
             return `<option value="${escapeAttribute(org.id)}">${label}</option>`;
         }).join('');
         orgSelect.disabled = false;
+        setOptionStatus(
+            'create-user-org-status',
+            optionResultMessage('组织', orgs.length, result.hasMore, normalizedQuery),
+            result.hasMore ? 'limited' : 'success',
+        );
 
-        if (orgs.length === 1) {
+        if (previousOrgId && orgs.some(org => org.id === previousOrgId)) {
+            orgSelect.value = previousOrgId;
+            departmentSearch.disabled = false;
+        } else if (!normalizedQuery && orgs.length === 1 && !result.hasMore) {
             orgSelect.value = orgs[0].id;
+            departmentSearch.disabled = false;
             await loadCreateUserDepartments(orgs[0].id);
+        } else {
+            cancelOptionRequest('create-user-dept');
+            deptSelect.innerHTML = '<option value="">请先选择组织</option>';
+            deptSelect.disabled = true;
+            departmentSearch.disabled = true;
+            setOptionStatus('create-user-dept-status', '请先选择组织');
         }
     } catch(e) {
+        if (e instanceof AbortError) return;
+        cancelOptionRequest('create-user-dept');
         orgSelect.innerHTML = '<option value="">组织加载失败</option>';
         deptSelect.innerHTML = '<option value="">请先选择组织</option>';
+        deptSelect.disabled = true;
+        departmentSearch.disabled = true;
+        setOptionStatus('create-user-org-status', '组织加载失败，请重试', 'error');
+        setOptionStatus('create-user-dept-status', '请先选择组织');
         showToast(e.message || '加载组织列表失败', 'error');
+    } finally {
+        finishOptionRequest('create-user-org', controller);
     }
 }
 
-async function loadCreateUserDepartments(orgId) {
+async function loadCreateUserDepartments(orgId, query = '') {
     const deptSelect = document.getElementById('create-user-dept');
+    const departmentSearch = document.getElementById('create-user-dept-search');
+    if (!deptSelect || !departmentSearch) return;
+    const controller = beginOptionRequest('create-user-dept');
     deptSelect.disabled = true;
     if (!orgId) {
         deptSelect.innerHTML = '<option value="">请先选择组织</option>';
+        departmentSearch.disabled = true;
+        setOptionStatus('create-user-dept-status', '请先选择组织');
+        finishOptionRequest('create-user-dept', controller);
         return;
     }
 
+    departmentSearch.disabled = false;
     deptSelect.innerHTML = '<option value="">加载部门中...</option>';
+    setOptionStatus('create-user-dept-status', '正在加载部门...', 'loading');
     try {
-        const departments = await fetchAllPaginated(
+        const normalizedQuery = String(query || '').trim();
+        const result = await fetchBoundedOptions(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
             'departments',
-            currentSectionRequestSignal(),
+            normalizedQuery,
+            controller.signal,
         );
+        if (optionRequestControllers.get('create-user-dept') !== controller) return;
+        const departments = result.items;
         if (departments.length === 0) {
             deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
+            setOptionStatus(
+                'create-user-dept-status',
+                optionResultMessage('部门', 0, false, normalizedQuery),
+                'empty',
+            );
             return;
         }
 
@@ -1623,13 +1774,22 @@ async function loadCreateUserDepartments(orgId) {
             return `<option value="${escapeAttribute(dept.id)}">${label}</option>`;
         }).join('');
         deptSelect.disabled = false;
+        setOptionStatus(
+            'create-user-dept-status',
+            optionResultMessage('部门', departments.length, result.hasMore, normalizedQuery),
+            result.hasMore ? 'limited' : 'success',
+        );
 
-        if (departments.length === 1) {
+        if (departments.length === 1 && !result.hasMore) {
             deptSelect.value = departments[0].id;
         }
     } catch(e) {
+        if (e instanceof AbortError) return;
         deptSelect.innerHTML = '<option value="">部门加载失败</option>';
+        setOptionStatus('create-user-dept-status', '部门加载失败，请重试', 'error');
         showToast(e.message || '加载部门列表失败', 'error');
+    } finally {
+        finishOptionRequest('create-user-dept', controller);
     }
 }
 
@@ -1692,9 +1852,10 @@ function departmentCodePrefixRank(code) {
 
 async function loadAdminOrganizations(signal = currentSectionRequestSignal()) {
     if (adminOrganizationsCache) return adminOrganizationsCache;
-    adminOrganizationsCache = await fetchAllPaginated(
+    adminOrganizationsCache = await fetchBoundedOptions(
         '/api/admin/organizations/list?include_personal=false',
         'organizations',
+        '',
         signal,
     );
     return adminOrganizationsCache;
@@ -1874,29 +2035,17 @@ function departmentAiPercentage(department) {
 }
 
 async function showCreateDepartmentModal() {
-    let orgs = [];
-    try {
-        orgs = await loadAdminOrganizations();
-    } catch(e) {
-        showToast(e.message || '加载组织列表失败', 'error');
-        return;
-    }
-    if (orgs.length === 0) {
-        showToast('请先创建组织', 'error');
-        return;
-    }
-    const orgOptions = orgs.map(org => {
-        const label = `${escapeHtml(org.name || org.slug)}${org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}`;
-        return `<option value="${escapeAttribute(org.id)}">${label}</option>`;
-    }).join('');
-
     document.getElementById('modal-container').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal">
             <div class="modal-title">新增部门</div>
             <div class="form-group">
                 <label class="form-label">所属组织</label>
-                <select id="create-dept-org" class="form-input" onchange="loadCreateDepartmentParents()">${orgOptions}</select>
+                <input type="search" id="create-dept-org-search" class="form-input option-search-input" placeholder="按组织名称或标识搜索" />
+                <select id="create-dept-org" class="form-input" disabled>
+                    <option value="">加载组织中...</option>
+                </select>
+                <div id="create-dept-org-status" class="option-search-status loading" role="status" aria-live="polite">正在加载组织...</div>
             </div>
             <div class="form-group">
                 <label class="form-label">部门名称</label>
@@ -1908,9 +2057,11 @@ async function showCreateDepartmentModal() {
             </div>
             <div class="form-group">
                 <label class="form-label">上级部门（可选）</label>
-                <select id="create-dept-parent" class="form-input">
-                    <option value="">无（根部门）</option>
+                <input type="search" id="create-dept-parent-search" class="form-input option-search-input" placeholder="按部门名称或编码搜索" disabled />
+                <select id="create-dept-parent" class="form-input" disabled>
+                    <option value="">请先选择组织</option>
                 </select>
+                <div id="create-dept-parent-status" class="option-search-status" role="status" aria-live="polite">请先选择组织</div>
             </div>
             <div class="form-actions">
                 <button class="btn" onclick="closeModal()">取消</button>
@@ -1918,31 +2069,154 @@ async function showCreateDepartmentModal() {
             </div>
         </div>
     </div>`;
-    await loadCreateDepartmentParents();
+    document.getElementById('create-dept-org').addEventListener('change', event => {
+        const parentSearch = document.getElementById('create-dept-parent-search');
+        parentSearch.value = '';
+        parentSearch.disabled = !event.currentTarget.value;
+        loadCreateDepartmentParents(event.currentTarget.value);
+    });
+    document.getElementById('create-dept-org-search').addEventListener('input', event => {
+        const query = event.currentTarget.value;
+        setOptionStatus('create-dept-org-status', '正在搜索组织...', 'loading');
+        scheduleOptionSearch(
+            'create-dept-org',
+            () => populateCreateDepartmentOrganizations(query),
+        );
+    });
+    document.getElementById('create-dept-parent-search').addEventListener('input', event => {
+        const query = event.currentTarget.value;
+        setOptionStatus('create-dept-parent-status', '正在搜索部门...', 'loading');
+        scheduleOptionSearch(
+            'create-dept-parent',
+            () => loadCreateDepartmentParents(
+                document.getElementById('create-dept-org')?.value,
+                query,
+            ),
+        );
+    });
+    await populateCreateDepartmentOrganizations();
 }
 
-async function loadCreateDepartmentParents() {
-    const orgId = document.getElementById('create-dept-org')?.value;
+async function populateCreateDepartmentOrganizations(query = '') {
+    const orgSelect = document.getElementById('create-dept-org');
     const parentSelect = document.getElementById('create-dept-parent');
-    if (!orgId || !parentSelect) return;
+    const parentSearch = document.getElementById('create-dept-parent-search');
+    if (!orgSelect || !parentSelect || !parentSearch) return;
+    const previousOrgId = orgSelect.value;
+    const controller = beginOptionRequest('create-dept-org');
+    orgSelect.disabled = true;
+    setOptionStatus('create-dept-org-status', '正在加载组织...', 'loading');
+    try {
+        const normalizedQuery = String(query || '').trim();
+        const result = normalizedQuery
+            ? await fetchBoundedOptions(
+                '/api/admin/organizations/list?include_personal=false',
+                'organizations',
+                normalizedQuery,
+                controller.signal,
+            )
+            : await loadAdminOrganizations(controller.signal);
+        if (optionRequestControllers.get('create-dept-org') !== controller) return;
+        const orgs = result.items;
+        if (orgs.length === 0) {
+            cancelOptionRequest('create-dept-parent');
+            orgSelect.innerHTML = '<option value="">暂无可选组织</option>';
+            parentSelect.innerHTML = '<option value="">请先选择组织</option>';
+            parentSelect.disabled = true;
+            parentSearch.disabled = true;
+            setOptionStatus(
+                'create-dept-org-status',
+                optionResultMessage('组织', 0, false, normalizedQuery),
+                'empty',
+            );
+            setOptionStatus('create-dept-parent-status', '请先选择组织');
+            if (!normalizedQuery) showToast('请先创建组织', 'error');
+            return;
+        }
 
+        orgSelect.innerHTML = orgs.map(org => {
+            const label = `${escapeHtml(org.name || org.slug)}${org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}`;
+            return `<option value="${escapeAttribute(org.id)}">${label}</option>`;
+        }).join('');
+        orgSelect.disabled = false;
+        setOptionStatus(
+            'create-dept-org-status',
+            optionResultMessage('组织', orgs.length, result.hasMore, normalizedQuery),
+            result.hasMore ? 'limited' : 'success',
+        );
+
+        orgSelect.value = orgs.some(org => org.id === previousOrgId)
+            ? previousOrgId
+            : orgs[0].id;
+        parentSearch.disabled = false;
+        parentSearch.value = '';
+        await loadCreateDepartmentParents(orgSelect.value);
+    } catch(e) {
+        if (e instanceof AbortError) return;
+        cancelOptionRequest('create-dept-parent');
+        orgSelect.innerHTML = '<option value="">组织加载失败</option>';
+        parentSelect.innerHTML = '<option value="">请先选择组织</option>';
+        parentSelect.disabled = true;
+        parentSearch.disabled = true;
+        setOptionStatus('create-dept-org-status', '组织加载失败，请重试', 'error');
+        setOptionStatus('create-dept-parent-status', '请先选择组织');
+        showToast(e.message || '加载组织列表失败', 'error');
+    } finally {
+        finishOptionRequest('create-dept-org', controller);
+    }
+}
+
+async function loadCreateDepartmentParents(orgId, query = '') {
+    const parentSelect = document.getElementById('create-dept-parent');
+    const parentSearch = document.getElementById('create-dept-parent-search');
+    if (!parentSelect || !parentSearch) return;
+    const controller = beginOptionRequest('create-dept-parent');
+    let loaded = false;
+    if (!orgId) {
+        parentSelect.disabled = true;
+        parentSelect.innerHTML = '<option value="">请先选择组织</option>';
+        parentSearch.disabled = true;
+        setOptionStatus('create-dept-parent-status', '请先选择组织');
+        finishOptionRequest('create-dept-parent', controller);
+        return;
+    }
+
+    parentSearch.disabled = false;
     parentSelect.disabled = true;
     parentSelect.innerHTML = '<option value="">加载上级部门中...</option>';
+    setOptionStatus('create-dept-parent-status', '正在加载部门...', 'loading');
     try {
-        const departments = await fetchAllPaginated(
+        const normalizedQuery = String(query || '').trim();
+        const result = await fetchBoundedOptions(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
             'departments',
-            currentSectionRequestSignal(),
+            normalizedQuery,
+            controller.signal,
         );
+        if (optionRequestControllers.get('create-dept-parent') !== controller) return;
+        const departments = result.items;
         parentSelect.innerHTML = '<option value="">无（根部门）</option>' + departments.map(dept => {
             const label = `${escapeHtml(dept.code || '—')} · ${escapeHtml(dept.name || '—')}`;
             return `<option value="${escapeAttribute(dept.id)}">${label}</option>`;
         }).join('');
+        setOptionStatus(
+            'create-dept-parent-status',
+            optionResultMessage('部门', departments.length, result.hasMore, normalizedQuery),
+            departments.length === 0
+                ? 'empty'
+                : result.hasMore ? 'limited' : 'success',
+        );
+        loaded = true;
     } catch (e) {
+        if (e instanceof AbortError) return;
         parentSelect.innerHTML = '<option value="">上级部门加载失败</option>';
+        setOptionStatus('create-dept-parent-status', '部门加载失败，请重试', 'error');
         showToast(e.message || '加载上级部门失败', 'error');
     } finally {
-        parentSelect.disabled = false;
+        if (optionRequestControllers.get('create-dept-parent') === controller) {
+            parentSelect.disabled = !loaded;
+        }
+        finishOptionRequest('create-dept-parent', controller);
     }
 }
 
@@ -2511,6 +2785,7 @@ async function copyPublishedUrl(path) {
 }
 
 function closeModal() {
+    cancelOptionRequests();
     document.getElementById('modal-container').innerHTML = '';
 }
 

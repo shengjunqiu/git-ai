@@ -20,6 +20,10 @@ struct NameUuidCursor {
     v: u8,
     name: String,
     id: Uuid,
+    #[serde(default)]
+    include_personal: bool,
+    #[serde(default)]
+    q: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +32,10 @@ struct DepartmentListCursor {
     org_name: String,
     department_name: String,
     department_id: Uuid,
+    #[serde(default)]
+    org_id: Option<Uuid>,
+    #[serde(default)]
+    q: Option<String>,
 }
 
 fn decode_optional_time_uuid_cursor(
@@ -51,11 +59,18 @@ fn decode_name_uuid_cursor(cursor: Option<&str>) -> Result<Option<NameUuidCursor
     Ok(cursor)
 }
 
-fn encode_name_uuid_cursor(name: &str, id: Uuid) -> Result<String, AppError> {
+fn encode_name_uuid_cursor(
+    name: &str,
+    id: Uuid,
+    include_personal: bool,
+    q: Option<&str>,
+) -> Result<String, AppError> {
     encode_cursor(&NameUuidCursor {
         v: CURSOR_VERSION,
         name: name.to_string(),
         id,
+        include_personal,
+        q: q.map(str::to_string),
     })
 }
 
@@ -73,13 +88,23 @@ fn encode_department_list_cursor(
     org_name: &str,
     department_name: &str,
     department_id: Uuid,
+    org_id: Option<Uuid>,
+    q: Option<&str>,
 ) -> Result<String, AppError> {
     encode_cursor(&DepartmentListCursor {
         v: CURSOR_VERSION,
         org_name: org_name.to_string(),
         department_name: department_name.to_string(),
         department_id,
+        org_id,
+        q: q.map(str::to_string),
     })
+}
+
+fn normalize_option_query(query: Option<String>) -> Option<String> {
+    query
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_admin_cursor_version(version: u8) -> Result<(), AppError> {
@@ -742,6 +767,7 @@ pub async fn delete_organization(
 #[derive(Debug, Deserialize)]
 pub struct ListOrganizationsQuery {
     pub include_personal: Option<bool>,
+    pub q: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -752,8 +778,16 @@ pub async fn list_organizations(
     Query(query): Query<ListOrganizationsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let include_personal = query.include_personal.unwrap_or(false);
+    let search = normalize_option_query(query.q);
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
     let cursor = decode_name_uuid_cursor(query.cursor.as_deref())?;
+    if cursor.as_ref().is_some_and(|cursor| {
+        cursor.include_personal != include_personal || cursor.q.as_ref() != search.as_ref()
+    }) {
+        return Err(AppError::BadRequest(
+            "Pagination cursor does not match organization filters".into(),
+        ));
+    }
     let cursor_name = cursor.as_ref().map(|cursor| cursor.name.clone());
     let cursor_id = cursor.as_ref().map(|cursor| cursor.id);
 
@@ -776,11 +810,17 @@ pub async fn list_organizations(
                  ) \
              ) \
          ) \
-         AND ($2::text IS NULL OR (o.name, o.id) > ($2::text, $3::uuid)) \
+         AND ( \
+             $2::text IS NULL \
+             OR POSITION(LOWER($2::text) IN LOWER(o.name)) > 0 \
+             OR POSITION(LOWER($2::text) IN LOWER(o.slug)) > 0 \
+         ) \
+         AND ($3::text IS NULL OR (o.name, o.id) > ($3::text, $4::uuid)) \
          ORDER BY o.name ASC, o.id ASC \
-         LIMIT $4",
+         LIMIT $5",
     )
     .bind(include_personal)
+    .bind(search.as_deref())
     .bind(cursor_name)
     .bind(cursor_id)
     .bind(fetch_limit(limit))
@@ -791,7 +831,9 @@ pub async fn list_organizations(
     let has_more = truncate_to_limit(&mut rows, limit);
     let next_cursor = if has_more {
         rows.last()
-            .map(|(id, name, _, _)| encode_name_uuid_cursor(name, *id))
+            .map(|(id, name, _, _)| {
+                encode_name_uuid_cursor(name, *id, include_personal, search.as_deref())
+            })
             .transpose()?
     } else {
         None
@@ -822,6 +864,7 @@ pub async fn list_organizations(
 #[derive(Debug, Deserialize)]
 pub struct ListDepartmentsQuery {
     pub org_id: Option<Uuid>,
+    pub q: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -840,8 +883,17 @@ pub async fn list_departments(
     _auth: AdminGuard,
     Query(query): Query<ListDepartmentsQuery>,
 ) -> Result<Json<Value>, AppError> {
+    let search = normalize_option_query(query.q);
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
     let cursor = decode_department_list_cursor(query.cursor.as_deref())?;
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.org_id != query.org_id || cursor.q.as_ref() != search.as_ref())
+    {
+        return Err(AppError::BadRequest(
+            "Pagination cursor does not match department filters".into(),
+        ));
+    }
     let cursor_org_name = cursor.as_ref().map(|cursor| cursor.org_name.clone());
     let cursor_department_name = cursor.as_ref().map(|cursor| cursor.department_name.clone());
     let cursor_department_id = cursor.as_ref().map(|cursor| cursor.department_id);
@@ -878,13 +930,20 @@ pub async fn list_departments(
         LEFT JOIN departments parent ON parent.id = d.parent_id AND parent.org_id = d.org_id
         LEFT JOIN org_members om ON om.org_id = d.org_id AND om.department_id = d.id
         WHERE ($1::uuid IS NULL OR d.org_id = $1)
-          AND ($2::text IS NULL OR (o.name, d.name, d.id) > ($2::text, $3::text, $4::uuid))
+          AND (
+              $2::text IS NULL
+              OR POSITION(LOWER($2::text) IN LOWER(d.name)) > 0
+              OR POSITION(LOWER($2::text) IN LOWER(d.code)) > 0
+              OR POSITION(LOWER($2::text) IN LOWER(d.slug)) > 0
+          )
+          AND ($3::text IS NULL OR (o.name, d.name, d.id) > ($3::text, $4::text, $5::uuid))
         GROUP BY d.id, d.org_id, d.code, d.name, d.slug, d.parent_id, d.created_at,
                  o.name, o.slug, parent.code, parent.name
         ORDER BY o.name ASC, d.name ASC, d.id ASC
-        LIMIT $5"#,
+        LIMIT $6"#,
     )
     .bind(query.org_id)
+    .bind(search.as_deref())
     .bind(cursor_org_name)
     .bind(cursor_department_name)
     .bind(cursor_department_id)
@@ -897,7 +956,7 @@ pub async fn list_departments(
     let next_cursor = if has_more {
         rows.last()
             .map(|(id, _, _, name, _, _, _, org_name, _, _, _, _)| {
-                encode_department_list_cursor(org_name, name, *id)
+                encode_department_list_cursor(org_name, name, *id, query.org_id, search.as_deref())
             })
             .transpose()?
     } else {
@@ -1958,6 +2017,7 @@ mod log_pagination_tests {
             admin_guard(admin_user_id, org_id),
             Query(ListOrganizationsQuery {
                 include_personal: Some(false),
+                q: None,
                 limit: Some(2),
                 cursor: None,
             }),
@@ -1971,13 +2031,41 @@ mod log_pagination_tests {
             admin_guard(admin_user_id, org_id),
             Query(ListOrganizationsQuery {
                 include_personal: Some(false),
+                q: None,
                 limit: Some(2),
-                cursor: Some(cursor),
+                cursor: Some(cursor.clone()),
             }),
         )
         .await?;
         let second_orgs = object_ids(&second_page, "organizations");
         assert_eq!(second_orgs[0], org_c);
+
+        let error = list_organizations(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListOrganizationsQuery {
+                include_personal: Some(false),
+                q: Some("bbb cursor".into()),
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await
+        .expect_err("a cursor must stay bound to its organization filters");
+        assert_error_status(error, StatusCode::BAD_REQUEST);
+
+        let Json(searched_orgs) = list_organizations(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListOrganizationsQuery {
+                include_personal: Some(false),
+                q: Some("bbb cursor".into()),
+                limit: Some(100),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(object_ids(&searched_orgs, "organizations"), vec![org_d]);
 
         let dept_a = uuid_tail(201);
         let dept_b = uuid_tail(202);
@@ -1993,6 +2081,7 @@ mod log_pagination_tests {
             admin_guard(admin_user_id, org_id),
             Query(ListDepartmentsQuery {
                 org_id: Some(org_a),
+                q: None,
                 limit: Some(2),
                 cursor: None,
             }),
@@ -2009,12 +2098,43 @@ mod log_pagination_tests {
             admin_guard(admin_user_id, org_id),
             Query(ListDepartmentsQuery {
                 org_id: Some(org_a),
+                q: None,
                 limit: Some(2),
-                cursor: Some(cursor),
+                cursor: Some(cursor.clone()),
             }),
         )
         .await?;
         assert_eq!(object_ids(&second_dept_page, "departments"), vec![dept_c]);
+
+        let error = list_departments(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListDepartmentsQuery {
+                org_id: Some(org_b),
+                q: None,
+                limit: Some(2),
+                cursor: Some(cursor),
+            }),
+        )
+        .await
+        .expect_err("a cursor must stay bound to its department filters");
+        assert_error_status(error, StatusCode::BAD_REQUEST);
+
+        let Json(searched_departments) = list_departments(
+            State(db.state.clone()),
+            admin_guard(admin_user_id, org_id),
+            Query(ListDepartmentsQuery {
+                org_id: Some(org_a),
+                q: Some("PLAT".into()),
+                limit: Some(100),
+                cursor: None,
+            }),
+        )
+        .await?;
+        assert_eq!(
+            object_ids(&searched_departments, "departments"),
+            vec![dept_a, dept_b, dept_c]
+        );
 
         db.cleanup().await?;
         Ok(())

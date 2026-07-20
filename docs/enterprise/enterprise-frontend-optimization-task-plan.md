@@ -630,7 +630,7 @@ Make enterprise dashboard navigation responsive
 - [x] 非管理员只返回允许查看的部门范围。
 - [x] 面包屑使用已加载节点或专用 ancestor 信息。
 - [x] 当前层级结果可以短期缓存。
-- [ ] 创建部门表单使用按组织、关键词搜索接口。
+- [x] 创建部门表单使用按组织、关键词搜索接口。
 - [x] 不再通过 `fetchAllPaginated()` 获取整棵树。
 
 验收标准：
@@ -641,12 +641,14 @@ Make enterprise dashboard navigation responsive
 
 ### 5.2 替换全量下拉数据
 
+执行记录：[`enterprise-frontend-bounded-options.md`](./enterprise-frontend-bounded-options.md)
+
 依次处理：
 
-- [ ] 创建用户的组织选择。
-- [ ] 创建用户的部门选择。
-- [ ] 创建部门的组织选择。
-- [ ] 创建部门的上级部门选择。
+- [x] 创建用户的组织选择。
+- [x] 创建用户的部门选择。
+- [x] 创建部门的组织选择。
+- [x] 创建部门的上级部门选择。
 
 推荐方案：
 
@@ -655,8 +657,8 @@ Make enterprise dashboard navigation responsive
 
 验收标准：
 
-- [ ] 不存在达到 5,000 条后静默截断的下拉数据。
-- [ ] 搜索明确显示 loading、无结果和错误状态。
+- [x] 不存在达到 5,000 条后静默截断的下拉数据。
+- [x] 搜索明确显示 loading、无结果和错误状态。
 
 ### 5.3 优化静态资源传输
 
