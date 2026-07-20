@@ -1,0 +1,36 @@
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 32,62
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 798
+docs/enterprise/enterprise-frontend-modules.md
+  69e86842745e0e94 113-126
+enterprise-server/static/dashboard-toast.test.cjs
+  69e86842745e0e94 1-136
+enterprise-server/src/handlers/dashboard.rs
+  69e86842745e0e94 3209
+enterprise-server/static/dashboard-actions.test.cjs
+  69e86842745e0e94 405
+enterprise-server/static/dashboard/ui/toast.js
+  69e86842745e0e94 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "3.1.14",
+  "base_commit_sha": "ef5958ee6378e3b66de9a1835162d82af1fff345",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 211,
+      "total_deletions": 12,
+      "accepted_lines": 307,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/31a1f94fb40f55b7471f9fad2253790800c1d94b7667a0880a7951e4e37b6e4c"
+    }
+  }
+}
