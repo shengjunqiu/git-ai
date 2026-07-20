@@ -726,6 +726,32 @@ function handleDashboardAction(event) {
         case 'toggle-all-git-tracking-users':
             toggleAllGitTrackingUsers(actionElement.checked);
             break;
+        case 'toggle-git-tracking-user':
+            toggleGitTrackingUser(
+                actionElement.dataset.userId,
+                actionElement.checked,
+            );
+            break;
+        case 'set-git-tracking-authorization':
+            setGitTrackingUploadAuthorization(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+                actionElement.dataset.authorized === 'true',
+                actionElement,
+            );
+            break;
+        case 'show-create-api-key-for-user':
+            showCreateApiKeyForUser(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+            );
+            break;
+        case 'delete-user':
+            deleteUser(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+            );
+            break;
         case 'show-create-department':
             showCreateDepartmentModal();
             break;
@@ -735,17 +761,52 @@ function handleDashboardAction(event) {
         case 'show-create-api-key':
             showCreateApiKeyModal();
             break;
+        case 'revoke-api-key':
+            revokeApiKey(
+                actionElement.dataset.apiKeyId,
+                actionElement.dataset.apiKeyName,
+            );
+            break;
         case 'render-selected-release-files':
             renderSelectedReleaseFiles();
             break;
         case 'publish-cli-release':
             publishCliRelease(actionElement);
             break;
+        case 'promote-cli-release':
+            promoteCliRelease(
+                actionElement.dataset.version,
+                actionElement.dataset.checksum,
+            );
+            break;
         case 'render-selected-managed-file':
             renderSelectedManagedFile();
             break;
         case 'upload-managed-file':
             uploadManagedFile(actionElement);
+            break;
+        case 'copy-published-url':
+            copyPublishedUrl(actionElement.dataset.path);
+            break;
+        case 'publish-managed-file-version':
+            publishManagedFileVersion(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.version,
+            );
+            break;
+        case 'delete-managed-file-version':
+            deleteManagedFileVersion(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.version,
+            );
+            break;
+        case 'show-edit-managed-file':
+            showEditManagedFileModal(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.fileName,
+                actionElement.dataset.fileDescription,
+                actionElement.dataset.filePublic === 'true',
+            );
             break;
         default:
             break;
@@ -1573,25 +1634,25 @@ async function loadUsers({ signal, mode }) {
             const created = u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '—';
             const displayName = escapeHtml(u.name || '—');
             const displayEmail = escapeHtml(u.email || '');
-            const actionName = jsString(u.name || u.email || '');
-            const actionUserId = jsString(u.id);
+            const actionName = escapeAttribute(u.name || u.email || '');
             const userIdAttribute = escapeAttribute(u.id);
+            const selectionLabel = escapeAttribute(`选择${u.name || '—'}`);
             const uploadEnabled = u.git_tracking_upload_enabled === true;
             const uploadStatus = uploadEnabled
                 ? '<span class="badge active">已授权</span>'
                 : '<span class="badge revoked">未授权</span>';
             const selected = !uploadEnabled && selectedGitTrackingUserIds.has(u.id);
             return `<tr>
-                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser(${actionUserId}, this.checked)" ${uploadEnabled ? 'disabled' : ''} ${selected ? 'checked' : ''} /></td>
+                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="${selectionLabel}" data-action="toggle-git-tracking-user" data-action-event="change" data-user-id="${userIdAttribute}" ${uploadEnabled ? 'disabled' : ''} ${selected ? 'checked' : ''} /></td>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
                 <td>${uploadStatus}</td>
                 <td>${keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}</td>
                 <td>${created}</td>
                 <td>
-                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" onclick="setGitTrackingUploadAuthorization(${actionUserId}, ${actionName}, ${!uploadEnabled}, this)">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
-                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser(${actionUserId}, ${actionName})">🔑 创建密钥</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${actionUserId}, ${actionName})">删除</button>
+                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" data-action="set-git-tracking-authorization" data-user-id="${userIdAttribute}" data-user-name="${actionName}" data-authorized="${!uploadEnabled}">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
+                    <button class="btn btn-sm" data-action="show-create-api-key-for-user" data-user-id="${userIdAttribute}" data-user-name="${actionName}">🔑 创建密钥</button>
+                    <button class="btn btn-sm btn-danger" data-action="delete-user" data-user-id="${userIdAttribute}" data-user-name="${actionName}">删除</button>
                 </td>
             </tr>`;
         }).join('');
@@ -2365,7 +2426,8 @@ async function loadApiKeys({ signal, mode }) {
             const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未使用';
             const scopes = (k.scopes || []).map(s => `<span class="badge role" style="margin:0.1rem">${escapeHtml(s)}</span>`).join(' ');
             const keyName = escapeHtml(k.name || '未命名');
-            const actionName = jsString(k.name || k.key_prefix || '');
+            const actionName = escapeAttribute(k.name || k.key_prefix || '');
+            const actionKeyId = escapeAttribute(k.id);
             return `<tr>
                 <td><strong>${keyName}</strong></td>
                 <td><code style="color:var(--accent);font-size:0.8rem">${escapeHtml(k.key_prefix)}...</code></td>
@@ -2373,7 +2435,7 @@ async function loadApiKeys({ signal, mode }) {
                 <td>${created}</td>
                 <td>${expires}</td>
                 <td style="font-size:0.8rem">${lastUsed}</td>
-                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey(${jsString(k.id)}, ${actionName})">撤销</button></td>
+                <td><button class="btn btn-sm btn-danger" data-action="revoke-api-key" data-api-key-id="${actionKeyId}" data-api-key-name="${actionName}">撤销</button></td>
             </tr>`;
         }).join('');
         replaceHtmlIfChanged(document.getElementById('apikeys-table'), nextHtml);
@@ -2849,10 +2911,10 @@ async function loadReleaseManagement({ signal, mode }) {
                 .join('<br>');
             const actions = [];
             if (isPublished && !isLatest) {
-                actions.push(`<button class="btn btn-sm btn-primary" onclick="promoteCliRelease(${jsString(version)}, ${jsString(checksum)})">设为 latest</button>`);
+                actions.push(`<button class="btn btn-sm btn-primary" data-action="promote-cli-release" data-version="${escapeAttribute(version)}" data-checksum="${escapeAttribute(checksum)}">设为 latest</button>`);
             }
             if (isPublished) {
-                actions.push(`<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/worker/releases/${version}/download/install.sh`)})">复制安装链接</button>`);
+                actions.push(`<button class="btn btn-sm" data-action="copy-published-url" data-path="${escapeAttribute(`/worker/releases/${version}/download/install.sh`)}">复制安装链接</button>`);
             }
             return `<tr>
                 <td><strong>${escapeHtml(version)}</strong></td>
@@ -2952,6 +3014,9 @@ async function loadManagedFiles({ signal, mode }) {
         const files = result.files || [];
         const nextHtml = files.map(file => {
             const isPublic = file.is_public === true;
+            const fileSlugAttribute = escapeAttribute(file.slug);
+            const fileNameAttribute = escapeAttribute(file.name);
+            const fileDescriptionAttribute = escapeAttribute(file.description || '');
             const versions = (file.versions || []).slice().sort((a, b) =>
                 b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: 'base' }));
             const versionList = versions.map(version => {
@@ -2964,11 +3029,14 @@ async function loadManagedFiles({ signal, mode }) {
             }).join('');
             const fixedLinkActions = versions
                 .filter(version => version.published_at)
-                .map(version => `<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/files/${file.slug}/${version.version}/download`)})">复制 ${escapeHtml(version.version)} 固定链接</button>`)
+                .map(version => `<button class="btn btn-sm" data-action="copy-published-url" data-path="${escapeAttribute(`/files/${file.slug}/${version.version}/download`)}">复制 ${escapeHtml(version.version)} 固定链接</button>`)
                 .join('');
             const versionActions = versions
                 .filter(version => version.version !== file.current_version)
-                .map(version => `<button class="btn btn-sm" onclick="publishManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">发布 ${escapeHtml(version.version)}</button><button class="btn btn-sm btn-danger" onclick="deleteManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">删除 ${escapeHtml(version.version)}</button>`)
+                .map(version => {
+                    const versionAttribute = escapeAttribute(version.version);
+                    return `<button class="btn btn-sm" data-action="publish-managed-file-version" data-file-slug="${fileSlugAttribute}" data-version="${versionAttribute}">发布 ${escapeHtml(version.version)}</button><button class="btn btn-sm btn-danger" data-action="delete-managed-file-version" data-file-slug="${fileSlugAttribute}" data-version="${versionAttribute}">删除 ${escapeHtml(version.version)}</button>`;
+                })
                 .join('');
             return `<tr>
                 <td><strong>${escapeHtml(file.name)}</strong><br><code style="color:var(--accent);font-size:0.72rem">${escapeHtml(file.slug)}</code><br><span style="color:var(--text-muted);font-size:0.7rem">${escapeHtml(file.description || '')}</span></td>
@@ -2976,8 +3044,8 @@ async function loadManagedFiles({ signal, mode }) {
                 <td><div class="version-list">${versionList || '暂无版本'}</div></td>
                 <td>${isPublic ? '<span class="badge active">公开</span>' : '<span class="badge role">登录后下载</span>'}</td>
                 <td><div class="action-group">
-                    ${file.current_version ? `<button class="btn btn-sm btn-primary" onclick="copyPublishedUrl(${jsString(file.latest_download_url)})">复制下载链接</button>` : ''}
-                    <button class="btn btn-sm" onclick="showEditManagedFileModal(${jsString(file.slug)}, ${jsString(file.name)}, ${jsString(file.description || '')}, ${isPublic})">设置</button>
+                    ${file.current_version ? `<button class="btn btn-sm btn-primary" data-action="copy-published-url" data-path="${escapeAttribute(file.latest_download_url)}">复制下载链接</button>` : ''}
+                    <button class="btn btn-sm" data-action="show-edit-managed-file" data-file-slug="${fileSlugAttribute}" data-file-name="${fileNameAttribute}" data-file-description="${fileDescriptionAttribute}" data-file-public="${isPublic}">设置</button>
                     ${fixedLinkActions}
                     ${versionActions}
                 </div></td>

@@ -746,7 +746,7 @@ Cache enterprise static assets efficiently
 - [ ] 参数通过 `dataset` 或受控状态 Map 传递。
 - [x] 在栏目容器或 document 上注册一次事件监听器。
 - [x] 先迁移分页、导航和简单刷新。
-- [ ] 再迁移用户、API Key、发布和文件管理操作。
+- [x] 再迁移用户、API Key、发布和文件管理操作。
 - [ ] 最后迁移模态框和帮助页复制按钮。
 
 验收标准：

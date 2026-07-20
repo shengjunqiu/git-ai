@@ -20,6 +20,16 @@ function actionSource() {
     return dashboardSource.slice(start, end);
 }
 
+function escapeAttributeSource() {
+    const startMarker = 'function escapeAttribute';
+    const endMarker = 'function fmtTimeAgo';
+    const start = dashboardSource.indexOf(startMarker);
+    const end = dashboardSource.indexOf(endMarker, start);
+    assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
+    assert.notEqual(end, -1, `missing source marker: ${endMarker}`);
+    return dashboardSource.slice(start, end);
+}
+
 function createHarness() {
     const calls = [];
     const listeners = new Map();
@@ -41,13 +51,37 @@ function createHarness() {
         showCreateUserModal: () => calls.push(['show-create-user']),
         bulkAuthorizeGitTrackingUpload: element => calls.push(['bulk-authorize', element]),
         toggleAllGitTrackingUsers: checked => calls.push(['toggle-all', checked]),
+        toggleGitTrackingUser: (userId, checked) => {
+            calls.push(['toggle-user', userId, checked]);
+        },
+        setGitTrackingUploadAuthorization: (userId, userName, authorized, element) => {
+            calls.push(['set-authorization', userId, userName, authorized, element]);
+        },
+        showCreateApiKeyForUser: (userId, userName) => {
+            calls.push(['show-user-api-key', userId, userName]);
+        },
+        deleteUser: (userId, userName) => calls.push(['delete-user', userId, userName]),
         showCreateDepartmentModal: () => calls.push(['show-create-department']),
         backDepartmentLevel: () => calls.push(['back-department']),
         showCreateApiKeyModal: () => calls.push(['show-create-api-key']),
+        revokeApiKey: (keyId, keyName) => calls.push(['revoke-key', keyId, keyName]),
         renderSelectedReleaseFiles: () => calls.push(['render-release-files']),
         publishCliRelease: element => calls.push(['publish-release', element]),
+        promoteCliRelease: (version, checksum) => {
+            calls.push(['promote-release', version, checksum]);
+        },
         renderSelectedManagedFile: () => calls.push(['render-managed-file']),
         uploadManagedFile: element => calls.push(['upload-managed-file', element]),
+        copyPublishedUrl: pathValue => calls.push(['copy-url', pathValue]),
+        publishManagedFileVersion: (slug, version) => {
+            calls.push(['publish-file', slug, version]);
+        },
+        deleteManagedFileVersion: (slug, version) => {
+            calls.push(['delete-file', slug, version]);
+        },
+        showEditManagedFileModal: (slug, name, description, isPublic) => {
+            calls.push(['edit-file', slug, name, description, isPublic]);
+        },
     });
     vm.runInContext(`${actionSource()}
 globalThis.actionTestExports = {
@@ -149,6 +183,75 @@ test('change-only controls ignore click events before their value changes', () =
     selection.actionElement.checked = true;
     harness.handleDashboardAction(selection.event);
     assert.deepEqual(harness.calls, [['toggle-all', true]]);
+});
+
+test('dynamic management actions preserve special characters from dataset values', () => {
+    const harness = createHarness();
+    const specialName = `研发 "A&B" <核心> '组'`;
+    const authorization = actionEvent({
+        action: 'set-git-tracking-authorization',
+        userId: 'user-1',
+        userName: specialName,
+        authorized: 'true',
+    });
+    harness.handleDashboardAction(authorization.event);
+    assert.deepEqual(harness.calls[0].slice(0, 4), [
+        'set-authorization',
+        'user-1',
+        specialName,
+        true,
+    ]);
+    assert.equal(harness.calls[0][4], authorization.actionElement);
+
+    const editFile = actionEvent({
+        action: 'show-edit-managed-file',
+        fileSlug: 'company-config',
+        fileName: specialName,
+        fileDescription: `说明 "${specialName}"`,
+        filePublic: 'false',
+    });
+    harness.handleDashboardAction(editFile.event);
+    assert.deepEqual(harness.calls.at(-1), [
+        'edit-file',
+        'company-config',
+        specialName,
+        `说明 "${specialName}"`,
+        false,
+    ]);
+});
+
+test('dynamic action attributes escape HTML-significant characters', () => {
+    const context = vm.createContext({});
+    vm.runInContext(`${escapeAttributeSource()}
+globalThis.escapeAttributeForTest = escapeAttribute;`, context);
+
+    assert.equal(
+        context.escapeAttributeForTest(`研发 "A&B" <核心> '组'`),
+        '研发 &quot;A&amp;B&quot; &lt;核心&gt; &#39;组&#39;',
+    );
+    for (const marker of [
+        'data-action="set-git-tracking-authorization"',
+        'data-user-name="${actionName}"',
+        'data-action="revoke-api-key"',
+        'data-action="promote-cli-release"',
+        'data-action="publish-managed-file-version"',
+        'data-action="delete-managed-file-version"',
+        'data-action="show-edit-managed-file"',
+    ]) {
+        assert.equal(dashboardSource.includes(marker), true, marker);
+    }
+    for (const legacyHandler of [
+        'onclick="setGitTrackingUploadAuthorization',
+        'onclick="showCreateApiKeyForUser',
+        'onclick="deleteUser',
+        'onclick="revokeApiKey',
+        'onclick="promoteCliRelease',
+        'onclick="publishManagedFileVersion',
+        'onclick="deleteManagedFileVersion',
+        'onclick="showEditManagedFileModal',
+    ]) {
+        assert.equal(dashboardSource.includes(legacyHandler), false, legacyHandler);
+    }
 });
 
 test('dashboard action listeners are registered once per delegated event type', () => {
