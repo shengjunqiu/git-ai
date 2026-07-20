@@ -720,13 +720,18 @@ if ($pathUpdate.MachineStatus -eq 'Updated') {
 # Windows PowerShell and PowerShell 7 user profiles to enforce precedence
 # without requiring administrator rights.
 $powerShellProfilesConfigured = New-Object System.Collections.Generic.List[string]
-if (-not $skipPathUpdate) {
+$profileRootOverride = $env:GIT_AI_TEST_PROFILE_ROOT
+if (-not $skipPathUpdate -or $profileRootOverride) {
 try {
     $profileCandidates = New-Object System.Collections.Generic.List[string]
-    if ($PROFILE -and $PROFILE.CurrentUserAllHosts) {
+    if (-not $profileRootOverride -and $PROFILE -and $PROFILE.CurrentUserAllHosts) {
         $profileCandidates.Add([string]$PROFILE.CurrentUserAllHosts) | Out-Null
     }
-    $documentsDir = [Environment]::GetFolderPath('MyDocuments')
+    $documentsDir = if ($profileRootOverride) {
+        $profileRootOverride
+    } else {
+        [Environment]::GetFolderPath('MyDocuments')
+    }
     if (-not [string]::IsNullOrWhiteSpace($documentsDir)) {
         $profileCandidates.Add((Join-Path $documentsDir 'WindowsPowerShell\profile.ps1')) | Out-Null
         $profileCandidates.Add((Join-Path $documentsDir 'PowerShell\profile.ps1')) | Out-Null
@@ -766,7 +771,19 @@ if (Test-Path -LiteralPath $gitAiBin) {
         if ($existingProfile -and $existingProfile.Contains($profileMarker)) {
             $managedPattern = '(?s)' + [regex]::Escape($profileMarker) + '.*?' + [regex]::Escape($profileEndMarker)
             $managedRegex = New-Object System.Text.RegularExpressions.Regex($managedPattern)
-            $updatedProfile = $managedRegex.Replace($existingProfile, $profileBlock.Trim(), 1)
+            $replacementText = $profileBlock.Trim()
+            # Regex replacement strings treat `$_` as the entire input and
+            # interpret other `$` sequences as substitutions. A MatchEvaluator
+            # returns the managed PowerShell block literally, preserving all
+            # of its dollar-prefixed variables across repeated installations.
+            $updatedProfile = $managedRegex.Replace(
+                $existingProfile,
+                [System.Text.RegularExpressions.MatchEvaluator] {
+                    param($match)
+                    $replacementText
+                },
+                1
+            )
             if ($updatedProfile -eq $existingProfile) {
                 continue
             }

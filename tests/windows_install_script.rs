@@ -38,6 +38,73 @@ fn installed_git_wrapper_path(repo: &TestRepo) -> PathBuf {
         .join("git.exe")
 }
 
+fn assert_installed_powershell_profiles_are_valid(repo: &TestRepo) {
+    let profiles = [
+        repo.test_home_path()
+            .join("Documents")
+            .join("WindowsPowerShell")
+            .join("profile.ps1"),
+        repo.test_home_path()
+            .join("Documents")
+            .join("PowerShell")
+            .join("profile.ps1"),
+    ];
+
+    for profile in profiles {
+        let contents = fs::read_to_string(&profile)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", profile.display()));
+        assert_eq!(
+            contents.matches("# >>> git-ai managed PATH >>>").count(),
+            1,
+            "{} should contain exactly one managed PATH block\n{}",
+            profile.display(),
+            contents
+        );
+        assert_eq!(
+            contents.matches("# <<< git-ai managed PATH <<<").count(),
+            1,
+            "{} should contain exactly one managed PATH end marker\n{}",
+            profile.display(),
+            contents
+        );
+        assert!(
+            contents.contains("-not [string]::IsNullOrWhiteSpace($_) -and $_.Trim().TrimEnd('\\')"),
+            "{} should preserve PowerShell's literal $_ variables\n{}",
+            profile.display(),
+            contents
+        );
+
+        let output = Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(
+                "$tokens=$null; $errors=$null; \
+                 [System.Management.Automation.Language.Parser]::ParseFile(\
+                     $env:GIT_AI_PROFILE_UNDER_TEST, [ref]$tokens, [ref]$errors\
+                 ) | Out-Null; \
+                 if ($errors.Count -gt 0) { \
+                     $errors | ForEach-Object { Write-Error $_.Message }; \
+                     exit 1 \
+                 }",
+            )
+            .env("GIT_AI_PROFILE_UNDER_TEST", &profile)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to run PowerShell parser for {}: {error}",
+                    profile.display()
+                )
+            });
+        assert!(
+            output.status.success(),
+            "{} should parse successfully\nstdout:\n{}\nstderr:\n{}",
+            profile.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn foreground_daemon_stdout_path(repo: &TestRepo) -> PathBuf {
     repo.test_home_path().join("foreground-daemon.stdout.log")
 }
@@ -142,6 +209,10 @@ fn configure_install_env(command: &mut Command, repo: &TestRepo) {
 
     command.env("GIT_AI_LOCAL_BINARY", get_binary_path());
     command.env("GIT_AI_SKIP_PATH_UPDATE", "1");
+    command.env(
+        "GIT_AI_TEST_PROFILE_ROOT",
+        repo.test_home_path().join("Documents"),
+    );
     command.env("PATH", path_with_git);
     command.env("HOME", repo.test_home_path());
     command.env("USERPROFILE", repo.test_home_path());
@@ -463,6 +534,7 @@ fn windows_install_script_reinstall_stops_running_daemon() {
         "reinstall should exercise the forced process cleanup fallback\nstdout:\n{}",
         reinstall.stdout
     );
+    assert_installed_powershell_profiles_are_valid(&repo);
 
     wait_for_child_exit(&repo, &mut daemon, Duration::from_secs(20));
     wait_for_child_exit(&repo, &mut daemon_tail, Duration::from_secs(30));
