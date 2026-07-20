@@ -1,3 +1,199 @@
+class ApiRequestError extends Error {
+    constructor(message, { status = null, requestId = null, cause = null } = {}) {
+        super(message, cause ? { cause } : undefined);
+        this.name = this.constructor.name;
+        this.status = status;
+        this.requestId = requestId;
+    }
+}
+class AuthExpiredError extends ApiRequestError {}
+class PermissionDeniedError extends ApiRequestError {}
+class HttpError extends ApiRequestError {}
+class InvalidResponseError extends ApiRequestError {}
+class NetworkError extends ApiRequestError {}
+class TimeoutError extends ApiRequestError {}
+class AbortError extends ApiRequestError {}
+
+const API_DEFAULT_TIMEOUT_MS = 15000;
+const API_GET_RETRIES = 1;
+const API_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+function requestIdFromResponse(response) {
+    return response.headers?.get?.('x-request-id') || null;
+}
+
+function safeResponseMessage(data, status, fallback) {
+    if (status >= 500) return fallback;
+    const value = typeof data?.error === 'string'
+        ? data.error
+        : typeof data?.message === 'string'
+            ? data.message
+            : '';
+    const message = value.replace(/\s+/g, ' ').trim();
+    return message && message.length <= 300 ? message : fallback;
+}
+
+function authReturnTo() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
+function redirectToLogin() {
+    const loginUrl = `/auth/login?return_to=${encodeURIComponent(authReturnTo())}`;
+    window.location.assign(loginUrl);
+}
+
+function waitForRetry(delayMs, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new AbortError('请求已取消'));
+            return;
+        }
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new AbortError('请求已取消'));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, delayMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+function createRequestSignal(externalSignal, timeoutMs) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const onExternalAbort = () => controller.abort(externalSignal.reason);
+    if (externalSignal?.aborted) onExternalAbort();
+    else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+    const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, timeoutMs)
+        : null;
+    return {
+        signal: controller.signal,
+        timedOut: () => timedOut,
+        cleanup: () => {
+            if (timeout) clearTimeout(timeout);
+            externalSignal?.removeEventListener('abort', onExternalAbort);
+        },
+    };
+}
+
+async function parseApiResponse(response) {
+    const requestId = requestIdFromResponse(response);
+    const contentType = response.headers?.get?.('content-type') || '';
+    const body = await response.text();
+    let data = null;
+    if (body) {
+        if (!contentType.toLowerCase().includes('application/json')) {
+            if (response.ok) {
+                throw new InvalidResponseError('服务器返回了非 JSON 响应', {
+                    status: response.status,
+                    requestId,
+                });
+            }
+        } else {
+            try {
+                data = JSON.parse(body);
+            } catch (cause) {
+                if (response.ok) {
+                    throw new InvalidResponseError('服务器返回了无效 JSON', {
+                        status: response.status,
+                        requestId,
+                        cause,
+                    });
+                }
+            }
+        }
+    }
+
+    if (response.ok) {
+        if (!body && response.status !== 204) {
+            throw new InvalidResponseError('服务器返回了空响应', {
+                status: response.status,
+                requestId,
+            });
+        }
+        return data;
+    }
+    if (response.status === 401) {
+        throw new AuthExpiredError('登录已过期，请重新登录', {
+            status: response.status,
+            requestId,
+        });
+    }
+    if (response.status === 403) {
+        throw new PermissionDeniedError(
+            safeResponseMessage(data, response.status, '没有执行此操作的权限'),
+            { status: response.status, requestId },
+        );
+    }
+    throw new HttpError(
+        safeResponseMessage(data, response.status, `请求失败（HTTP ${response.status}）`),
+        { status: response.status, requestId },
+    );
+}
+
+async function apiRequest(url, options = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    const retries = options.retries ?? (method === 'GET' ? API_GET_RETRIES : 0);
+    const headers = new Headers(options.headers || {});
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        const requestSignal = createRequestSignal(
+            options.signal,
+            options.timeoutMs ?? API_DEFAULT_TIMEOUT_MS,
+        );
+        try {
+            const response = await fetch(url, {
+                ...options,
+                method,
+                headers,
+                signal: requestSignal.signal,
+            });
+            if (
+                method === 'GET'
+                && API_RETRYABLE_STATUSES.has(response.status)
+                && attempt < retries
+            ) {
+                requestSignal.cleanup();
+                await response.body?.cancel?.();
+                await waitForRetry(250 * (2 ** attempt), options.signal);
+                continue;
+            }
+            const data = await parseApiResponse(response);
+            requestSignal.cleanup();
+            return data;
+        } catch (error) {
+            const didTimeout = requestSignal.timedOut();
+            requestSignal.cleanup();
+            let typedError = error;
+            if (options.signal?.aborted) {
+                typedError = new AbortError('请求已取消', { cause: error });
+            } else if (didTimeout) {
+                typedError = new TimeoutError('请求超时，请稍后重试', { cause: error });
+            } else if (error instanceof TypeError || error?.name === 'TypeError') {
+                typedError = new NetworkError('网络连接失败，请检查网络后重试', {
+                    cause: error,
+                });
+            }
+
+            const retryableTransportError =
+                typedError instanceof NetworkError || typedError instanceof TimeoutError;
+            if (method === 'GET' && retryableTransportError && attempt < retries) {
+                await waitForRetry(250 * (2 ** attempt), options.signal);
+                continue;
+            }
+            if (typedError instanceof AuthExpiredError) redirectToLogin();
+            throw typedError;
+        }
+    }
+}
+
 const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
 function finiteNumber(value, fallback = 0) {
     const number = Number(value);
@@ -61,6 +257,10 @@ const DASHBOARD_SECTIONS = [
 ];
 const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys', 'releases', 'files'];
 let currentSection = 'overview';
+let activeSectionRequestController = null;
+let lastRefreshAttemptAt = null;
+let lastRefreshSuccessAt = null;
+const successfulSections = new Set();
 let departmentTreeRows = [];
 let activeDepartmentParentId = null;
 const TABLE_PAGE_SIZE = 25;
@@ -106,15 +306,11 @@ function addPaginationParams(url, key) {
     return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
 }
 
-async function fetchPaginatedJson(key, url, errorMessage) {
+async function fetchPaginatedJson(key, url, errorMessage, signal) {
     const state = getTablePageState(key);
     state.loading = true;
     try {
-        const r = await fetch(addPaginationParams(url, key));
-        const d = await r.json();
-        if (!r.ok) {
-            throw new Error(d.error || errorMessage);
-        }
+        const d = await apiRequest(addPaginationParams(url, key), { signal });
         const pagination = d.pagination || {};
         state.nextCursor = pagination.next_cursor || null;
         state.hasMore = Boolean(pagination.has_more);
@@ -122,6 +318,9 @@ async function fetchPaginatedJson(key, url, errorMessage) {
     } catch (error) {
         state.nextCursor = null;
         state.hasMore = false;
+        if (!(error instanceof ApiRequestError)) {
+            throw new InvalidResponseError(errorMessage, { cause: error });
+        }
         throw error;
     } finally {
         state.loading = false;
@@ -133,6 +332,7 @@ function pageItems(data, field) {
 }
 
 function setTableLoading(tbodyId, colspan) {
+    if (successfulSections.has(currentSection)) return;
     document.getElementById(tbodyId).innerHTML =
         `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`;
 }
@@ -165,28 +365,20 @@ async function goToTablePage(key, direction) {
 }
 
 function reloadPaginatedTable(key) {
-    switch (key) {
-        case 'organizations': return loadOrgs();
-        case 'departments': return loadDepartments();
-        case 'developers': return loadDevs();
-        case 'projects': return loadProjects();
-        case 'tools': return loadTools();
-        case 'users': return loadUsers();
-        case 'apikeys': return loadApiKeys();
-    }
+    if (!tablePagerContainers[key]) return Promise.resolve();
+    return loadSection(currentSection);
 }
 
-async function fetchAllPaginated(url, field) {
+async function fetchAllPaginated(url, field, signal) {
     const values = [];
     let cursor = null;
     for (let page = 0; page < 50; page += 1) {
         const params = new URLSearchParams({ limit: '100' });
         if (cursor) params.set('cursor', cursor);
-        const r = await fetch(`${url}${url.includes('?') ? '&' : '?'}${params.toString()}`);
-        const d = await r.json();
-        if (!r.ok) {
-            throw new Error(d.error || '加载分页数据失败');
-        }
+        const d = await apiRequest(
+            `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`,
+            { signal },
+        );
         values.push(...(d[field] || []));
         if (!d.pagination?.has_more || !d.pagination?.next_cursor) break;
         cursor = d.pagination.next_cursor;
@@ -216,16 +408,20 @@ function startAutoRefresh() {
 function stopAutoRefresh() {
     if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
 }
-function updateRefreshTime() {
-    const now = new Date();
-    document.getElementById('last-refresh').textContent =
-        `上次刷新: ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+function formatRefreshTime(value) {
+    if (!value) return '—';
+    return value.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function updateRefreshTime({ stale = false } = {}) {
+    const status = document.getElementById('last-refresh');
+    status.textContent = `最后成功: ${formatRefreshTime(lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(lastRefreshAttemptAt)}`;
+    status.title = stale ? '后台刷新失败，当前显示的数据可能已过期' : '';
+    document.querySelector('.refresh-dot')?.classList.toggle('stale', stale);
 }
 
 function refreshCurrentSection() {
-    loadSection(currentSection);
-    if (!isAdmin) loadClientStatus();
-    updateRefreshTime();
+    loadSection(currentSection, { background: successfulSections.has(currentSection) });
 }
 
 // --- Navigation ---
@@ -277,20 +473,72 @@ window.addEventListener('popstate', () => {
     activateDashboardSection(dashboardSectionFromLocation());
 });
 
-function loadSection(id) {
-    switch(id) {
-        case 'overview': loadOverview(); break;
-        case 'trends': loadTrends(); break;
-        case 'organizations': loadOrgs(); break;
-        case 'developers': loadDevs(); break;
-        case 'projects': loadProjects(); break;
-        case 'tools': loadTools(); break;
-        case 'users': loadUsers(); break;
-        case 'departments': loadDepartments(); break;
-        case 'apikeys': loadApiKeys(); break;
-        case 'releases': loadReleaseManagement(); break;
-        case 'files': loadManagedFiles(); break;
-        case 'help': break;
+function clearSectionError(id) {
+    document.querySelector(`#section-${id} > .section-request-error`)?.remove();
+}
+
+function showSectionLoadError(id, error, { background = false } = {}) {
+    if (error instanceof AbortError) return;
+    const requestId = error.requestId ? ` 请求 ID：${error.requestId}` : '';
+    console.error('Dashboard request failed', {
+        section: id,
+        name: error.name,
+        status: error.status,
+        requestId: error.requestId,
+        error,
+    });
+    if (error instanceof AuthExpiredError) return;
+    if (background && successfulSections.has(id)) {
+        updateRefreshTime({ stale: true });
+        showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
+        return;
+    }
+
+    clearSectionError(id);
+    const section = document.getElementById(`section-${id}`);
+    const banner = document.createElement('div');
+    banner.className = 'section-request-error';
+    const message = document.createElement('span');
+    message.textContent = `${error.message || '栏目加载失败'}${requestId}`;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-sm';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => loadSection(id));
+    banner.append(message, retry);
+    section.prepend(banner);
+}
+
+async function loadSection(id, { background = false } = {}) {
+    activeSectionRequestController?.abort();
+    const controller = new AbortController();
+    activeSectionRequestController = controller;
+    lastRefreshAttemptAt = new Date();
+    updateRefreshTime({ stale: false });
+    const loaders = {
+        overview: loadOverview,
+        trends: loadTrends,
+        organizations: loadOrgs,
+        developers: loadDevs,
+        projects: loadProjects,
+        tools: loadTools,
+        users: loadUsers,
+        departments: loadDepartments,
+        apikeys: loadApiKeys,
+        releases: loadReleaseManagement,
+        files: loadManagedFiles,
+        help: async () => {},
+    };
+    try {
+        await loaders[id](controller.signal);
+        if (controller.signal.aborted) return;
+        successfulSections.add(id);
+        lastRefreshSuccessAt = new Date();
+        clearSectionError(id);
+        updateRefreshTime({ stale: false });
+        if (!isAdmin) await loadClientStatus(controller.signal);
+    } catch (error) {
+        showSectionLoadError(id, error, { background });
     }
 }
 
@@ -364,24 +612,25 @@ let agentComparisonChart = null;
 let developerGitInfo = new Map();
 
 // --- Overview ---
-async function loadOverview() {
+async function loadOverview(signal) {
     const rangeLabel = getTimeRangeLabel();
     document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${rangeLabel}）`;
 
     const summaryPromise = (async () => {
-        const r = await fetch(withTimeRange('/api/v1/aggregate/summary'));
-        const d = await r.json();
+        const d = await apiRequest(withTimeRange('/api/v1/aggregate/summary'), { signal });
         document.getElementById('s-commits').textContent = fmt(d.total_commits);
         document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
         document.getElementById('s-human-lines').textContent = fmt(d.total_human_lines);
         document.getElementById('s-ai-pct').textContent = clampPercent(d.pct_ai_lines).toFixed(1) + '%';
         if (isAdmin) document.getElementById('s-devs').textContent = fmt(d.total_developers);
         document.getElementById('s-projects').textContent = fmt(d.total_projects);
-    })().catch(e => console.error(e));
+    })();
 
     const developersPromise = (async () => {
-        const r = await fetch(withTimeRange('/api/v1/aggregate/developers?limit=5'));
-        const d = await r.json();
+        const d = await apiRequest(
+            withTimeRange('/api/v1/aggregate/developers?limit=5'),
+            { signal },
+        );
         const top = [...(d.developers || [])]
             .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
             .slice(0, 5);
@@ -400,13 +649,13 @@ async function loadOverview() {
                 <div class="chart-value">${fmt(total)} <span class="badge ai">${clampPercent(ai/(total||1)*100).toFixed(0)}% AI</span></div>
             </div>`;
         }).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
-    })().catch(e => console.error(e));
+    })();
 
-    const trendPromise = loadOverviewTrend();
-    await Promise.allSettled([summaryPromise, developersPromise, trendPromise]);
+    const trendPromise = loadOverviewTrend(signal);
+    await Promise.all([summaryPromise, developersPromise, trendPromise]);
 }
 
-async function loadClientStatus() {
+async function loadClientStatus(signal) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -416,8 +665,7 @@ async function loadClientStatus() {
     const overviewDetailEl = document.getElementById('s-gitai-detail');
     if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
     try {
-        const r = await fetch('/api/v1/client/status');
-        const d = await r.json();
+        const d = await apiRequest('/api/v1/client/status', { signal });
         if (!d.detected) {
             if (overviewStatusEl) {
                 overviewStatusEl.textContent = '未检测到';
@@ -474,8 +722,9 @@ async function loadClientStatus() {
             }).join(' / '));
         }
         if (detailEl) detailEl.title = titleParts.join(' · ');
-    } catch(e) {
-        console.error(e);
+    } catch(error) {
+        if (error instanceof AbortError || error instanceof AuthExpiredError) throw error;
+        console.error('Client status request failed', error);
         if (overviewStatusEl) {
             overviewStatusEl.textContent = '检测失败';
             overviewStatusEl.className = 'stat-value pct';
@@ -494,10 +743,11 @@ async function loadClientStatus() {
     }
 }
 
-async function loadOverviewTrend() {
-    try {
-        const r = await fetch(withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'));
-        const d = await r.json();
+async function loadOverviewTrend(signal) {
+        const d = await apiRequest(
+            withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'),
+            { signal },
+        );
         const data = d.data || [];
         const canvas = document.getElementById('overview-trend-chart');
         const empty = document.getElementById('overview-trend-empty');
@@ -537,11 +787,10 @@ async function loadOverviewTrend() {
                 }
             }
         });
-    } catch(e) { console.error(e); }
 }
 
 // --- Trends ---
-async function loadTrends() {
+async function loadTrends(signal) {
     const metric = document.getElementById('trend-metric').value;
     const granularity = document.getElementById('trend-granularity').value;
 
@@ -550,12 +799,10 @@ async function loadTrends() {
     document.getElementById('trend-chart-title').textContent =
         `${metricLabels[metric]}趋势（${granLabels[granularity]}）`;
 
-    try {
-        const r = await fetch(`/api/v1/aggregate/trends?metric=${metric}&granularity=${granularity}`);
-        const d = await r.json();
-        if (!r.ok) {
-            throw new Error(d.error || '加载趋势数据失败');
-        }
+        const d = await apiRequest(
+            `/api/v1/aggregate/trends?metric=${encodeURIComponent(metric)}&granularity=${encodeURIComponent(granularity)}`,
+            { signal },
+        );
         const data = d.data || [];
         const canvas = document.getElementById('trend-chart');
         const empty = document.getElementById('trend-chart-empty');
@@ -601,13 +848,10 @@ async function loadTrends() {
                 }
             }
         });
-    } catch(e) { console.error(e); }
 
     // Agent comparison chart
-    try {
-        const r = await fetch('/api/v1/aggregate/agent-comparison');
-        const d = await r.json();
-        const comps = (d.comparisons || []).slice(0, 10);
+        const comparisonData = await apiRequest('/api/v1/aggregate/agent-comparison', { signal });
+        const comps = (comparisonData.comparisons || []).slice(0, 10);
         if (comps.length > 0) {
             const labels = comps.map(c => c.tool_model);
             const aiData = comps.map(c => c.ai_additions || 0);
@@ -636,14 +880,13 @@ async function loadTrends() {
                 }
             });
         }
-    } catch(e) { console.error(e); }
 }
 
 // --- Organizations ---
-async function loadOrgs() {
+async function loadOrgs(signal) {
     setTableLoading('org-table', 5);
     try {
-        const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败');
+        const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败', signal);
         document.getElementById('org-table').innerHTML = pageItems(d, 'organizations').map(o => {
             return `<tr>
                 <td><strong>${escapeHtml(o.organization)}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(o.org_slug || '')}</span></td>
@@ -655,10 +898,8 @@ async function loadOrgs() {
         }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">暂无组织数据</td></tr>';
         renderPaginationControls('organizations');
     } catch(e) {
-        console.error(e);
-        document.getElementById('org-table').innerHTML =
-            '<tr><td colspan="5" style="color:var(--danger)">加载组织数据失败</td></tr>';
         renderPaginationControls('organizations');
+        throw e;
     }
 }
 
@@ -670,14 +911,14 @@ function changeDeveloperSorting() {
     developerSortBy = document.getElementById('developer-sort-by')?.value || 'ai_lines';
     developerSortOrder = document.getElementById('developer-sort-order')?.value || 'desc';
     resetTablePage('developers');
-    loadDevs();
+    loadSection('developers');
 }
 
-async function loadDevs() {
+async function loadDevs(signal) {
     setTableLoading('dev-table', 8);
     try {
         const developerUrl = `/api/v1/aggregate/developers?sort_by=${encodeURIComponent(developerSortBy)}&sort_order=${encodeURIComponent(developerSortOrder)}`;
-        const d = await fetchPaginatedJson('developers', developerUrl, '加载开发者数据失败');
+        const d = await fetchPaginatedJson('developers', developerUrl, '加载开发者数据失败', signal);
         const developers = pageItems(d, 'developers');
         developerGitInfo = new Map();
         if (developers.length === 0) {
@@ -717,10 +958,8 @@ async function loadDevs() {
         }).join('');
         renderPaginationControls('developers');
     } catch(e) {
-        console.error(e);
-        document.getElementById('dev-table').innerHTML =
-            '<tr><td colspan="8" style="color:var(--danger)">加载开发者数据失败</td></tr>';
         renderPaginationControls('developers');
+        throw e;
     }
 }
 
@@ -765,10 +1004,10 @@ function showDeveloperGitInfo(devId) {
 }
 
 // --- Projects ---
-async function loadProjects() {
+async function loadProjects(signal) {
     setTableLoading('proj-table', 6);
     try {
-        const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败');
+        const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败', signal);
         document.getElementById('proj-table').innerHTML = pageItems(d, 'projects').map(p => {
             const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
             const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
@@ -787,18 +1026,16 @@ async function loadProjects() {
         }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无项目数据</td></tr>';
         renderPaginationControls('projects');
     } catch(e) {
-        console.error(e);
-        document.getElementById('proj-table').innerHTML =
-            '<tr><td colspan="6" style="color:var(--danger)">加载项目数据失败</td></tr>';
         renderPaginationControls('projects');
+        throw e;
     }
 }
 
 // --- Tools ---
-async function loadTools() {
+async function loadTools(signal) {
     setTableLoading('tools-table', 5);
     try {
-        const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败');
+        const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败', signal);
         const tools = pageItems(d, 'tools');
         if (tools.length === 0) {
             document.getElementById('tools-table').innerHTML =
@@ -826,10 +1063,8 @@ async function loadTools() {
         }).join('');
         renderPaginationControls('tools');
     } catch(e) {
-        console.error(e);
-        document.getElementById('tools-table').innerHTML =
-            '<tr><td colspan="5" style="color:var(--danger)">加载工具数据失败</td></tr>';
         renderPaginationControls('tools');
+        throw e;
     }
 }
 
@@ -837,13 +1072,13 @@ async function loadTools() {
 const selectedGitTrackingUserIds = new Set();
 let visibleGitTrackingUserIds = [];
 
-async function loadUsers() {
+async function loadUsers(signal) {
     selectedGitTrackingUserIds.clear();
     visibleGitTrackingUserIds = [];
     updateGitTrackingBulkSelection();
     setTableLoading('users-table', 7);
     try {
-        const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败');
+        const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败', signal);
         const users = pageItems(d, 'users');
         if (users.length === 0) {
             document.getElementById('users-table').innerHTML =
@@ -888,10 +1123,8 @@ async function loadUsers() {
         updateGitTrackingBulkSelection();
         renderPaginationControls('users');
     } catch(e) {
-        console.error(e);
-        document.getElementById('users-table').innerHTML =
-            '<tr><td colspan="7" style="color:var(--danger)">加载用户列表失败</td></tr>';
         renderPaginationControls('users');
+        throw e;
     }
 }
 
@@ -934,20 +1167,15 @@ async function bulkAuthorizeGitTrackingUpload(button) {
 
     if (button) button.disabled = true;
     try {
-        const response = await fetch('/api/admin/users/git-tracking-upload/authorize', {
+        const result = await apiRequest('/api/admin/users/git-tracking-upload/authorize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_ids: userIds })
         });
-        const result = await response.json();
-        if (!response.ok) {
-            showToast(`批量授权失败: ${result.error || '未知错误'}`, 'error');
-            return;
-        }
         showToast(`已为 ${result.authorized_count || userIds.length} 位用户授权 Git 追踪上传`, 'success');
-        await loadUsers();
+        await loadSection('users');
     } catch(e) {
-        showToast('批量授权时发生错误', 'error');
+        showToast(`批量授权失败：${e.message}`, 'error');
     } finally {
         if (button && button.isConnected) button.disabled = selectedGitTrackingUserIds.size === 0;
     }
@@ -962,21 +1190,16 @@ async function setGitTrackingUploadAuthorization(userId, userName, authorized, b
 
     if (button) button.disabled = true;
     try {
-        const r = await fetch(`/api/admin/users/${userId}/git-tracking-upload`, {
+        await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}/git-tracking-upload`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ authorized })
         });
-        const d = await r.json();
-        if (!r.ok) {
-            showToast(`${actionLabel}失败: ${d.error || '未知错误'}`, 'error');
-            return;
-        }
 
         showToast(`已${actionLabel}开发者「${userName}」的 Git 追踪上传权限`, 'success');
-        await loadUsers();
+        await loadSection('users');
     } catch(e) {
-        showToast(`${actionLabel}时发生错误`, 'error');
+        showToast(`${actionLabel}失败：${e.message}`, 'error');
     } finally {
         if (button && button.isConnected) button.disabled = false;
     }
@@ -1066,7 +1289,8 @@ async function loadCreateUserDepartments(orgId) {
     try {
         const departments = await fetchAllPaginated(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
-            'departments'
+            'departments',
+            activeSectionRequestController?.signal,
         );
         if (departments.length === 0) {
             deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
@@ -1101,7 +1325,7 @@ async function createUser() {
     }
 
     try {
-        const r = await fetch('/api/admin/users', {
+        const d = await apiRequest('/api/admin/users', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1112,36 +1336,26 @@ async function createUser() {
                 generate_nonce: genNonce
             })
         });
-        const d = await r.json();
-        if (r.ok) {
-            let msg = `用户 ${name} 创建成功！`;
-            if (d.install_nonce) msg += `\\n安装令牌: ${d.install_nonce}`;
-            showToast(msg, 'success');
-            closeModal();
-            resetTablePage('users');
-            loadUsers();
-        } else {
-            showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
-        }
+        let msg = `用户 ${name} 创建成功！`;
+        if (d.install_nonce) msg += `\\n安装令牌: ${d.install_nonce}`;
+        showToast(msg, 'success');
+        closeModal();
+        resetTablePage('users');
+        loadSection('users');
     } catch(e) {
-        showToast('创建用户时发生错误', 'error');
+        showToast(`创建失败：${e.message}`, 'error');
     }
 }
 
 async function deleteUser(userId, userName) {
     if (!confirm(`确定要删除用户「${userName}」吗？此操作不可撤销。`)) return;
     try {
-        const r = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
-        if (r.ok) {
-            showToast(`用户「${userName}」已删除`, 'success');
-            resetTablePage('users');
-            loadUsers();
-        } else {
-            const d = await r.json();
-            showToast(`删除失败: ${d.error || '未知错误'}`, 'error');
-        }
+        await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+        showToast(`用户「${userName}」已删除`, 'success');
+        resetTablePage('users');
+        loadSection('users');
     } catch(e) {
-        showToast('删除用户时发生错误', 'error');
+        showToast(`删除失败：${e.message}`, 'error');
     }
 }
 
@@ -1155,21 +1369,23 @@ function departmentCodePrefixRank(code) {
     return rank === -1 ? DEPARTMENT_CODE_PREFIX_ORDER.length : rank;
 }
 
-async function loadAdminOrganizations() {
+async function loadAdminOrganizations(signal = activeSectionRequestController?.signal) {
     if (adminOrganizationsCache) return adminOrganizationsCache;
     adminOrganizationsCache = await fetchAllPaginated(
         '/api/admin/organizations/list?include_personal=false',
-        'organizations'
+        'organizations',
+        signal,
     );
     return adminOrganizationsCache;
 }
 
-async function loadDepartments() {
+async function loadDepartments(signal) {
     setTableLoading('departments-table', 6);
     try {
         departmentTreeRows = await fetchAllPaginated(
             '/api/v1/aggregate/departments',
-            'departments'
+            'departments',
+            signal,
         );
         if (departmentTreeRows.length === 0) {
             renderDepartmentBreadcrumb();
@@ -1183,9 +1399,7 @@ async function loadDepartments() {
         }
         renderDepartmentLevel();
     } catch(e) {
-        console.error(e);
-        document.getElementById('departments-table').innerHTML =
-            '<tr><td colspan="6" style="color:var(--danger)">加载部门列表失败</td></tr>';
+        throw e;
     }
 }
 
@@ -1354,7 +1568,8 @@ async function loadCreateDepartmentParents() {
     try {
         const departments = await fetchAllPaginated(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
-            'departments'
+            'departments',
+            activeSectionRequestController?.signal,
         );
         parentSelect.innerHTML = '<option value="">无（根部门）</option>' + departments.map(dept => {
             const label = `${escapeHtml(dept.code || '—')} · ${escapeHtml(dept.name || '—')}`;
@@ -1380,30 +1595,25 @@ async function createDepartment() {
     }
 
     try {
-        const r = await fetch('/api/admin/departments', {
+        await apiRequest('/api/admin/departments', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ org_id, name, code, parent_id })
         });
-        const d = await r.json();
-        if (r.ok) {
-            showToast(`部门「${name}」已新增`, 'success');
-            closeModal();
-            resetTablePage('departments');
-            loadDepartments();
-        } else {
-            showToast(`新增失败: ${d.error || '未知错误'}`, 'error');
-        }
+        showToast(`部门「${name}」已新增`, 'success');
+        closeModal();
+        resetTablePage('departments');
+        loadSection('departments');
     } catch(e) {
-        showToast('新增部门时发生错误', 'error');
+        showToast(`新增失败：${e.message}`, 'error');
     }
 }
 
 // --- API Key Management ---
-async function loadApiKeys() {
+async function loadApiKeys(signal) {
     setTableLoading('apikeys-table', 7);
     try {
-        const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败');
+        const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败', signal);
         const keys = pageItems(d, 'api_keys');
         if (keys.length === 0) {
             document.getElementById('apikeys-table').innerHTML =
@@ -1430,10 +1640,8 @@ async function loadApiKeys() {
         }).join('');
         renderPaginationControls('apikeys');
     } catch(e) {
-        console.error(e);
-        document.getElementById('apikeys-table').innerHTML =
-            '<tr><td colspan="7" style="color:var(--danger)">加载密钥列表失败</td></tr>';
         renderPaginationControls('apikeys');
+        throw e;
     }
 }
 
@@ -1527,24 +1735,19 @@ async function createApiKey() {
     if (scopes.length === 0) { showToast('请至少选择一个权限范围', 'error'); return; }
 
     try {
-        const r = await fetch('/api/admin/api-keys', {
+        const d = await apiRequest('/api/admin/api-keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, scopes })
         });
-        const d = await r.json();
-        if (r.ok) {
-            document.getElementById('new-key-result').style.display = 'block';
-            renderApiKeyValue(d.key);
-            document.getElementById('create-key-btn').style.display = 'none';
-            showToast('API 密钥创建成功', 'success');
-            resetTablePage('apikeys');
-            if (currentSection === 'apikeys') loadApiKeys();
-        } else {
-            showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
-        }
+        document.getElementById('new-key-result').style.display = 'block';
+        renderApiKeyValue(d.key);
+        document.getElementById('create-key-btn').style.display = 'none';
+        showToast('API 密钥创建成功', 'success');
+        resetTablePage('apikeys');
+        if (currentSection === 'apikeys') loadSection('apikeys');
     } catch(e) {
-        showToast('创建密钥时发生错误', 'error');
+        showToast(`创建失败：${e.message}`, 'error');
     }
 }
 
@@ -1557,26 +1760,20 @@ async function createApiKeyForUser() {
     if (scopes.length === 0) { showToast('请至少选择一个权限范围', 'error'); return; }
 
     try {
-        const r = await fetch('/api/admin/api-keys', {
+        const d = await apiRequest('/api/admin/api-keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, scopes, user_id: userId })
         });
-        const d = await r.json();
-        if (r.ok) {
-            document.getElementById('new-key-result').style.display = 'block';
-            renderApiKeyValue(d.key);
-            document.getElementById('create-key-btn').style.display = 'none';
-            showToast('API 密钥创建成功', 'success');
-            resetTablePage('users');
-            resetTablePage('apikeys');
-            if (currentSection === 'users') loadUsers();
-            if (currentSection === 'apikeys') loadApiKeys();
-        } else {
-            showToast(`创建失败: ${d.error || '未知错误'}`, 'error');
-        }
+        document.getElementById('new-key-result').style.display = 'block';
+        renderApiKeyValue(d.key);
+        document.getElementById('create-key-btn').style.display = 'none';
+        showToast('API 密钥创建成功', 'success');
+        resetTablePage('users');
+        resetTablePage('apikeys');
+        if (['users', 'apikeys'].includes(currentSection)) loadSection(currentSection);
     } catch(e) {
-        showToast('创建密钥时发生错误', 'error');
+        showToast(`创建失败：${e.message}`, 'error');
     }
 }
 
@@ -1604,16 +1801,12 @@ function copyKey() {
 async function revokeApiKey(keyId, keyName) {
     if (!confirm(`确定要撤销密钥「${keyName}」吗？撤销后此密钥将立即失效。`)) return;
     try {
-        const r = await fetch(`/api/admin/api-keys/${keyId}`, { method: 'DELETE' });
-        if (r.ok) {
-            showToast(`密钥「${keyName}」已撤销`, 'success');
-            resetTablePage('apikeys');
-            loadApiKeys();
-        } else {
-            showToast('撤销失败', 'error');
-        }
+        await apiRequest(`/api/admin/api-keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
+        showToast(`密钥「${keyName}」已撤销`, 'success');
+        resetTablePage('apikeys');
+        loadSection('apikeys');
     } catch(e) {
-        showToast('撤销密钥时发生错误', 'error');
+        showToast(`撤销失败：${e.message}`, 'error');
     }
 }
 
@@ -1635,14 +1828,6 @@ function formatBytes(value) {
     return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-async function readResponseJson(response) {
-    try {
-        return await response.json();
-    } catch (_) {
-        return {};
-    }
-}
-
 function renderSelectedReleaseFiles() {
     const input = document.getElementById('release-files');
     const target = document.getElementById('release-selected-files');
@@ -1656,20 +1841,16 @@ function renderSelectedReleaseFiles() {
     }).join('<br>');
 }
 
-async function loadReleaseManagement() {
+async function loadReleaseManagement(signal) {
     const table = document.getElementById('release-table');
     if (!table) return;
-    table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
-    try {
-        const [metadataResponse, assetsResponse] = await Promise.all([
-            fetch('/worker/releases'),
-            fetch('/api/admin/releases/assets'),
+    if (!successfulSections.has('releases')) {
+        table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+    }
+        const [metadata, assetData] = await Promise.all([
+            apiRequest('/worker/releases', { signal }),
+            apiRequest('/api/admin/releases/assets', { signal }),
         ]);
-        const metadata = await readResponseJson(metadataResponse);
-        const assetData = await readResponseJson(assetsResponse);
-        if (!metadataResponse.ok || !assetsResponse.ok) {
-            throw new Error(metadata.error || assetData.error || '加载发布数据失败');
-        }
 
         const channels = metadata.channels || {};
         const latest = channels.latest || null;
@@ -1718,9 +1899,6 @@ async function loadReleaseManagement() {
                 <td><div class="action-group">${actions.join('') || '—'}</div></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🚀</div><p>尚未上传 CLI 版本</p></div></td></tr>';
-    } catch (error) {
-        table.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">${escapeHtml(error.message || '加载发布数据失败')}</td></tr>`;
-    }
 }
 
 async function publishCliRelease(button) {
@@ -1749,15 +1927,17 @@ async function publishCliRelease(button) {
     status.className = 'publish-status';
     status.textContent = '正在上传并校验完整发布包，请不要关闭页面...';
     try {
-        const response = await fetch('/api/admin/releases/publish', { method: 'POST', body: data });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '发布失败');
+        const result = await apiRequest('/api/admin/releases/publish', {
+            method: 'POST',
+            body: data,
+            timeoutMs: 120000,
+        });
         status.className = 'publish-status success';
         status.textContent = `版本 ${result.version} 发布成功${result.latest_updated ? '，latest 已更新' : ''}`;
         showToast(`CLI ${result.version} 发布成功`, 'success');
         input.value = '';
         renderSelectedReleaseFiles();
-        await loadReleaseManagement();
+        await loadSection('releases');
     } catch (error) {
         status.className = 'publish-status error';
         status.textContent = error.message || '发布失败';
@@ -1770,29 +1950,26 @@ async function publishCliRelease(button) {
 async function promoteCliRelease(version, checksum) {
     if (!confirm(`确定将 latest 切换到 CLI ${version} 吗？\n客户端下一次检查更新时将看到这个版本。`)) return;
     try {
-        const response = await fetch('/api/admin/releases/channel', {
+        await apiRequest('/api/admin/releases/channel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ channel: 'latest', version, checksum }),
         });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '切换 latest 失败');
         showToast(`latest 已切换到 ${version}`, 'success');
-        await loadReleaseManagement();
+        await loadSection('releases');
     } catch (error) {
         showToast(error.message || '切换 latest 失败', 'error');
     }
 }
 
 // --- Managed File Center ---
-async function loadManagedFiles() {
+async function loadManagedFiles(signal) {
     const table = document.getElementById('managed-files-table');
     if (!table) return;
-    table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
-    try {
-        const response = await fetch('/api/admin/files');
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '加载文件列表失败');
+    if (!successfulSections.has('files')) {
+        table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+    }
+        const result = await apiRequest('/api/admin/files', { signal });
         const files = result.files || [];
         table.innerHTML = files.map(file => {
             const isPublic = file.is_public === true;
@@ -1827,9 +2004,6 @@ async function loadManagedFiles() {
                 </div></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📦</div><p>尚未上传普通文件</p></div></td></tr>';
-    } catch (error) {
-        table.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">${escapeHtml(error.message || '加载文件列表失败')}</td></tr>`;
-    }
 }
 
 async function uploadManagedFile(button) {
@@ -1856,23 +2030,23 @@ async function uploadManagedFile(button) {
     status.className = 'publish-status';
     status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}）...`;
     try {
-        const response = await fetch('/api/admin/files/upload', { method: 'POST', body: data });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '上传失败');
+        const result = await apiRequest('/api/admin/files/upload', {
+            method: 'POST',
+            body: data,
+            timeoutMs: 120000,
+        });
         if (document.getElementById('managed-file-publish-now').checked) {
-            const publishResponse = await fetch(`/api/admin/files/${encodeURIComponent(result.slug)}/publish`, {
+            await apiRequest(`/api/admin/files/${encodeURIComponent(result.slug)}/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ version: result.version }),
             });
-            const publishResult = await readResponseJson(publishResponse);
-            if (!publishResponse.ok) throw new Error(publishResult.error || '文件已上传，但发布失败');
         }
         status.className = 'publish-status success';
         status.textContent = `文件 ${result.filename} ${document.getElementById('managed-file-publish-now').checked ? '上传并发布' : '上传为草稿'}成功`;
         showToast(status.textContent, 'success');
         input.value = '';
-        await loadManagedFiles();
+        await loadSection('files');
     } catch (error) {
         status.className = 'publish-status error';
         status.textContent = error.message || '上传失败';
@@ -1885,15 +2059,13 @@ async function uploadManagedFile(button) {
 async function publishManagedFileVersion(slug, version) {
     if (!confirm(`确定将 ${slug} 的当前版本切换到 ${version} 吗？`)) return;
     try {
-        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}/publish`, {
+        await apiRequest(`/api/admin/files/${encodeURIComponent(slug)}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ version }),
         });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '发布失败');
         showToast(`${slug} 已发布 ${version}`, 'success');
-        await loadManagedFiles();
+        await loadSection('files');
     } catch (error) {
         showToast(error.message || '发布失败', 'error');
     }
@@ -1902,11 +2074,12 @@ async function publishManagedFileVersion(slug, version) {
 async function deleteManagedFileVersion(slug, version) {
     if (!confirm(`确定删除 ${slug} ${version} 吗？此操作无法撤销。`)) return;
     try {
-        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, { method: 'DELETE' });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '删除失败');
+        await apiRequest(
+            `/api/admin/files/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`,
+            { method: 'DELETE' },
+        );
         showToast(`${slug} ${version} 已删除`, 'success');
-        await loadManagedFiles();
+        await loadSection('files');
     } catch (error) {
         showToast(error.message || '删除失败', 'error');
     }
@@ -1936,16 +2109,14 @@ async function saveManagedFileSettings() {
         return;
     }
     try {
-        const response = await fetch(`/api/admin/files/${encodeURIComponent(slug)}`, {
+        await apiRequest(`/api/admin/files/${encodeURIComponent(slug)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description, is_public: isPublic }),
         });
-        const result = await readResponseJson(response);
-        if (!response.ok) throw new Error(result.error || '保存失败');
         closeModal();
         showToast('文件设置已保存', 'success');
-        await loadManagedFiles();
+        await loadSection('files');
     } catch (error) {
         showToast(error.message || '保存失败', 'error');
     }
@@ -1975,6 +2146,5 @@ activateDashboardSection(initialSection);
 if (requestedInitialSection && requestedInitialSection !== initialSection) {
     updateDashboardSectionUrl(initialSection, true);
 }
-if (!isAdmin) loadClientStatus();
 updateRefreshTime();
 startAutoRefresh();

@@ -69,6 +69,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Ping
 .toolbar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .refresh-info { color: var(--text-muted); font-size: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
 .refresh-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: pulse 2s infinite; }
+.refresh-dot.stale { background: var(--warning); }
+.section-request-error {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    margin-bottom: 1rem; padding: 0.85rem 1rem; border: 1px solid rgba(248,113,113,0.45);
+    border-radius: 8px; background: rgba(248,113,113,0.08); color: var(--danger);
+    font-size: 0.8rem;
+}
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .btn { padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border);
         background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem;

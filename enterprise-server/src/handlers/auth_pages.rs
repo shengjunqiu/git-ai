@@ -179,6 +179,147 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
   const submit = document.querySelector('button[type="submit"]');
   let emailTimer = null;
   let departmentOptions = [];
+  let scopeController = null;
+
+  class ApiRequestError extends Error {
+    constructor(message, { status = null, requestId = null, cause = null } = {}) {
+      super(message, cause ? { cause } : undefined);
+      this.name = this.constructor.name;
+      this.status = status;
+      this.requestId = requestId;
+    }
+  }
+  class AuthExpiredError extends ApiRequestError {}
+  class PermissionDeniedError extends ApiRequestError {}
+  class HttpError extends ApiRequestError {}
+  class InvalidResponseError extends ApiRequestError {}
+  class NetworkError extends ApiRequestError {}
+  class TimeoutError extends ApiRequestError {}
+  class AbortError extends ApiRequestError {}
+
+  function waitForRetry(delayMs, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new AbortError('请求已取消'));
+        return;
+      }
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new AbortError('请求已取消'));
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, delayMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  async function apiRequest(url, { signal, timeoutMs = 10000, retries = 1, cache } = {}) {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      let timedOut = false;
+      const onAbort = () => controller.abort();
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      try {
+        const response = await fetch(url, {
+          headers: { 'Accept': 'application/json' },
+          cache,
+          signal: controller.signal
+        });
+        const requestId = response.headers?.get?.('x-request-id') || null;
+        const contentType = response.headers?.get?.('content-type') || '';
+        const body = await response.text();
+        let data = null;
+        if (body && contentType.toLowerCase().includes('application/json')) {
+          try {
+            data = JSON.parse(body);
+          } catch (cause) {
+            if (response.ok) {
+              throw new InvalidResponseError('服务器返回了无效 JSON', {
+                status: response.status,
+                requestId,
+                cause
+              });
+            }
+          }
+        } else if (body && response.ok) {
+          throw new InvalidResponseError('服务器返回了非 JSON 响应', {
+            status: response.status,
+            requestId
+          });
+        }
+        if (response.ok) {
+          if (!body && response.status !== 204) {
+            throw new InvalidResponseError('服务器返回了空响应', {
+              status: response.status,
+              requestId
+            });
+          }
+          return data;
+        }
+        if ([429, 502, 503, 504].includes(response.status) && attempt < retries) {
+          clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          await waitForRetry(250 * (2 ** attempt), signal);
+          continue;
+        }
+        const serverValue = typeof data?.error === 'string'
+          ? data.error
+          : typeof data?.message === 'string'
+            ? data.message
+            : '';
+        const serverMessage = response.status < 500
+          ? serverValue.replace(/\s+/g, ' ').trim().slice(0, 300)
+          : '';
+        if (response.status === 401) {
+          throw new AuthExpiredError('登录已过期，请重新登录', {
+            status: response.status,
+            requestId
+          });
+        }
+        if (response.status === 403) {
+          throw new PermissionDeniedError(serverMessage || '没有执行此操作的权限', {
+            status: response.status,
+            requestId
+          });
+        }
+        throw new HttpError(serverMessage || `请求失败（HTTP ${response.status}）`, {
+          status: response.status,
+          requestId
+        });
+      } catch (error) {
+        if (signal?.aborted) throw new AbortError('请求已取消', { cause: error });
+        if (timedOut) {
+          if (attempt < retries) continue;
+          throw new TimeoutError('请求超时，请稍后重试', { cause: error });
+        }
+        if (error instanceof TypeError || error?.name === 'TypeError') {
+          if (attempt < retries) continue;
+          throw new NetworkError('网络连接失败，请检查网络后重试', { cause: error });
+        }
+        if (error instanceof AuthExpiredError) {
+          const returnTo = `${window.location.pathname}${window.location.search}`;
+          window.location.assign(`/auth/login?return_to=${encodeURIComponent(returnTo)}`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+
+  function beginScopeRequest() {
+    scopeController?.abort();
+    scopeController = new AbortController();
+    return scopeController.signal;
+  }
 
   function resetSelect(select, text) {
     select.innerHTML = '';
@@ -253,19 +394,15 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     updateSubmitState();
   }
 
-  async function loadDepartments(orgId) {
+  async function loadDepartments(orgId, signal = beginScopeRequest()) {
     resetDepartmentPicker('加载部门中...');
     updateSubmitState();
 
     try {
-      const response = await fetch(`/auth/organizations/${orgId}/departments`, {
-        headers: { 'Accept': 'application/json' },
+      const data = await apiRequest(`/auth/organizations/${encodeURIComponent(orgId)}/departments`, {
+        signal,
         cache: 'no-store'
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || '部门加载失败');
-      }
 
       const departments = data.departments || [];
       const leafDepartments = departments.filter(department => department.is_leaf);
@@ -289,14 +426,17 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
       departmentPicker.placeholder = '输入部门名称或编码';
       renderDepartmentOptions();
     } catch (error) {
+      if (error instanceof AbortError) return;
       resetDepartmentPicker('部门加载失败');
-      setHint(error.message || '部门加载失败', 'error');
+      const requestId = error.requestId ? ` 请求 ID：${error.requestId}` : '';
+      setHint(`${error.message || '部门加载失败'}${requestId}`, 'error');
     }
 
     updateSubmitState();
   }
 
   async function loadOrganizations() {
+    const signal = beginScopeRequest();
     const email = emailInput.value.trim();
     resetSelect(orgSelect, '加载组织中...');
     resetDepartmentPicker();
@@ -309,13 +449,9 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
     }
 
     try {
-      const response = await fetch(`/auth/organizations?email=${encodeURIComponent(email)}`, {
-        headers: { 'Accept': 'application/json' }
+      const data = await apiRequest(`/auth/organizations?email=${encodeURIComponent(email)}`, {
+        signal
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || '组织加载失败');
-      }
 
       const organizations = data.organizations || [];
       resetSelect(orgSelect, organizations.length ? '请选择组织' : '暂无可加入组织');
@@ -330,13 +466,15 @@ const REGISTER_PAGE_SCRIPT: &str = r#"<script>
       orgSelect.disabled = false;
       if (organizations.length === 1) {
         orgSelect.value = organizations[0].id;
-        await loadDepartments(orgSelect.value);
+        await loadDepartments(orgSelect.value, signal);
       } else {
         setHint('请选择要加入的组织。');
       }
     } catch (error) {
+      if (error instanceof AbortError) return;
       resetSelect(orgSelect, '组织加载失败');
-      setHint(error.message || '组织加载失败', 'error');
+      const requestId = error.requestId ? ` 请求 ID：${error.requestId}` : '';
+      setHint(`${error.message || '组织加载失败'}${requestId}`, 'error');
     }
 
     updateSubmitState();
