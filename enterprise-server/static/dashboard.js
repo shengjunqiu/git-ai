@@ -262,7 +262,8 @@ const DASHBOARD_SECTIONS = [
 ];
 const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys', 'releases', 'files'];
 let currentSection = 'overview';
-let activeSectionRequestController = null;
+const sectionRefreshes = new Map();
+const queuedManualRefreshes = new Map();
 let lastRefreshAttemptAt = null;
 let lastRefreshSuccessAt = null;
 const successfulSections = new Set();
@@ -282,6 +283,17 @@ const tablePagerContainers = {
 
 function isSilentRefresh(options) {
     return options?.mode === RefreshMode.AUTO;
+}
+
+function currentSectionRequestSignal() {
+    return sectionRefreshes.get(currentSection)?.controller.signal;
+}
+
+function refreshCollisionAction(mode, hasInFlight) {
+    if (!hasInFlight) return 'start';
+    if (mode === RefreshMode.AUTO) return 'skip';
+    if (mode === RefreshMode.MANUAL) return 'queue';
+    return 'replace';
 }
 
 function getTablePageState(key) {
@@ -537,7 +549,9 @@ function initializeMobileNavigation() {
 function startAutoRefresh() {
     stopAutoRefresh();
     refreshInterval = setInterval(
-        () => refreshCurrentSection({ mode: RefreshMode.AUTO }),
+        () => {
+            if (!document.hidden) refreshCurrentSection({ mode: RefreshMode.AUTO });
+        },
         AUTO_REFRESH_MS,
     );
 }
@@ -559,6 +573,12 @@ function updateRefreshTime({ stale = false } = {}) {
 async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
     const sectionId = currentSection;
     return loadSection(sectionId, { mode });
+}
+
+function handleDashboardVisibilityChange() {
+    if (!document.hidden) {
+        refreshCurrentSection({ mode: RefreshMode.AUTO });
+    }
 }
 
 // --- Navigation ---
@@ -628,8 +648,10 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     });
     if (error instanceof AuthExpiredError) return;
     if (background && successfulSections.has(id)) {
-        updateRefreshTime({ stale: true });
-        showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
+        if (currentSection === id) {
+            updateRefreshTime({ stale: true });
+            showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
+        }
         return;
     }
 
@@ -648,10 +670,38 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     section.prepend(banner);
 }
 
-async function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
-    activeSectionRequestController?.abort();
+function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
+    const existingRefresh = sectionRefreshes.get(id);
+    const collisionAction = refreshCollisionAction(mode, Boolean(existingRefresh));
+    if (collisionAction === 'skip') return Promise.resolve(false);
+    if (collisionAction === 'queue') {
+        const existingQueuedRefresh = queuedManualRefreshes.get(id);
+        if (existingQueuedRefresh) return existingQueuedRefresh;
+
+        // A manual refresh wins over an in-flight AUTO by running once after it settles.
+        // Repeated clicks share this queued promise instead of adding more requests.
+        const queuedRefresh = existingRefresh.promise.then(() => {
+            queuedManualRefreshes.delete(id);
+            return loadSection(id, { mode: RefreshMode.MANUAL });
+        });
+        queuedManualRefreshes.set(id, queuedRefresh);
+        return queuedRefresh;
+    }
+    if (collisionAction === 'replace') existingRefresh.controller.abort();
+
     const controller = new AbortController();
-    activeSectionRequestController = controller;
+    const refresh = { controller, promise: null };
+    refresh.promise = performSectionLoad(id, { mode, controller })
+        .finally(() => {
+            if (sectionRefreshes.get(id) === refresh) {
+                sectionRefreshes.delete(id);
+            }
+        });
+    sectionRefreshes.set(id, refresh);
+    return refresh.promise;
+}
+
+async function performSectionLoad(id, { mode, controller }) {
     const background = isSilentRefresh({ mode }) && successfulSections.has(id);
     if (currentSection === id) {
         lastRefreshAttemptAt = new Date();
@@ -676,7 +726,9 @@ async function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
         if (controller.signal.aborted) return false;
         successfulSections.add(id);
         clearSectionError(id);
-        if (!isAdmin) await loadClientStatus({ mode, signal: controller.signal });
+        if (!isAdmin && currentSection === id) {
+            await loadClientStatus({ mode, signal: controller.signal, sectionId: id });
+        }
         if (currentSection === id) {
             lastRefreshSuccessAt = new Date();
             updateRefreshTime({ stale: false });
@@ -925,7 +977,7 @@ function renderOverviewDevelopers(data) {
     replaceHtmlIfChanged(document.getElementById('top-developers'), nextHtml);
 }
 
-async function loadClientStatus({ signal, mode }) {
+async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -936,6 +988,7 @@ async function loadClientStatus({ signal, mode }) {
     if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
     try {
         const d = await apiRequest('/api/v1/client/status', { signal });
+        if (currentSection !== sectionId) return;
         if (!d.detected) {
             if (overviewStatusEl) {
                 setTextIfChanged(overviewStatusEl, '未检测到');
@@ -995,6 +1048,7 @@ async function loadClientStatus({ signal, mode }) {
     } catch(error) {
         if (error instanceof AbortError || error instanceof AuthExpiredError) throw error;
         console.error('Client status request failed', error);
+        if (currentSection !== sectionId) return;
         if (isSilentRefresh({ mode })) return;
         if (overviewStatusEl) {
             setTextIfChanged(overviewStatusEl, '检测失败');
@@ -1554,7 +1608,7 @@ async function loadCreateUserDepartments(orgId) {
         const departments = await fetchAllPaginated(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
             'departments',
-            activeSectionRequestController?.signal,
+            currentSectionRequestSignal(),
         );
         if (departments.length === 0) {
             deptSelect.innerHTML = '<option value="">该组织暂无部门</option>';
@@ -1633,7 +1687,7 @@ function departmentCodePrefixRank(code) {
     return rank === -1 ? DEPARTMENT_CODE_PREFIX_ORDER.length : rank;
 }
 
-async function loadAdminOrganizations(signal = activeSectionRequestController?.signal) {
+async function loadAdminOrganizations(signal = currentSectionRequestSignal()) {
     if (adminOrganizationsCache) return adminOrganizationsCache;
     adminOrganizationsCache = await fetchAllPaginated(
         '/api/admin/organizations/list?include_personal=false',
@@ -1836,7 +1890,7 @@ async function loadCreateDepartmentParents() {
         const departments = await fetchAllPaginated(
             `/api/admin/departments?org_id=${encodeURIComponent(orgId)}`,
             'departments',
-            activeSectionRequestController?.signal,
+            currentSectionRequestSignal(),
         );
         parentSelect.innerHTML = '<option value="">无（根部门）</option>' + departments.map(dept => {
             const label = `${escapeHtml(dept.code || '—')} · ${escapeHtml(dept.name || '—')}`;
@@ -2420,6 +2474,7 @@ function closeModal() {
 
 // --- Init ---
 initializeMobileNavigation();
+document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
 const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);
