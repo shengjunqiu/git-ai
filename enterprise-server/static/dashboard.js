@@ -765,6 +765,25 @@ function setDisplayIfChanged(element, display) {
     return true;
 }
 
+function setTextIfChanged(element, text) {
+    const nextText = String(text);
+    if (!element || element.textContent === nextText) return false;
+    element.textContent = nextText;
+    return true;
+}
+
+function setClassNameIfChanged(element, className) {
+    if (!element || element.className === className) return false;
+    element.className = className;
+    return true;
+}
+
+function setTitleIfChanged(element, title) {
+    if (!element || element.title === title) return false;
+    element.title = title;
+    return true;
+}
+
 function chartDataSignature(labels, datasets) {
     return JSON.stringify({ labels, datasets });
 }
@@ -842,48 +861,71 @@ function createAgentComparisonChart(canvas, labels, datasets) {
 // --- Overview ---
 async function loadOverview({ signal, mode }) {
     const rangeLabel = getTimeRangeLabel();
-    document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${rangeLabel}）`;
+    setTextIfChanged(
+        document.getElementById('overview-trend-title'),
+        `AI 代码趋势（${rangeLabel}）`,
+    );
 
-    const summaryPromise = (async () => {
-        const d = await apiRequest(withTimeRange('/api/v1/aggregate/summary'), { signal });
-        document.getElementById('s-commits').textContent = fmt(d.total_commits);
-        document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
-        document.getElementById('s-human-lines').textContent = fmt(d.total_human_lines);
-        document.getElementById('s-ai-pct').textContent = clampPercent(d.pct_ai_lines).toFixed(1) + '%';
-        if (isAdmin) document.getElementById('s-devs').textContent = fmt(d.total_developers);
-        document.getElementById('s-projects').textContent = fmt(d.total_projects);
-    })();
-
-    const developersPromise = (async () => {
-        const d = await apiRequest(
+    const [summaryResult, developersResult, trendResult] = await Promise.allSettled([
+        apiRequest(withTimeRange('/api/v1/aggregate/summary'), { signal }),
+        apiRequest(
             withTimeRange('/api/v1/aggregate/developers?limit=5'),
             { signal },
-        );
-        const top = [...(d.developers || [])]
-            .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
-            .slice(0, 5);
-        const maxLines = top.length ? Math.max(...top.map(x => x.total_added_lines || 0)) : 1;
-        document.getElementById('top-developers').innerHTML = top.map(dev => {
-            const total = dev.total_added_lines || 0;
-            const ai = dev.ai_added_lines || 0;
-            const human = dev.human_added_lines || 0;
-            const aiW = clampPercent(maxLines > 0 ? (ai/maxLines*100) : 0);
-            const humanW = clampPercent(maxLines > 0 ? (human/maxLines*100) : 0);
-            const displayName = escapeHtml(dev.name || dev.email || '未知');
-            const displayEmail = escapeHtml(dev.email || '');
-            return `<div class="chart-bar">
-                <div class="chart-label" title="${displayName} ${displayEmail}">${displayName}</div>
-                <div class="chart-track"><div class="chart-fill"><div class="ai-part" style="width:${aiW}%"></div><div class="human-part" style="width:${humanW}%"></div></div></div>
-                <div class="chart-value">${fmt(total)} <span class="badge ai">${clampPercent(ai/(total||1)*100).toFixed(0)}% AI</span></div>
-            </div>`;
-        }).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
-    })();
+        ),
+        apiRequest(
+            withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'),
+            { signal },
+        ),
+    ]);
 
-    const trendPromise = loadOverviewTrend({ signal, mode });
-    await Promise.all([summaryPromise, developersPromise, trendPromise]);
+    if (signal?.aborted) throw new AbortError('请求已取消');
+
+    if (summaryResult.status === 'fulfilled') renderOverviewSummary(summaryResult.value);
+    if (developersResult.status === 'fulfilled') renderOverviewDevelopers(developersResult.value);
+    if (trendResult.status === 'fulfilled') renderOverviewTrend(trendResult.value, { mode });
+
+    const failedResult = [summaryResult, developersResult, trendResult]
+        .find(result => result.status === 'rejected');
+    if (failedResult) throw failedResult.reason;
 }
 
-async function loadClientStatus({ signal }) {
+function renderOverviewSummary(data) {
+    setTextIfChanged(document.getElementById('s-commits'), fmt(data.total_commits));
+    setTextIfChanged(document.getElementById('s-ai-lines'), fmt(data.total_ai_lines));
+    setTextIfChanged(document.getElementById('s-human-lines'), fmt(data.total_human_lines));
+    setTextIfChanged(
+        document.getElementById('s-ai-pct'),
+        `${clampPercent(data.pct_ai_lines).toFixed(1)}%`,
+    );
+    if (isAdmin) {
+        setTextIfChanged(document.getElementById('s-devs'), fmt(data.total_developers));
+    }
+    setTextIfChanged(document.getElementById('s-projects'), fmt(data.total_projects));
+}
+
+function renderOverviewDevelopers(data) {
+    const top = [...(data.developers || [])]
+        .sort((a, b) => (b.ai_added_lines || 0) - (a.ai_added_lines || 0))
+        .slice(0, 5);
+    const maxLines = top.length ? Math.max(...top.map(x => x.total_added_lines || 0)) : 1;
+    const nextHtml = top.map(dev => {
+        const total = dev.total_added_lines || 0;
+        const ai = dev.ai_added_lines || 0;
+        const human = dev.human_added_lines || 0;
+        const aiW = clampPercent(maxLines > 0 ? (ai / maxLines * 100) : 0);
+        const humanW = clampPercent(maxLines > 0 ? (human / maxLines * 100) : 0);
+        const displayName = escapeHtml(dev.name || dev.email || '未知');
+        const displayEmail = escapeHtml(dev.email || '');
+        return `<div class="chart-bar">
+            <div class="chart-label" title="${displayName} ${displayEmail}">${displayName}</div>
+            <div class="chart-track"><div class="chart-fill"><div class="ai-part" style="width:${aiW}%"></div><div class="human-part" style="width:${humanW}%"></div></div></div>
+            <div class="chart-value">${fmt(total)} <span class="badge ai">${clampPercent(ai / (total || 1) * 100).toFixed(0)}% AI</span></div>
+        </div>`;
+    }).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
+    replaceHtmlIfChanged(document.getElementById('top-developers'), nextHtml);
+}
+
+async function loadClientStatus({ signal, mode }) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -896,19 +938,19 @@ async function loadClientStatus({ signal }) {
         const d = await apiRequest('/api/v1/client/status', { signal });
         if (!d.detected) {
             if (overviewStatusEl) {
-                overviewStatusEl.textContent = '未检测到';
-                overviewStatusEl.className = 'stat-value human';
+                setTextIfChanged(overviewStatusEl, '未检测到');
+                setClassNameIfChanged(overviewStatusEl, 'stat-value human');
             }
             if (overviewDetailEl) {
-                overviewDetailEl.textContent = 'CLI 登录后会显示同步信息';
-                overviewDetailEl.title = overviewDetailEl.textContent;
+                setTextIfChanged(overviewDetailEl, 'CLI 登录后会显示同步信息');
+                setTitleIfChanged(overviewDetailEl, 'CLI 登录后会显示同步信息');
             }
             if (statusEl && cardEl && dotEl && detailEl) {
-                statusEl.textContent = 'git-ai 未检测到';
-                cardEl.className = 'sidebar-gitai';
-                dotEl.className = 'sidebar-gitai-dot';
-                detailEl.textContent = 'CLI 登录后会显示状态';
-                detailEl.title = '';
+                setTextIfChanged(statusEl, 'git-ai 未检测到');
+                setClassNameIfChanged(cardEl, 'sidebar-gitai');
+                setClassNameIfChanged(dotEl, 'sidebar-gitai-dot');
+                setTextIfChanged(detailEl, 'CLI 登录后会显示状态');
+                setTitleIfChanged(detailEl, '');
             }
             return;
         }
@@ -916,13 +958,13 @@ async function loadClientStatus({ signal }) {
         const loggedIn = d.status === 'logged_in';
         const statusLabel = d.status_label || (loggedIn ? '已登录' : '已登出');
         if (overviewStatusEl) {
-            overviewStatusEl.textContent = statusLabel;
-            overviewStatusEl.className = loggedIn ? 'stat-value ai' : 'stat-value human';
+            setTextIfChanged(overviewStatusEl, statusLabel);
+            setClassNameIfChanged(overviewStatusEl, loggedIn ? 'stat-value ai' : 'stat-value human');
         }
         if (statusEl && cardEl && dotEl) {
-            statusEl.textContent = `git-ai ${statusLabel}`;
-            cardEl.className = loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline';
-            dotEl.className = loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline';
+            setTextIfChanged(statusEl, `git-ai ${statusLabel}`);
+            setClassNameIfChanged(cardEl, loggedIn ? 'sidebar-gitai online' : 'sidebar-gitai offline');
+            setClassNameIfChanged(dotEl, loggedIn ? 'sidebar-gitai-dot online' : 'sidebar-gitai-dot offline');
         }
 
         const parts = [];
@@ -935,10 +977,10 @@ async function loadClientStatus({ signal }) {
         if (d.cli_version) parts.push(`v${d.cli_version}`);
         const syncDetail = parts.join(' · ') || '暂无同步记录';
         if (overviewDetailEl) {
-            overviewDetailEl.textContent = syncDetail;
-            overviewDetailEl.title = syncDetail;
+            setTextIfChanged(overviewDetailEl, syncDetail);
+            setTitleIfChanged(overviewDetailEl, syncDetail);
         }
-        if (detailEl) detailEl.textContent = syncDetail;
+        setTextIfChanged(detailEl, syncDetail);
         const titleParts = [...parts];
         if (d.hostname) titleParts.push(d.hostname);
         if (d.os || d.arch) titleParts.push([d.os, d.arch].filter(Boolean).join('/'));
@@ -949,57 +991,54 @@ async function loadClientStatus({ signal }) {
                 return `${deviceName}: ${deviceStatus}`;
             }).join(' / '));
         }
-        if (detailEl) detailEl.title = titleParts.join(' · ');
+        setTitleIfChanged(detailEl, titleParts.join(' · '));
     } catch(error) {
         if (error instanceof AbortError || error instanceof AuthExpiredError) throw error;
         console.error('Client status request failed', error);
+        if (isSilentRefresh({ mode })) return;
         if (overviewStatusEl) {
-            overviewStatusEl.textContent = '检测失败';
-            overviewStatusEl.className = 'stat-value pct';
+            setTextIfChanged(overviewStatusEl, '检测失败');
+            setClassNameIfChanged(overviewStatusEl, 'stat-value pct');
         }
         if (overviewDetailEl) {
-            overviewDetailEl.textContent = '无法读取同步信息';
-            overviewDetailEl.title = overviewDetailEl.textContent;
+            setTextIfChanged(overviewDetailEl, '无法读取同步信息');
+            setTitleIfChanged(overviewDetailEl, '无法读取同步信息');
         }
         if (statusEl && cardEl && dotEl && detailEl) {
-            statusEl.textContent = 'git-ai 检测失败';
-            cardEl.className = 'sidebar-gitai error';
-            dotEl.className = 'sidebar-gitai-dot error';
-            detailEl.textContent = '无法读取状态';
-            detailEl.title = '';
+            setTextIfChanged(statusEl, 'git-ai 检测失败');
+            setClassNameIfChanged(cardEl, 'sidebar-gitai error');
+            setClassNameIfChanged(dotEl, 'sidebar-gitai-dot error');
+            setTextIfChanged(detailEl, '无法读取状态');
+            setTitleIfChanged(detailEl, '');
         }
     }
 }
 
-async function loadOverviewTrend({ signal, mode }) {
-        const d = await apiRequest(
-            withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'),
-            { signal },
-        );
-        const data = d.data || [];
-        const canvas = document.getElementById('overview-trend-chart');
-        const empty = document.getElementById('overview-trend-empty');
-        if (data.length === 0) {
-            setDisplayIfChanged(canvas, 'none');
-            setDisplayIfChanged(empty, 'block');
-            return;
-        }
-        setDisplayIfChanged(canvas, 'block');
-        setDisplayIfChanged(empty, 'none');
+function renderOverviewTrend(result, { mode }) {
+    const data = result.data || [];
+    const canvas = document.getElementById('overview-trend-chart');
+    const empty = document.getElementById('overview-trend-empty');
+    if (data.length === 0) {
+        setDisplayIfChanged(canvas, 'none');
+        setDisplayIfChanged(empty, 'block');
+        return;
+    }
+    setDisplayIfChanged(canvas, 'block');
+    setDisplayIfChanged(empty, 'none');
 
-        const labels = data.map(p => p.period);
-        const aiValues = data.map(p => p.ai_lines);
-        const humanValues = data.map(p => p.human_lines);
-        const datasets = [
-            { label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 },
-            { label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 },
-        ];
+    const labels = data.map(point => point.period);
+    const aiValues = data.map(point => point.ai_lines);
+    const humanValues = data.map(point => point.human_lines);
+    const datasets = [
+        { label: 'AI 代码行', data: aiValues, borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', fill: true, tension: 0.3 },
+        { label: '非 AI 代码行', data: humanValues, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3 },
+    ];
 
-        if (!overviewTrendChart) {
-            overviewTrendChart = createOverviewTrendChart(canvas, labels, datasets);
-        } else {
-            updateChartDataIfChanged(overviewTrendChart, labels, datasets, { mode });
-        }
+    if (!overviewTrendChart) {
+        overviewTrendChart = createOverviewTrendChart(canvas, labels, datasets);
+    } else {
+        updateChartDataIfChanged(overviewTrendChart, labels, datasets, { mode });
+    }
 }
 
 // --- Trends ---

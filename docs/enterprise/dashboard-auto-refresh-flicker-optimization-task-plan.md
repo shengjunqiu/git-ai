@@ -416,32 +416,32 @@ Update dashboard charts without rebuilding
 
 步骤：
 
-- [ ] 保留 summary、developers 和 trend 的并发请求。
-- [ ] 请求函数先返回数据，不要在各自请求完成时立即修改 DOM。
-- [ ] 使用 `Promise.allSettled()` 收集结果。
-- [ ] 对成功部分一次性提交 UI 更新。
-- [ ] 自动刷新失败的部分保留原内容。
-- [ ] 首次加载仍显示明确的空状态或错误状态。
+- [x] 保留 summary、developers 和 trend 的并发请求。
+- [x] 请求函数先返回数据，不要在各自请求完成时立即修改 DOM。
+- [x] 使用 `Promise.allSettled()` 收集结果。
+- [x] 对成功部分一次性提交 UI 更新。
+- [x] 自动刷新失败的部分保留原内容。
+- [x] 首次加载仍显示明确的空状态或错误状态。
 
 验收标准：
 
-- [ ] 总览统计卡不再按请求完成顺序分波跳动。
-- [ ] 单个接口失败不清空其他成功区域。
-- [ ] 请求仍保持并发，不把总耗时改成串行之和。
+- [x] 总览统计卡不再按请求完成顺序分波跳动。
+- [x] 单个接口失败不清空其他成功区域。
+- [x] 请求仍保持并发，不把总耗时改成串行之和。
 
 ### 4.2 避免无变化 DOM 写入
 
 步骤：
 
-- [ ] 统计文本仅在值变化时写入 `textContent`。
-- [ ] Top 开发者先生成 `nextHtml`，再调用 `replaceHtmlIfChanged()`。
-- [ ] 不重新创建完全相同的进度条 DOM。
-- [ ] `loadClientStatus()` 对状态、详情、class 和 title 使用变化检查。
+- [x] 统计文本仅在值变化时写入 `textContent`。
+- [x] Top 开发者先生成 `nextHtml`，再调用 `replaceHtmlIfChanged()`。
+- [x] 不重新创建完全相同的进度条 DOM。
+- [x] `loadClientStatus()` 对状态、详情、class 和 title 使用变化检查。
 
 验收标准：
 
-- [ ] 数据完全不变时，总览自动刷新不产生可见变化。
-- [ ] CLI 状态变化时仍能在下一次自动刷新中显示。
+- [x] 数据完全不变时，总览自动刷新不产生 DOM 写入。
+- [x] CLI 状态变化时仍能在下一次自动刷新中显示。
 
 ### 阶段 4 验证
 
