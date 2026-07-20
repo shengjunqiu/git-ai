@@ -1,5 +1,12 @@
 const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
-const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${Math.min(pct,100)}%"></div></div>`;
+function finiteNumber(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+function clampPercent(value) {
+    return Math.min(100, Math.max(0, finiteNumber(value)));
+}
+const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${clampPercent(pct)}%"></div></div>`;
 function escapeHtml(value) {
     const div = document.createElement('div');
     div.textContent = value ?? '';
@@ -367,7 +374,7 @@ async function loadOverview() {
         document.getElementById('s-commits').textContent = fmt(d.total_commits);
         document.getElementById('s-ai-lines').textContent = fmt(d.total_ai_lines);
         document.getElementById('s-human-lines').textContent = fmt(d.total_human_lines);
-        document.getElementById('s-ai-pct').textContent = (d.pct_ai_lines || 0).toFixed(1) + '%';
+        document.getElementById('s-ai-pct').textContent = clampPercent(d.pct_ai_lines).toFixed(1) + '%';
         if (isAdmin) document.getElementById('s-devs').textContent = fmt(d.total_developers);
         document.getElementById('s-projects').textContent = fmt(d.total_projects);
     })().catch(e => console.error(e));
@@ -383,14 +390,14 @@ async function loadOverview() {
             const total = dev.total_added_lines || 0;
             const ai = dev.ai_added_lines || 0;
             const human = dev.human_added_lines || 0;
-            const aiW = maxLines > 0 ? (ai/maxLines*100) : 0;
-            const humanW = maxLines > 0 ? (human/maxLines*100) : 0;
+            const aiW = clampPercent(maxLines > 0 ? (ai/maxLines*100) : 0);
+            const humanW = clampPercent(maxLines > 0 ? (human/maxLines*100) : 0);
             const displayName = escapeHtml(dev.name || dev.email || '未知');
             const displayEmail = escapeHtml(dev.email || '');
             return `<div class="chart-bar">
                 <div class="chart-label" title="${displayName} ${displayEmail}">${displayName}</div>
                 <div class="chart-track"><div class="chart-fill"><div class="ai-part" style="width:${aiW}%"></div><div class="human-part" style="width:${humanW}%"></div></div></div>
-                <div class="chart-value">${fmt(total)} <span class="badge ai">${(ai/(total||1)*100).toFixed(0)}% AI</span></div>
+                <div class="chart-value">${fmt(total)} <span class="badge ai">${clampPercent(ai/(total||1)*100).toFixed(0)}% AI</span></div>
             </div>`;
         }).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
     })().catch(e => console.error(e));
@@ -643,7 +650,7 @@ async function loadOrgs() {
                 <td>${fmt(o.total_commits)}</td>
                 <td>${fmt(o.w_ai)}</td>
                 <td>${fmt(o.w_human)}</td>
-                <td>${pctBar(o.pct_ai || 0)} <span style="font-size:0.8rem">${(o.pct_ai || 0).toFixed(1)}%</span></td>
+                <td>${pctBar(o.pct_ai)} <span style="font-size:0.8rem">${clampPercent(o.pct_ai).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">暂无组织数据</td></tr>';
         renderPaginationControls('organizations');
@@ -704,7 +711,7 @@ async function loadDevs() {
                 <td>${fmt(total)}</td>
                 <td>${fmt(ai)}</td>
                 <td>${fmt(dev.human_added_lines)}</td>
-                <td>${pctBar(dev.pct_ai || 0)} <span style="font-size:0.8rem">${(dev.pct_ai || 0).toFixed(1)}%</span></td>
+                <td>${pctBar(dev.pct_ai)} <span style="font-size:0.8rem">${clampPercent(dev.pct_ai).toFixed(1)}%</span></td>
                 <td><button class="btn btn-sm" onclick="showDeveloperGitInfo(${actionDevId})">Git 信息</button></td>
             </tr>`;
         }).join('');
@@ -775,7 +782,7 @@ async function loadProjects() {
                 <td>${fmt(p.total_commits)}</td>
                 <td>${fmt(p.total_ai)}</td>
                 <td>${fmt(p.total_human)}</td>
-                <td>${pctBar(p.pct_ai || 0)} <span style="font-size:0.8rem">${(p.pct_ai || 0).toFixed(1)}%</span></td>
+                <td>${pctBar(p.pct_ai)} <span style="font-size:0.8rem">${clampPercent(p.pct_ai).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无项目数据</td></tr>';
         renderPaginationControls('projects');
@@ -858,21 +865,23 @@ async function loadUsers() {
             const displayName = escapeHtml(u.name || '—');
             const displayEmail = escapeHtml(u.email || '');
             const actionName = jsString(u.name || u.email || '');
+            const actionUserId = jsString(u.id);
+            const userIdAttribute = escapeAttribute(u.id);
             const uploadEnabled = u.git_tracking_upload_enabled === true;
             const uploadStatus = uploadEnabled
                 ? '<span class="badge active">已授权</span>'
                 : '<span class="badge revoked">未授权</span>';
             return `<tr>
-                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${u.id}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser('${u.id}', this.checked)" ${uploadEnabled ? 'disabled' : ''} /></td>
+                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser(${actionUserId}, this.checked)" ${uploadEnabled ? 'disabled' : ''} /></td>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
                 <td>${uploadStatus}</td>
                 <td>${keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}</td>
                 <td>${created}</td>
                 <td>
-                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" onclick="setGitTrackingUploadAuthorization('${u.id}', ${actionName}, ${!uploadEnabled}, this)">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
-                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser('${u.id}', ${actionName})">🔑 创建密钥</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser('${u.id}', ${actionName})">删除</button>
+                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" onclick="setGitTrackingUploadAuthorization(${actionUserId}, ${actionName}, ${!uploadEnabled}, this)">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
+                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser(${actionUserId}, ${actionName})">🔑 创建密钥</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${actionUserId}, ${actionName})">删除</button>
                 </td>
             </tr>`;
         }).join('');
@@ -1030,7 +1039,7 @@ async function populateCreateUserOrganizations() {
 
         orgSelect.innerHTML = '<option value="">请选择组织</option>' + orgs.map(org => {
             const label = `${escapeHtml(org.name || org.slug)}${org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}`;
-            return `<option value="${org.id}">${label}</option>`;
+            return `<option value="${escapeAttribute(org.id)}">${label}</option>`;
         }).join('');
         orgSelect.disabled = false;
 
@@ -1066,7 +1075,7 @@ async function loadCreateUserDepartments(orgId) {
 
         deptSelect.innerHTML = '<option value="">请选择部门</option>' + departments.map(dept => {
             const label = escapeHtml(dept.name || dept.slug || '未命名部门');
-            return `<option value="${dept.id}">${label}</option>`;
+            return `<option value="${escapeAttribute(dept.id)}">${label}</option>`;
         }).join('');
         deptSelect.disabled = false;
 
@@ -1224,7 +1233,7 @@ function renderDepartmentBreadcrumb() {
         if (index === trail.length - 1) {
             parts.push(`<strong>${escapeHtml(dept.department || '—')}</strong>`);
         } else {
-            parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel('${dept.id}')">${escapeHtml(dept.department || '—')}</button>`);
+            parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel(${jsString(dept.id)})">${escapeHtml(dept.department || '—')}</button>`);
         }
     });
     breadcrumb.innerHTML = parts.join(' ');
@@ -1261,10 +1270,10 @@ function renderDepartmentLevel() {
             const orgName = escapeHtml(dept.organization || '—');
             const nodeIcon = isAdmin && dept.has_children ? '›' : '•';
             const rowAction = isAdmin && dept.has_children
-                ? ` onclick="openDepartmentLevel('${dept.id}')" style="cursor:pointer"`
+                ? ` onclick="openDepartmentLevel(${jsString(dept.id)})" style="cursor:pointer"`
                 : '';
             const total = dept.w_total || 0;
-            const pct = departmentAiPercentage(dept) * 100;
+            const pct = clampPercent(departmentAiPercentage(dept) * 100);
             return `<tr${rowAction}>
                 <td><strong>${orgName}</strong></td>
                 <td><span class="department-code">${departmentCode}</span></td>
@@ -1301,7 +1310,7 @@ async function showCreateDepartmentModal() {
     }
     const orgOptions = orgs.map(org => {
         const label = `${escapeHtml(org.name || org.slug)}${org.slug ? ' (' + escapeHtml(org.slug) + ')' : ''}`;
-        return `<option value="${org.id}">${label}</option>`;
+        return `<option value="${escapeAttribute(org.id)}">${label}</option>`;
     }).join('');
 
     document.getElementById('modal-container').innerHTML = `
@@ -1349,7 +1358,7 @@ async function loadCreateDepartmentParents() {
         );
         parentSelect.innerHTML = '<option value="">无（根部门）</option>' + departments.map(dept => {
             const label = `${escapeHtml(dept.code || '—')} · ${escapeHtml(dept.name || '—')}`;
-            return `<option value="${dept.id}">${label}</option>`;
+            return `<option value="${escapeAttribute(dept.id)}">${label}</option>`;
         }).join('');
     } catch (e) {
         parentSelect.innerHTML = '<option value="">上级部门加载失败</option>';
@@ -1416,7 +1425,7 @@ async function loadApiKeys() {
                 <td>${created}</td>
                 <td>${expires}</td>
                 <td style="font-size:0.8rem">${lastUsed}</td>
-                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey('${k.id}', ${actionName})">撤销</button></td>
+                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey(${jsString(k.id)}, ${actionName})">撤销</button></td>
             </tr>`;
         }).join('');
         renderPaginationControls('apikeys');
@@ -1474,7 +1483,7 @@ function showCreateApiKeyForUser(userId, userName) {
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal">
             <div class="modal-title">为用户「${safeUserName}」创建 API 密钥</div>
-            <input type="hidden" id="create-key-user-id" value="${userId}" />
+            <input type="hidden" id="create-key-user-id" value="${escapeAttribute(userId)}" />
             <div class="form-group">
                 <label class="form-label">密钥名称</label>
                 <input type="text" id="create-key-name" class="form-input" placeholder="例如：CI/CD 流水线" />
@@ -1526,8 +1535,7 @@ async function createApiKey() {
         const d = await r.json();
         if (r.ok) {
             document.getElementById('new-key-result').style.display = 'block';
-            document.getElementById('new-key-value').innerHTML =
-                `<button class="copy-btn" onclick="copyKey()">复制</button>${d.key}`;
+            renderApiKeyValue(d.key);
             document.getElementById('create-key-btn').style.display = 'none';
             showToast('API 密钥创建成功', 'success');
             resetTablePage('apikeys');
@@ -1557,8 +1565,7 @@ async function createApiKeyForUser() {
         const d = await r.json();
         if (r.ok) {
             document.getElementById('new-key-result').style.display = 'block';
-            document.getElementById('new-key-value').innerHTML =
-                `<button class="copy-btn" onclick="copyKey()">复制</button>${d.key}`;
+            renderApiKeyValue(d.key);
             document.getElementById('create-key-btn').style.display = 'none';
             showToast('API 密钥创建成功', 'success');
             resetTablePage('users');
@@ -1573,10 +1580,25 @@ async function createApiKeyForUser() {
     }
 }
 
+function renderApiKeyValue(value) {
+    const keyEl = document.getElementById('new-key-value');
+    const secret = String(value ?? '');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy-btn';
+    button.textContent = '复制';
+    button.addEventListener('click', copyKey);
+    const text = document.createElement('span');
+    text.textContent = secret;
+
+    keyEl.dataset.secret = secret;
+    keyEl.replaceChildren(button, text);
+}
+
 function copyKey() {
     const keyEl = document.getElementById('new-key-value');
-    const text = keyEl.textContent.replace('复制', '').trim();
-    navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success'));
+    navigator.clipboard.writeText(keyEl.dataset.secret || '')
+        .then(() => showToast('已复制到剪贴板', 'success'));
 }
 
 async function revokeApiKey(keyId, keyName) {
@@ -1773,6 +1795,7 @@ async function loadManagedFiles() {
         if (!response.ok) throw new Error(result.error || '加载文件列表失败');
         const files = result.files || [];
         table.innerHTML = files.map(file => {
+            const isPublic = file.is_public === true;
             const versions = (file.versions || []).slice().sort((a, b) =>
                 b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: 'base' }));
             const versionList = versions.map(version => {
@@ -1795,10 +1818,10 @@ async function loadManagedFiles() {
                 <td><strong>${escapeHtml(file.name)}</strong><br><code style="color:var(--accent);font-size:0.72rem">${escapeHtml(file.slug)}</code><br><span style="color:var(--text-muted);font-size:0.7rem">${escapeHtml(file.description || '')}</span></td>
                 <td>${file.current_version ? `<strong>${escapeHtml(file.current_version)}</strong>` : '<span class="badge revoked">未发布</span>'}</td>
                 <td><div class="version-list">${versionList || '暂无版本'}</div></td>
-                <td>${file.is_public ? '<span class="badge active">公开</span>' : '<span class="badge role">登录后下载</span>'}</td>
+                <td>${isPublic ? '<span class="badge active">公开</span>' : '<span class="badge role">登录后下载</span>'}</td>
                 <td><div class="action-group">
                     ${file.current_version ? `<button class="btn btn-sm btn-primary" onclick="copyPublishedUrl(${jsString(file.latest_download_url)})">复制下载链接</button>` : ''}
-                    <button class="btn btn-sm" onclick="showEditManagedFileModal(${jsString(file.slug)}, ${jsString(file.name)}, ${jsString(file.description || '')}, ${file.is_public})">设置</button>
+                    <button class="btn btn-sm" onclick="showEditManagedFileModal(${jsString(file.slug)}, ${jsString(file.name)}, ${jsString(file.description || '')}, ${isPublic})">设置</button>
                     ${fixedLinkActions}
                     ${versionActions}
                 </div></td>
@@ -1929,12 +1952,15 @@ async function saveManagedFileSettings() {
 }
 
 async function copyPublishedUrl(path) {
-    const url = new URL(path, window.location.origin).href;
     try {
+        const url = new URL(String(path ?? ''), window.location.origin);
+        if (!['http:', 'https:'].includes(url.protocol) || url.origin !== window.location.origin) {
+            throw new Error('Only same-origin HTTP(S) download URLs are allowed');
+        }
         await copyHelpText(url);
         showToast('下载链接已复制', 'success');
     } catch (_) {
-        showToast(`复制失败：${url}`, 'error');
+        showToast('复制失败：下载地址不受信任', 'error');
     }
 }
 

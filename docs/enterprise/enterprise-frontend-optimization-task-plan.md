@@ -272,81 +272,81 @@ Document enterprise frontend baseline
 
 步骤：
 
-- [ ] 搜索所有 `http://117.147.213.234:38080`。
-- [ ] 区分同源链接、CLI `--server` 参数和纯网络诊断示例。
-- [ ] 同源浏览器链接使用相对 URL。
-- [ ] CLI 命令使用服务端注入的公开基础地址。
-- [ ] 在配置中增加或复用明确的公开 URL，例如 `GIT_AI_PUBLIC_BASE_URL`。
-- [ ] 如果未配置公开 URL，使用当前请求的可信 Origin 或明确回退规则。
-- [ ] 禁止从任意未经校验的 `Host`/转发头直接生成安装命令。
-- [ ] 为反向代理场景补充部署说明和测试。
+- [x] 搜索所有 `http://117.147.213.234:38080`。
+- [x] 区分同源链接、CLI `--server` 参数和纯网络诊断示例。
+- [x] 同源浏览器链接使用相对 URL。
+- [x] CLI 命令使用服务端注入的公开基础地址。
+- [x] 在配置中增加或复用明确的公开 URL，例如 `GIT_AI_PUBLIC_BASE_URL`。
+- [x] 如果未配置公开 URL，使用当前请求的可信 Origin 或明确回退规则。
+- [x] 禁止从任意未经校验的 `Host`/转发头直接生成安装命令。
+- [x] 为反向代理场景补充部署说明和测试。
 
 验收标准：
 
-- [ ] HTML 中不再包含固定企业 IP。
-- [ ] HTTP、HTTPS 和反向代理部署生成正确地址。
-- [ ] 浏览器下载链接和 CLI 命令指向同一个公开服务地址。
+- [x] HTML 中不再包含固定企业 IP。
+- [x] HTTP、HTTPS 和反向代理部署生成正确地址。
+- [x] 浏览器下载链接和 CLI 命令指向同一个公开服务地址。
 
 ### 1.2 强制安全安装链路
 
 步骤：
 
-- [ ] 生产配置要求公开地址使用 HTTPS。
-- [ ] 帮助页面对 HTTP 部署显示显著风险提示，不再默认推荐管道执行命令。
-- [ ] 安装脚本和二进制下载使用同一可信 HTTPS Origin。
-- [ ] 保留并验证 SHA256 校验流程。
-- [ ] 评估安装脚本签名或发布签名；如暂不实现，建立独立后续任务。
-- [ ] 更新 macOS/Linux 和 Windows 安装示例。
+- [x] 生产配置要求公开地址使用 HTTPS。
+- [x] 帮助页面对 HTTP 部署显示显著风险提示，不再默认推荐管道执行命令。
+- [x] 安装脚本和二进制下载使用同一可信 HTTPS Origin。
+- [x] 保留并验证 SHA256 校验流程。
+- [x] 评估安装脚本签名或发布签名；如暂不实现，建立独立后续任务。
+- [x] 更新 macOS/Linux 和 Windows 安装示例。
 
 验收标准：
 
-- [ ] 生产帮助页不推荐通过 HTTP 下载后直接执行脚本。
-- [ ] 所有安装示例在实际部署地址上可复制执行。
-- [ ] 安装文档说明校验和信任边界。
+- [x] 生产帮助页不推荐通过 HTTP 下载后直接执行脚本。
+- [x] 所有安装示例在实际部署地址上可复制执行。
+- [x] 安装文档说明校验和信任边界。
 
 ### 1.3 本地托管 Chart.js
 
 步骤：
 
-- [ ] 固定当前 Chart.js 版本。
-- [ ] 把经审核的发布文件放入 `enterprise-server/static/assets/`。
-- [ ] 把 CDN `<script>` 改为同源静态资源。
-- [ ] 记录上游版本、许可证和升级步骤。
-- [ ] 在网络完全离线时验证图表仍可加载。
-- [ ] 如果继续使用 CDN 作为备选，配置 SRI 和明确 fallback；推荐第一版只使用本地资源。
+- [x] 固定当前 Chart.js 版本。
+- [x] 把经审核的发布文件放入 `enterprise-server/static/assets/`。
+- [x] 把 CDN `<script>` 改为同源静态资源。
+- [x] 记录上游版本、许可证和升级步骤。
+- [x] 在网络完全离线时验证图表仍可加载。
+- [x] 如果继续使用 CDN 作为备选，配置 SRI 和明确 fallback；推荐第一版只使用本地资源。
 
 验收标准：
 
-- [ ] Dashboard 不依赖外部 CDN 才能显示图表。
-- [ ] 依赖版本和许可证可追溯。
-- [ ] 隔离网络环境功能完整。
+- [x] Dashboard 不依赖外部 CDN 才能显示图表。
+- [x] 依赖版本和许可证可追溯。
+- [x] 隔离网络环境功能完整。
 
 ### 1.4 修复高风险 HTML sink
 
 步骤：
 
-- [ ] 把新 API Key 的展示从 `innerHTML` 改成按钮节点加 `textContent`。
-- [ ] 审计所有 `innerHTML =`。
-- [ ] 对每个动态值标记上下文：文本、HTML、属性、URL、CSS 或 JavaScript。
-- [ ] 文本优先使用 `textContent`。
-- [ ] 属性优先使用 DOM property 或 `setAttribute()`。
-- [ ] URL 统一使用 `new URL()` 和允许协议校验。
-- [ ] 百分比统一转成有限数值并限制到 `0..100`。
-- [ ] 不把未经校验的数据写入 inline event handler。
+- [x] 把新 API Key 的展示从 `innerHTML` 改成按钮节点加 `textContent`。
+- [x] 审计所有 `innerHTML =`。
+- [x] 对每个动态值标记上下文：文本、HTML、属性、URL、CSS 或 JavaScript。
+- [x] 文本优先使用 `textContent`。
+- [x] 属性优先使用 DOM property 或 `setAttribute()`。
+- [x] URL 统一使用 `new URL()` 和允许协议校验。
+- [x] 百分比统一转成有限数值并限制到 `0..100`。
+- [x] 不把未经校验的数据写入 inline event handler。
 
 验收标准：
 
-- [ ] API Key 不经过 HTML 解析。
-- [ ] 所有动态 sink 已有明确安全处理。
-- [ ] 添加包含 `<`, `>`, `"`, `'`, `&` 的测试数据时页面只显示文本。
+- [x] API Key 不经过 HTML 解析。
+- [x] 所有动态 sink 已有明确安全处理。
+- [x] 添加包含 `<`, `>`, `"`, `'`, `&` 的测试数据时页面只显示文本。
 
 ### 1.5 核查服务端安全响应
 
 步骤：
 
-- [ ] 确认所有 `/api/admin/*` 服务端执行管理员鉴权。
-- [ ] 保留 Cookie 的 `HttpOnly`、`SameSite` 和 HTTPS 下的 `Secure`。
-- [ ] 评估并添加以下响应头：
+- [x] 确认所有 `/api/admin/*` 服务端执行管理员鉴权。
+- [x] 保留 Cookie 的 `HttpOnly`、`SameSite` 和 HTTPS 下的 `Secure`。
+- [x] 评估并添加以下响应头：
 
 ```text
 Content-Security-Policy
@@ -355,15 +355,15 @@ Referrer-Policy
 frame-ancestors 或 X-Frame-Options
 ```
 
-- [ ] 第一版 CSP 可以使用 Report-Only 收集违规。
-- [ ] 记录 inline handler 和 inline script 对严格 CSP 的阻碍，阶段 6 移除后收紧。
-- [ ] 管理 mutation 继续依赖服务端权限、Origin/CSRF 策略和审计日志。
+- [x] 第一版 CSP 可以使用 Report-Only 收集违规。
+- [x] 记录 inline handler 和 inline script 对严格 CSP 的阻碍，阶段 6 移除后收紧。
+- [x] 管理 mutation 继续依赖服务端权限、Origin/CSRF 策略和审计日志。
 
 验收标准：
 
-- [ ] 非管理员直接请求管理 API 返回 403。
-- [ ] 安全头存在且不会破坏当前页面。
-- [ ] CSP 收紧路径已有明确记录。
+- [x] 非管理员直接请求管理 API 返回 403。
+- [x] 安全头存在且不会破坏当前页面。
+- [x] CSP 收紧路径已有明确记录。
 
 ### 阶段 1 验证
 
@@ -372,10 +372,10 @@ node --check enterprise-server/static/dashboard.js
 cargo test --manifest-path enterprise-server/Cargo.toml
 ```
 
-- [ ] 离线环境图表正常。
-- [ ] 帮助页没有固定 IP。
-- [ ] HTTP/HTTPS 部署地址生成正确。
-- [ ] 动态字符串安全测试通过。
+- [x] 离线环境图表正常。
+- [x] 帮助页没有固定 IP。
+- [x] HTTP/HTTPS 部署地址生成正确。
+- [x] 动态字符串安全测试通过。
 
 建议提交拆分：
 

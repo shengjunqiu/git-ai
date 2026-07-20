@@ -27,14 +27,14 @@ pub async fn dashboard_root() -> Redirect {
 }
 
 /// GET /me — Dashboard home page
-pub async fn dashboard_me(State(_state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
+pub async fn dashboard_me(State(state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
     // If not authenticated, redirect to login page
     let auth = match auth.0 {
         Some(a) => a,
         None => return Redirect::to("/auth/login?return_to=/me").into_response(),
     };
 
-    match render_dashboard_template(&auth) {
+    match render_dashboard_template(&auth, &state.config.base_url) {
         Ok(html) => Html(html).into_response(),
         Err(error) => error.into_response(),
     }
@@ -67,7 +67,10 @@ pub async fn dashboard_static_asset(Path(asset_path): Path<String>) -> impl Into
         .into_response()
 }
 
-fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result<String, AppError> {
+fn render_dashboard_template(
+    auth: &crate::models::user::AuthIdentity,
+    public_base_url: &str,
+) -> Result<String, AppError> {
     let template_path = dashboard_template_path()?;
     let template = std::fs::read_to_string(&template_path).map_err(|error| {
         AppError::Internal(format!(
@@ -85,6 +88,12 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
         .unwrap_or('G')
         .to_string();
     let user_role_label = if is_admin { "管理员" } else { "开发者" };
+    let public_base_url = public_base_url.trim_end_matches('/');
+    let install_security_notice = if public_base_url.starts_with("https://") {
+        r#"<div class="help-callout success"><strong>可信下载边界</strong><p>安装脚本、SHA256SUMS 和客户端二进制均从本页配置的同一 HTTPS 服务下载。请先核对脚本哈希，再执行本地文件。</p></div>"#
+    } else {
+        r#"<div class="help-callout warning"><strong>当前部署使用不安全的 HTTP</strong><p>网络中的第三方可能篡改安装脚本或登录流量。此地址只应在已明确接受风险的隔离开发环境使用；生产部署必须配置 HTTPS。下面的命令不会把下载内容直接传给 shell。</p></div>"#
+    };
 
     Ok(template
         .replace(
@@ -103,7 +112,9 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
             &json_string_literal(&auth.email),
         )
         .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
-        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label))
+        .replace("__GITAI_PUBLIC_BASE_URL__", &html_escape(public_base_url))
+        .replace("__GITAI_INSTALL_SECURITY_NOTICE__", install_security_notice))
 }
 
 pub fn dashboard_static_dir() -> Result<std::path::PathBuf, AppError> {
@@ -2852,6 +2863,34 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/me");
+    }
+
+    #[test]
+    fn dashboard_template_uses_trusted_public_url_and_escapes_dynamic_text() {
+        let mut auth = global_admin_auth(Uuid::new_v4()).0;
+        auth.name = r#"<Admin "A" & 'B'>"#.into();
+        auth.email = r#"admin+<test>&"@example.com"#.into();
+
+        let html = render_dashboard_template(&auth, "https://git-ai.example.com/").unwrap();
+
+        assert!(html.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(html.contains(r#"href="/auth/register""#));
+        assert!(html.contains(r#"src="/static/assets/vendor/chart.js/chart.umd.js""#));
+        assert!(html.contains("&lt;Admin &quot;A&quot; &amp; &#39;B&#39;&gt;"));
+        assert!(!html.contains("117.147.213.234"));
+        assert!(!html.contains("cdn.jsdelivr.net"));
+        assert!(!html.contains("__GITAI_"));
+    }
+
+    #[test]
+    fn dashboard_template_warns_for_explicit_http_development_url() {
+        let auth = global_admin_auth(Uuid::new_v4()).0;
+
+        let html = render_dashboard_template(&auth, "http://127.0.0.1:8080").unwrap();
+
+        assert!(html.contains("当前部署使用不安全的 HTTP"));
+        assert!(!html.contains("| bash"));
+        assert!(!html.contains("| iex"));
     }
 
     #[test]

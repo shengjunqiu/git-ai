@@ -396,5 +396,9 @@ pub fn build_router(state: AppState) -> Router {
         // Keep the request span outside TraceLayer so all downstream logs share its request ID.
         .layer(middleware::from_fn(request_id_middleware))
         .layer(cors)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::browser_security_middleware,
+        ))
         .with_state(state)
 }

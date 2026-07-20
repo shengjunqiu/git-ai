@@ -95,19 +95,24 @@ JWT_SECRET=<openssl rand -hex 32 生成的值>
 BASE_URL=https://git-ai.example.com
 ```
 
-如果先在内网测试，没有域名，可以临时用：
+如果只在隔离开发网络测试且已明确接受 HTTP 风险，可以临时显式放行：
 
 ```env
 BASE_URL=http://<server-ip>:8080
+ALLOW_INSECURE_PUBLIC_URL=true
 ```
 
-如果没有域名，并且运维把服务器的 `8080` 映射成公网端口 `38080`，客户端实际访问地址应写公网地址：
+生产环境必须配置浏览器和 CLI 都可访问、证书有效的 HTTPS Origin：
 
 ```env
-BASE_URL=http://117.147.213.234:38080
+BASE_URL=https://git-ai.example.com
+ALLOW_INSECURE_PUBLIC_URL=false
 ```
 
-这里的 `BASE_URL` 必须是开发者浏览器和 CLI 能访问到的外部地址，因为 `git-ai login` 会用它生成 `/verify` 授权页面 URL。
+这里的 `BASE_URL` 是服务端信任的公开地址，必须只包含 scheme、host 和可选
+port，不能带路径、查询参数、片段或凭据。服务端不会信任请求的 `Host` 或
+`X-Forwarded-*` 来生成安装命令；`git-ai login`、Dashboard 帮助页和发布下载
+都会使用这个地址。
 
 当前 `enterprise-server/docker-compose.yml` 是偏开发配置，Postgres 和 MinIO 默认密码写在 compose 文件里。正式生产建议改成部署包方式，或单独维护生产 compose 文件。
 
@@ -234,17 +239,17 @@ docker compose ps
 curl http://127.0.0.1:${API_PORT:-8080}/health
 ```
 
-如果没有域名，但公网访问端口是 `38080`，`.env` 应设置：
+如果 HTTPS 反向代理对外监听 `38080`、转发到 API 的 `8080`，`.env` 应设置：
 
 ```env
-BASE_URL=http://117.147.213.234:38080
+BASE_URL=https://git-ai.example.com:38080
 API_PORT=8080
 ```
 
 `API_PORT=8080` 表示服务在服务器本机监听 `8080`；运维层把外部 `38080` 转发到服务器 `8080`。如果没有运维层转发，而是希望 Docker 直接监听宿主机 `38080`，则改成：
 
 ```env
-BASE_URL=http://117.147.213.234:38080
+BASE_URL=https://git-ai.example.com:38080
 API_PORT=38080
 ```
 
@@ -319,16 +324,18 @@ docker compose exec -T postgres psql -U gitai -d gitai_enterprise \
 
 生产环境建议不要让用户直接访问 `http://server-ip:8080`，而是使用 HTTPS 域名。
 
-如果暂时没有域名，可以先使用 HTTP 地址跑通：
+如果暂时没有域名，只能在隔离开发网络通过显式例外先跑通；HTTP 会暴露登录
+凭据和安装内容，不能作为生产配置：
 
 ```env
-BASE_URL=http://117.147.213.234:38080
+BASE_URL=http://<server-ip>:38080
+ALLOW_INSECURE_PUBLIC_URL=true
 ```
 
 客户端也使用同一个外部地址：
 
 ```bash
-git-ai login --server http://117.147.213.234:38080
+git-ai login --server http://<server-ip>:38080
 ```
 
 登录成功后客户端会自动保存服务地址，不需要额外执行 `git-ai config set`。
@@ -341,7 +348,7 @@ git-ai login --server http://117.147.213.234:38080
 因此生产建议仍然是让运维分配一个域名或子域名，例如：
 
 ```text
-git-ai.company.com -> 117.147.213.234
+git-ai.company.com -> 203.0.113.10
 ```
 
 然后开放 `443`，由 Caddy/Nginx 终止 HTTPS，再反向代理到本机 `8080`。
