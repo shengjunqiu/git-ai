@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="/static/dashboard.css?v=__GITAI_DASHBOARD_CSS_VERSION__">
     <script>
         const isAdmin = __GITAI_IS_ADMIN__;
-        const currentUserId = __GITAI_CURRENT_USER_ID_JSON__;
     </script>
 </head>
 <body>
@@ -446,6 +445,7 @@
 
             <!-- Help Section -->
             <div id="section-help" class="section">
+                <!-- DASHBOARD_HELP_START -->
                 <div class="page-header help-page-header">
                     <div>
                         <div class="page-title">安装与使用指南</div>
@@ -701,6 +701,7 @@ command -v git</code></pre></div></div></details>
                         </section>
                     </div>
                 </div>
+                <!-- DASHBOARD_HELP_END -->
             </div>
         </main>
     </div>
@@ -708,10 +709,6 @@ command -v git</code></pre></div></div></details>
     <!-- Modal Container -->
     <div id="modal-container"></div>
 
-    <script>
-        const name = __GITAI_USER_NAME_JSON__;
-        const email = __GITAI_USER_EMAIL_JSON__;
-    </script>
     <script src="/static/dashboard.js?v=__GITAI_DASHBOARD_JS_VERSION__"></script>
 </body>
 </html>

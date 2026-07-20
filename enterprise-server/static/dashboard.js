@@ -782,7 +782,7 @@ async function performSectionLoad(id, { mode, controller }) {
         apikeys: loadApiKeys,
         releases: loadReleaseManagement,
         files: loadManagedFiles,
-        help: async () => {},
+        help: loadHelp,
     };
     try {
         await loaders[id]({ mode, signal: controller.signal });
@@ -845,6 +845,38 @@ async function copyHelpText(text) {
     const copied = document.execCommand('copy');
     textarea.remove();
     if (!copied) throw new Error('Copy command was rejected');
+}
+
+// --- Lazy help content ---
+let helpContentLoaded = false;
+
+function scrollToHelpHash() {
+    const targetId = window.location.hash.slice(1);
+    if (!targetId.startsWith('help-')) return;
+    requestAnimationFrame(() => document.getElementById(targetId)?.scrollIntoView());
+}
+
+async function loadHelp({ signal, mode }) {
+    const container = document.getElementById('help-content');
+    if (!container) {
+        throw new InvalidResponseError('帮助内容容器不存在');
+    }
+    if (helpContentLoaded || container.dataset.loaded === 'true') {
+        if (!isSilentRefresh({ mode })) scrollToHelpHash();
+        return;
+    }
+
+    container.setAttribute('aria-busy', 'true');
+    const data = await apiRequest('/api/v1/dashboard/help', { signal });
+    if (typeof data?.html !== 'string' || !data.html.trim()) {
+        throw new InvalidResponseError('服务器返回了无效的帮助内容');
+    }
+
+    replaceHtmlIfChanged(container, data.html);
+    container.dataset.loaded = 'true';
+    container.removeAttribute('aria-busy');
+    helpContentLoaded = true;
+    if (!isSilentRefresh({ mode })) scrollToHelpHash();
 }
 
 // --- Time range helper ---

@@ -183,6 +183,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/me", get(crate::handlers::dashboard::dashboard_me))
         .route(
+            "/api/v1/dashboard/help",
+            get(crate::handlers::dashboard::dashboard_help),
+        )
+        .route(
             "/api/v1/aggregate/summary",
             get(crate::handlers::dashboard::aggregate_summary),
         )

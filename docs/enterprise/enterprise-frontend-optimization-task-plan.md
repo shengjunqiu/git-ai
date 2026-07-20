@@ -682,18 +682,20 @@ Make enterprise dashboard navigation responsive
 
 ### 5.4 减少初始 DOM 和无用脚本
 
+执行记录：[`enterprise-frontend-initial-payload.md`](./enterprise-frontend-initial-payload.md)
+
 步骤：
 
-- [ ] 评估帮助页大段内容是否拆成独立页面或按需加载片段。
-- [ ] 删除未使用的 `currentUserId`、`name`、`email` 全局变量。
-- [ ] 删除已失效的 helper 和重复 CSS。
-- [ ] 每个栏目只初始化必要事件和图表。
-- [ ] 不提前创建隐藏栏目的 Chart 实例。
+- [x] 评估帮助页大段内容是否拆成独立页面或按需加载片段。
+- [x] 删除未使用的 `currentUserId`、`name`、`email` 全局变量。
+- [x] 删除已失效的 helper 和重复 CSS。
+- [x] 每个栏目只初始化必要事件和图表。
+- [x] 不提前创建隐藏栏目的 Chart 实例。
 
 验收标准：
 
-- [ ] 初始 HTML、JS 和 DOM 节点数量有优化前后记录。
-- [ ] 删除内容不影响深链接和帮助页复制功能。
+- [x] 初始 HTML、JS 和 DOM 节点数量有优化前后记录。
+- [x] 删除内容不影响深链接和帮助页复制功能。
 
 ### 5.5 管理上传体验
 
@@ -755,7 +757,7 @@ Cache enterprise static assets efficiently
 
 - [ ] 用 `<script type="application/json" id="dashboard-bootstrap">` 或 `data-*` 提供启动数据。
 - [ ] JSON 内容必须使用安全序列化，防止 `</script>` 提前结束。
-- [ ] 删除未使用的 `name`、`email` 和 `currentUserId`。
+- [x] 删除未使用的 `name`、`email` 和 `currentUserId`。
 - [ ] 管理员角色可以由服务端渲染栏目或通过安全 bootstrap 数据提供。
 - [ ] 管理员内容默认隐藏，避免角色判断执行前闪现。
 

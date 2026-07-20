@@ -23,6 +23,11 @@ const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
 const DASHBOARD_HTML_CACHE_CONTROL: &str = "no-cache";
 const DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL: &str = "public, max-age=0, must-revalidate";
 const DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const DASHBOARD_HELP_START_MARKER: &str = "<!-- DASHBOARD_HELP_START -->";
+const DASHBOARD_HELP_END_MARKER: &str = "<!-- DASHBOARD_HELP_END -->";
+const DASHBOARD_HELP_PLACEHOLDER: &str = r#"<div id="help-content" aria-busy="true">
+                    <div class="empty-state"><div class="empty-icon">❓</div><p>正在加载安装与使用指南...</p></div>
+                </div>"#;
 
 /// GET / — Redirect to the dashboard entry point.
 pub async fn dashboard_root() -> Redirect {
@@ -30,13 +35,26 @@ pub async fn dashboard_root() -> Redirect {
 }
 
 /// GET /me — Dashboard home page
-pub async fn dashboard_me(State(state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
+pub async fn dashboard_me(auth: OptionalAuth) -> impl IntoResponse {
     let response = match auth.0 {
-        Some(auth) => match render_dashboard_template(&auth, &state.config.base_url) {
+        Some(auth) => match render_dashboard_template(&auth) {
             Ok(html) => Html(html).into_response(),
             Err(error) => error.into_response(),
         },
         None => Redirect::to("/auth/login?return_to=/me").into_response(),
+    };
+
+    with_dashboard_html_cache_control(response)
+}
+
+/// GET /api/v1/dashboard/help — Authenticated, lazily loaded help content.
+pub async fn dashboard_help(
+    State(state): State<AppState>,
+    _auth: DashboardAuth,
+) -> impl IntoResponse {
+    let response = match render_dashboard_help_template(&state.config.base_url) {
+        Ok(html) => Json(json!({ "html": html })).into_response(),
+        Err(error) => error.into_response(),
     };
 
     with_dashboard_html_cache_control(response)
@@ -144,18 +162,45 @@ fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
         })
 }
 
-fn render_dashboard_template(
-    auth: &crate::models::user::AuthIdentity,
-    public_base_url: &str,
-) -> Result<String, AppError> {
+fn read_dashboard_template() -> Result<String, AppError> {
     let template_path = dashboard_template_path()?;
-    let template = std::fs::read_to_string(&template_path).map_err(|error| {
+    std::fs::read_to_string(&template_path).map_err(|error| {
         AppError::Internal(format!(
             "Failed to read dashboard template {}: {}",
             template_path.display(),
             error
         ))
-    })?;
+    })
+}
+
+fn split_dashboard_help_template(template: &str) -> Result<(String, String), AppError> {
+    let help_start = template
+        .find(DASHBOARD_HELP_START_MARKER)
+        .ok_or_else(|| AppError::Internal("Dashboard help start marker is missing".to_string()))?;
+    let content_start = help_start + DASHBOARD_HELP_START_MARKER.len();
+    let relative_end = template[content_start..]
+        .find(DASHBOARD_HELP_END_MARKER)
+        .ok_or_else(|| AppError::Internal("Dashboard help end marker is missing".to_string()))?;
+    let content_end = content_start + relative_end;
+    let marker_end = content_end + DASHBOARD_HELP_END_MARKER.len();
+
+    let mut shell = String::with_capacity(
+        template.len() - (marker_end - help_start) + DASHBOARD_HELP_PLACEHOLDER.len(),
+    );
+    shell.push_str(&template[..help_start]);
+    shell.push_str(DASHBOARD_HELP_PLACEHOLDER);
+    shell.push_str(&template[marker_end..]);
+
+    Ok((
+        shell,
+        template[content_start..content_end].trim().to_string(),
+    ))
+}
+
+fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result<String, AppError> {
+    let template = read_dashboard_template()?;
+    let (template, _) = split_dashboard_help_template(&template)?;
+    let template_path = dashboard_template_path()?;
     let static_dir = template_path.parent().ok_or_else(|| {
         AppError::Internal("Dashboard template path has no parent directory".to_string())
     })?;
@@ -172,12 +217,6 @@ fn render_dashboard_template(
         .unwrap_or('G')
         .to_string();
     let user_role_label = if is_admin { "管理员" } else { "开发者" };
-    let public_base_url = public_base_url.trim_end_matches('/');
-    let install_security_notice = if public_base_url.starts_with("https://") {
-        r#"<div class="help-callout success"><strong>可信下载边界</strong><p>安装脚本、SHA256SUMS 和客户端二进制均从本页配置的同一 HTTPS 服务下载。请先核对脚本哈希，再执行本地文件。</p></div>"#
-    } else {
-        r#"<div class="help-callout warning"><strong>当前部署使用不安全的 HTTP</strong><p>网络中的第三方可能篡改安装脚本或登录流量。此地址只应在已明确接受风险的隔离开发环境使用；生产部署必须配置 HTTPS。下面的命令不会把下载内容直接传给 shell。</p></div>"#
-    };
 
     Ok(template
         .replace("__GITAI_CHART_JS_VERSION__", &chart_js_version)
@@ -187,19 +226,23 @@ fn render_dashboard_template(
             "__GITAI_IS_ADMIN__",
             if is_admin { "true" } else { "false" },
         )
-        .replace(
-            "__GITAI_CURRENT_USER_ID_JSON__",
-            &json_string_literal(&auth.user_id.to_string()),
-        )
         .replace("__GITAI_USER_NAME__", &html_escape(&auth.name))
-        .replace("__GITAI_USER_NAME_JSON__", &json_string_literal(&auth.name))
         .replace("__GITAI_USER_EMAIL__", &html_escape(&auth.email))
-        .replace(
-            "__GITAI_USER_EMAIL_JSON__",
-            &json_string_literal(&auth.email),
-        )
         .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
-        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label))
+        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+}
+
+fn render_dashboard_help_template(public_base_url: &str) -> Result<String, AppError> {
+    let template = read_dashboard_template()?;
+    let (_, help_template) = split_dashboard_help_template(&template)?;
+    let public_base_url = public_base_url.trim_end_matches('/');
+    let install_security_notice = if public_base_url.starts_with("https://") {
+        r#"<div class="help-callout success"><strong>可信下载边界</strong><p>安装脚本、SHA256SUMS 和客户端二进制均从本页配置的同一 HTTPS 服务下载。请先核对脚本哈希，再执行本地文件。</p></div>"#
+    } else {
+        r#"<div class="help-callout warning"><strong>当前部署使用不安全的 HTTP</strong><p>网络中的第三方可能篡改安装脚本或登录流量。此地址只应在已明确接受风险的隔离开发环境使用；生产部署必须配置 HTTPS。下面的命令不会把下载内容直接传给 shell。</p></div>"#
+    };
+
+    Ok(help_template
         .replace("__GITAI_PUBLIC_BASE_URL__", &html_escape(public_base_url))
         .replace("__GITAI_INSTALL_SECURITY_NOTICE__", install_security_notice))
 }
@@ -254,10 +297,6 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
-}
-
-fn json_string_literal(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn sanitize_static_asset_path(asset_path: &str) -> Option<PathBuf> {
@@ -3200,7 +3239,8 @@ mod tests {
         auth.name = r#"<Admin "A" & 'B'>"#.into();
         auth.email = r#"admin+<test>&"@example.com"#.into();
 
-        let html = render_dashboard_template(&auth, "https://git-ai.example.com/").unwrap();
+        let html = render_dashboard_template(&auth).unwrap();
+        let help = render_dashboard_help_template("https://git-ai.example.com/").unwrap();
         let static_dir = dashboard_static_dir().unwrap();
         let chart_version =
             dashboard_asset_file_version(&static_dir, "assets/vendor/chart.js/chart.umd.js")
@@ -3208,8 +3248,10 @@ mod tests {
         let css_version = dashboard_asset_file_version(&static_dir, "dashboard.css").unwrap();
         let js_version = dashboard_asset_file_version(&static_dir, "dashboard.js").unwrap();
 
-        assert!(html.contains("git-ai login --server https://git-ai.example.com"));
-        assert!(html.contains(r#"href="/auth/register""#));
+        assert!(!html.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(html.contains(r#"id="help-content" aria-busy="true""#));
+        assert!(help.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(help.contains(r#"href="/auth/register""#));
         assert!(html.contains(&format!(
             r#"src="/static/assets/vendor/chart.js/chart.umd.js?v={chart_version}""#
         )));
@@ -3219,13 +3261,12 @@ mod tests {
         assert!(!html.contains("117.147.213.234"));
         assert!(!html.contains("cdn.jsdelivr.net"));
         assert!(!html.contains("__GITAI_"));
+        assert!(!help.contains("__GITAI_"));
     }
 
     #[test]
     fn dashboard_template_warns_for_explicit_http_development_url() {
-        let auth = global_admin_auth(Uuid::new_v4()).0;
-
-        let html = render_dashboard_template(&auth, "http://127.0.0.1:8080").unwrap();
+        let html = render_dashboard_help_template("http://127.0.0.1:8080").unwrap();
 
         assert!(html.contains("当前部署使用不安全的 HTTP"));
         assert!(!html.contains("| bash"));
