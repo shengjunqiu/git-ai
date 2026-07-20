@@ -1,0 +1,30 @@
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 595
+docs/enterprise/dashboard-auto-refresh-flicker-optimization-task-plan.md
+  69e86842745e0e94 419-424,428-430,436-439,443-444
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 768-786,864-871,874-928,941-942,945-946,949-953,961-962,965-967,980-981,983,994,998,1000-1001,1004-1005,1008-1012,1017-1041
+docs/enterprise/enterprise-dashboard-auto-refresh.md
+  69e86842745e0e94 82-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "2374700235e460eb3ebaf2014c86674d3376cb82",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 165,
+      "total_deletions": 111,
+      "accepted_lines": 166,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/f360fb604f119d696523a6888aef49064ebd6d22c0136155dac74ba51097536d"
+    }
+  }
+}
