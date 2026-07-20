@@ -1,0 +1,34 @@
+docs/enterprise/enterprise-frontend-bounded-options.md
+  69e86842745e0e94 1-62
+enterprise-server/static/dashboard-options.test.cjs
+  69e86842745e0e94 1-100
+enterprise-server/static/dashboard.css
+  69e86842745e0e94 224-229
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 409-475,477-483,1604,1608,1612,1616,1631-1633,1636-1654,1658,1661-1666,1668-1678,1680,1683-1691,1700-1704,1706-1709,1711,1713-1718,1721-1722,1725-1728,1730-1731,1735,1737-1739,1743-1745,1749,1751,1753-1754,1757-1758,1760-1761,1764-1768,1777-1781,1783,1787,1789,1791-1792,1855,1858,2044-2048,2060-2062,2064,2072-2166,2169,2171-2182,2184,2187,2189-2190,2193-2194,2196-2197,2202-2209,2211,2213,2216-2219,2788
+enterprise-server/src/handlers/admin.rs
+  69e86842745e0e94 23-26,35-38,62-67,72-73,91-92,99-100,104-109,770,781,784-790,813-818,820,823,834-836,867,886,889-896,933-939,943,946,959,2020,2034,2036,2043-2069,2084,2101,2103,2109-2137
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 633,644-645,648-651,660-661
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "8daf1fda88499888acddf4a8aa94bae6b32dbfc4",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 652,
+      "total_deletions": 87,
+      "accepted_lines": 632,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/1750a5c4ab91e7c631936009c1151365b097007541c5f4df9f5b24ebc14b25e0"
+    }
+  }
+}
