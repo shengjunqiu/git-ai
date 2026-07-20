@@ -1,0 +1,30 @@
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 729-754,764-769,776-781,788-810,1637,1639,1646,1653-1655,2429-2430,2438,2914,2917,3017-3019,3032,3036-3039,3047-3048
+docs/enterprise/enterprise-frontend-event-delegation.md
+  69e86842745e0e94 47-67
+enterprise-server/static/dashboard-actions.test.cjs
+  69e86842745e0e94 23-32,54-63,67,70-72,75-84,188-254
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 749
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "b15d249f2323a169f097a65c29c1be91105c1fbf",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 207,
+      "total_deletions": 15,
+      "accepted_lines": 210,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/33c8d99d67b2bfe1441fd8861f4b42fb1160635754841632e7347f494facbe26"
+    }
+  }
+}

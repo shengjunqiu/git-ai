@@ -1,0 +1,42 @@
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 702-703,706-711,715-716
+enterprise-server/src/handlers/managed_files.rs
+  69e86842745e0e94 16-18,126-130,135,145,478-490,540-546
+enterprise-server/static/dashboard.css
+  69e86842745e0e94 179
+enterprise-server/src/routes.rs
+  69e86842745e0e94 298-300,304-306,323-325
+enterprise-server/static/dashboard-upload.test.cjs
+  69e86842745e0e94 1-143
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 2494-2499,2509-2676,2681-2694,2699-2733,2805-2818,2821-2823,2827-2830,2835,2837,2842,2855,2929-2936,2941-2958,2968,2973,2986,2993,3084
+enterprise-server/src/handlers/dashboard.rs
+  69e86842745e0e94 226-248
+enterprise-server/src/handlers/release.rs
+  69e86842745e0e94 8,232-235,265,292-297,309-310,689-718,1215-1235
+enterprise-server/static/dashboard.html
+  69e86842745e0e94 366-370,421-424,431
+docs/enterprise/enterprise-frontend-upload-safeguards.md
+  69e86842745e0e94 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "685da417dc935ceefaf6968c0defd0f0a921ef08",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 677,
+      "total_deletions": 80,
+      "accepted_lines": 662,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/8ef072a63efb234c9a70047596cef7a51549e62a0c508799118877f63e74a188"
+    }
+  }
+}
