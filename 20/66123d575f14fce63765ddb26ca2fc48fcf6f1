@@ -1,0 +1,28 @@
+install.ps1
+  448fa46e89808453 962-968
+src/mdm/ensure_git_symlinks.rs
+  448fa46e89808453 4-5,162-163,166-171,192-209,211-212,214-321,373-461
+src/commands/upgrade.rs
+  448fa46e89808453 27-58,588,1152-1156,1163-1182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.13",
+  "base_commit_sha": "2066123d575f14fce63765ddb26ca2fc48fcf6f1",
+  "prompts": {
+    "448fa46e89808453": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7e3c-8a2a-7533-9052-6d1d66bdd2b1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 319,
+      "total_deletions": 111,
+      "accepted_lines": 3352,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/782a7b1e086cea0d9ac9f9c42db07809291f59949d154f9f8aafe4e14d73b557"
+    }
+  }
+}
