@@ -17,6 +17,10 @@ const renderSource = fs.readFileSync(
     path.join(__dirname, 'dashboard', 'render.js'),
     'utf8',
 );
+const paginationSource = fs.readFileSync(
+    path.join(__dirname, 'dashboard', 'pagination.js'),
+    'utf8',
+);
 const renderModulePromise = import(
     `data:text/javascript;base64,${Buffer.from(renderSource).toString('base64')}`
 );
@@ -143,7 +147,7 @@ test('static navigation, refresh, and pagination use delegated data actions', ()
         /data-action="navigate-section" data-section="overview"/,
     );
     assert.match(
-        dashboardSource,
+        paginationSource,
         /data-action="table-page" data-table-key="\$\{escapeAttribute\(key\)\}"/,
     );
     assert.doesNotMatch(
@@ -393,6 +397,7 @@ test('dashboard request infrastructure is loaded as an explicit module', () => {
         /createApiClient\(\{\s*fetchImpl: window\.fetch\.bind\(window\),\s*location: window\.location,/,
     );
     assert.doesNotMatch(dashboardSource, /class ApiRequestError/);
+    assert.match(dashboardSource, /from '\.\/dashboard\/pagination\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/render\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/router\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/state\.js';/);

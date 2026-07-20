@@ -77,3 +77,20 @@ git diff --check
 
 专项 Node 测试覆盖精确白名单匹配、管理员栏目保护、请求参数读取、其他查询参数保留、
 默认栏目参数删除、hash 清除和 `pushState` / `replaceState` 选择。
+
+## 阶段 6.3 批次 4：分页
+
+- `pagination.js` 统一持有表格页码、当前页 cursor、下一页 cursor、加载状态和分页容器
+  映射；入口只保留栏目 loader，并通过 `reloadTable` callback 显式注入。
+- cursor 数组继续按“每一页的起始 cursor”组织；前进时记录下一页 cursor，后退时截断
+  已离开的后续 cursor，避免筛选或数据变化后复用过期分页路径。
+- `fetchPaginatedJson()` 继续负责追加固定上限、更新服务端分页元数据和维护 loading
+  状态；已有 `ApiRequestError` 原样传播，非请求层异常统一包装为
+  `InvalidResponseError`。
+- 分页状态不再作为可变对象暴露给入口。部门缓存仅通过冻结的当前页快照读取页码和
+  cursor，其他栏目使用模块提供的重置、请求、渲染和翻页操作。
+- 分页 DOM 仍使用委托事件所需的 `data-action` 属性；容器查询通过注入的 `document`
+  执行，不依赖隐式浏览器全局变量。
+
+专项 Node 测试覆盖页大小限制、查询参数拼接、cursor 前进/回退及截断、loading 和边界
+保护、分页按钮状态、类型化错误传播与未知异常包装。

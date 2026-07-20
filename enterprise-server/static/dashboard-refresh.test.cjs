@@ -54,11 +54,11 @@ async function createHarness() {
     });
     const refreshSource = sourceBetween(
         'function isSilentRefresh',
-        'function getTablePageState',
+        'function setTableLoading',
     );
     const tableSource = sourceBetween(
         'function setTableLoading',
-        'function renderPaginationControls',
+        'const OPTION_PAGE_LIMIT',
     );
     const chartSource = sourceBetween(
         'const chartDataSignatures = new WeakMap();',

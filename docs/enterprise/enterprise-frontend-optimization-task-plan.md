@@ -777,7 +777,7 @@ Cache enterprise static assets efficiently
 - [x] `api.js`
 - [x] `state.js`
 - [x] `router.js`
-- [ ] `pagination.js`
+- [x] `pagination.js`
 - [ ] `refresh.js`
 - [x] `render.js`
 
