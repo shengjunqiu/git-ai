@@ -62,3 +62,18 @@ git diff --check
 
 专项 Node 测试覆盖状态实例隔离、非法栏目降级、不可变常量、确定性时间格式化、安全
 转义和不变内容零写入。
+
+## 阶段 6.3 批次 3：路由
+
+- `router.js` 从 `state.js` 单向导入栏目白名单、默认栏目和管理员栏目常量，并通过
+  `createDashboardRouter({ isAdmin, location, history })` 显式接收角色和浏览器依赖。
+- 路由模块只负责访问判断、URL 中的栏目解析和 History API 写入；DOM 激活、
+  `appState.currentSection` 更新、栏目加载、移动导航和生命周期监听仍由入口编排。
+- 普通栏目导航继续使用 `pushState`，首次非法或越权栏目修正继续使用
+  `replaceState`；默认栏目写入会删除 `section`，同时保留其他查询参数并清除 hash。
+- 初次加载与 `popstate` 的既有边缘行为保持不变：只读取路由不会改写 history，
+  `?section=` 和 `?section=overview` 不会被入口主动规范化，历史记录中的非法栏目只让
+  UI 降级到默认栏目。
+
+专项 Node 测试覆盖精确白名单匹配、管理员栏目保护、请求参数读取、其他查询参数保留、
+默认栏目参数删除、hash 清除和 `pushState` / `replaceState` 选择。

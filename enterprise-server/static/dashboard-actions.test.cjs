@@ -394,6 +394,7 @@ test('dashboard request infrastructure is loaded as an explicit module', () => {
     );
     assert.doesNotMatch(dashboardSource, /class ApiRequestError/);
     assert.match(dashboardSource, /from '\.\/dashboard\/render\.js';/);
+    assert.match(dashboardSource, /from '\.\/dashboard\/router\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/state\.js';/);
     assert.match(
         html,

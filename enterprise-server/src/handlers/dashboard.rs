@@ -3202,6 +3202,7 @@ mod tests {
             "dashboard.js",
             "dashboard/api.js",
             "dashboard/render.js",
+            "dashboard/router.js",
             "dashboard/state.js",
             "assets/vendor/chart.js/chart.umd.js",
         ] {

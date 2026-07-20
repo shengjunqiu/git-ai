@@ -19,10 +19,9 @@ import {
     setTextIfChanged,
     setTitleIfChanged,
 } from './dashboard/render.js';
+import { createDashboardRouter } from './dashboard/router.js';
 import {
-    ADMIN_ONLY_DASHBOARD_SECTIONS,
     DASHBOARD_DEFAULT_SECTION,
-    DASHBOARD_SECTIONS,
     RefreshMode,
     createDashboardState,
 } from './dashboard/state.js';
@@ -40,6 +39,16 @@ function readDashboardBootstrap() {
 
 const dashboardBootstrap = readDashboardBootstrap();
 const isAdmin = dashboardBootstrap.isAdmin;
+const {
+    canAccessDashboardSection,
+    dashboardSectionFromLocation,
+    requestedDashboardSection,
+    updateDashboardSectionUrl,
+} = createDashboardRouter({
+    isAdmin,
+    location: window.location,
+    history: window.history,
+});
 const { apiRequest } = createApiClient({
     fetchImpl: window.fetch.bind(window),
     location: window.location,
@@ -400,30 +409,6 @@ function handleDashboardVisibilityChange() {
 }
 
 // --- Navigation ---
-function canAccessDashboardSection(id) {
-    return DASHBOARD_SECTIONS.includes(id)
-        && (isAdmin || !ADMIN_ONLY_DASHBOARD_SECTIONS.includes(id));
-}
-
-function dashboardSectionFromLocation() {
-    const requestedSection = new URL(window.location.href).searchParams.get('section');
-    return canAccessDashboardSection(requestedSection)
-        ? requestedSection
-        : DASHBOARD_DEFAULT_SECTION;
-}
-
-function updateDashboardSectionUrl(id, replace = false) {
-    const url = new URL(window.location.href);
-    url.hash = '';
-    if (id === DASHBOARD_DEFAULT_SECTION) {
-        url.searchParams.delete('section');
-    } else {
-        url.searchParams.set('section', id);
-    }
-    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-    window.history[replace ? 'replaceState' : 'pushState']({ section: id }, '', nextUrl);
-}
-
 function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } = {}) {
     const nextSection = canAccessDashboardSection(id) ? id : DASHBOARD_DEFAULT_SECTION;
     appState.currentSection = nextSection;
@@ -2983,7 +2968,7 @@ initializeDashboardActions();
 initializeMobileNavigation();
 document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
 window.addEventListener('beforeunload', warnBeforeLeavingDuringUpload);
-const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
+const requestedInitialSection = requestedDashboardSection();
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);
 if (requestedInitialSection && requestedInitialSection !== initialSection) {
