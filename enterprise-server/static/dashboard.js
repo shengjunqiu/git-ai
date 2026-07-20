@@ -380,9 +380,9 @@ function renderPaginationControls(key) {
     if (!container) return;
     const state = getTablePageState(key);
     replaceHtmlIfChanged(container, `
-        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'prev')" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
+        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="prev" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
         <span class="pagination-status">第 ${state.page} 页</span>
-        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'next')" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
+        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="next" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
     `);
 }
 
@@ -682,12 +682,79 @@ function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } 
     loadSection(nextSection, { mode: RefreshMode.INITIAL });
 }
 
-function showSection(event, id) {
-    event.preventDefault();
-    if (!canAccessDashboardSection(id)) return false;
-    activateDashboardSection(id, { updateUrl: true });
-    closeMobileNavigation();
-    return false;
+function dashboardActionElement(event) {
+    return event.target?.closest?.('[data-action]') || null;
+}
+
+function handleDashboardAction(event) {
+    const actionElement = dashboardActionElement(event);
+    if (!actionElement) return;
+    const { action } = actionElement.dataset;
+    const actionEvent = actionElement.dataset.actionEvent || 'click';
+    if (event.type !== actionEvent) return;
+
+    switch (action) {
+        case 'navigate-section': {
+            event.preventDefault();
+            const section = actionElement.dataset.section;
+            if (!canAccessDashboardSection(section)) return;
+            activateDashboardSection(section, { updateUrl: true });
+            closeMobileNavigation();
+            break;
+        }
+        case 'logout':
+            window.location.href = '/logout';
+            break;
+        case 'refresh-section':
+            refreshCurrentSection();
+            break;
+        case 'table-page':
+            goToTablePage(
+                actionElement.dataset.tableKey,
+                actionElement.dataset.pageDirection,
+            );
+            break;
+        case 'change-developer-sorting':
+            changeDeveloperSorting();
+            break;
+        case 'show-create-user':
+            showCreateUserModal();
+            break;
+        case 'bulk-authorize-git-tracking':
+            bulkAuthorizeGitTrackingUpload(actionElement);
+            break;
+        case 'toggle-all-git-tracking-users':
+            toggleAllGitTrackingUsers(actionElement.checked);
+            break;
+        case 'show-create-department':
+            showCreateDepartmentModal();
+            break;
+        case 'back-department-level':
+            backDepartmentLevel();
+            break;
+        case 'show-create-api-key':
+            showCreateApiKeyModal();
+            break;
+        case 'render-selected-release-files':
+            renderSelectedReleaseFiles();
+            break;
+        case 'publish-cli-release':
+            publishCliRelease(actionElement);
+            break;
+        case 'render-selected-managed-file':
+            renderSelectedManagedFile();
+            break;
+        case 'upload-managed-file':
+            uploadManagedFile(actionElement);
+            break;
+        default:
+            break;
+    }
+}
+
+function initializeDashboardActions() {
+    document.addEventListener('click', handleDashboardAction);
+    document.addEventListener('change', handleDashboardAction);
 }
 
 window.addEventListener('popstate', () => {
@@ -3079,6 +3146,7 @@ function closeModal() {
 }
 
 // --- Init ---
+initializeDashboardActions();
 initializeMobileNavigation();
 document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
 window.addEventListener('beforeunload', warnBeforeLeavingDuringUpload);

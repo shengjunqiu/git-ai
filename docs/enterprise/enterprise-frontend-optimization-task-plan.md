@@ -736,14 +736,16 @@ Cache enterprise static assets efficiently
 
 ### 6.1 建立事件委托
 
+执行记录：[`enterprise-frontend-event-delegation.md`](./enterprise-frontend-event-delegation.md)
+
 步骤：
 
-- [ ] 统计静态 HTML 中所有 `onclick`、`onchange` 和其他 inline handler。
-- [ ] 统计动态模板中生成的 inline handler。
+- [x] 统计静态 HTML 中所有 `onclick`、`onchange` 和其他 inline handler。
+- [x] 统计动态模板中生成的 inline handler。
 - [ ] 为操作按钮增加 `data-action`。
 - [ ] 参数通过 `dataset` 或受控状态 Map 传递。
-- [ ] 在栏目容器或 document 上注册一次事件监听器。
-- [ ] 先迁移分页、导航和简单刷新。
+- [x] 在栏目容器或 document 上注册一次事件监听器。
+- [x] 先迁移分页、导航和简单刷新。
 - [ ] 再迁移用户、API Key、发布和文件管理操作。
 - [ ] 最后迁移模态框和帮助页复制按钮。
 

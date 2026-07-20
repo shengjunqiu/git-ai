@@ -34,44 +34,44 @@
             <div class="sidebar-subtitle">AI 代码归属分析平台</div>
 
             <div class="nav-section">数据概览</div>
-            <a class="nav-item active" href="/me" data-section="overview" onclick="return showSection(event, 'overview')">
+            <a class="nav-item active" href="/me" data-action="navigate-section" data-section="overview">
                 <span class="nav-icon">📊</span> 总览
             </a>
-            <a class="nav-item" href="/me?section=trends" data-section="trends" onclick="return showSection(event, 'trends')">
+            <a class="nav-item" href="/me?section=trends" data-action="navigate-section" data-section="trends">
                 <span class="nav-icon">📈</span> 趋势分析
             </a>
-            <a class="nav-item" id="org-nav-item" href="/me?section=organizations" data-section="organizations" onclick="return showSection(event, 'organizations')">
+            <a class="nav-item" id="org-nav-item" href="/me?section=organizations" data-action="navigate-section" data-section="organizations">
                 <span class="nav-icon">🏢</span> 组织
             </a>
-            <a class="nav-item" href="/me?section=departments" data-section="departments" onclick="return showSection(event, 'departments')">
+            <a class="nav-item" href="/me?section=departments" data-action="navigate-section" data-section="departments">
                 <span class="nav-icon">🏷️</span> 部门
             </a>
-            <a class="nav-item" href="/me?section=developers" data-section="developers" onclick="return showSection(event, 'developers')">
+            <a class="nav-item" href="/me?section=developers" data-action="navigate-section" data-section="developers">
                 <span class="nav-icon">👥</span> 开发者
             </a>
-            <a class="nav-item" href="/me?section=projects" data-section="projects" onclick="return showSection(event, 'projects')">
+            <a class="nav-item" href="/me?section=projects" data-action="navigate-section" data-section="projects">
                 <span class="nav-icon">📁</span> 项目
             </a>
-            <a class="nav-item" href="/me?section=tools" data-section="tools" onclick="return showSection(event, 'tools')">
+            <a class="nav-item" href="/me?section=tools" data-action="navigate-section" data-section="tools">
                 <span class="nav-icon">🤖</span> AI 工具
             </a>
 
             <div class="nav-section" id="admin-nav-section">系统管理</div>
-            <a class="nav-item" id="admin-nav-users" href="/me?section=users" data-section="users" onclick="return showSection(event, 'users')">
+            <a class="nav-item" id="admin-nav-users" href="/me?section=users" data-action="navigate-section" data-section="users">
                 <span class="nav-icon">👤</span> 用户管理
             </a>
-            <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-section="apikeys" onclick="return showSection(event, 'apikeys')">
+            <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-action="navigate-section" data-section="apikeys">
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
-            <a class="nav-item admin-only" href="/me?section=releases" data-section="releases" onclick="return showSection(event, 'releases')">
+            <a class="nav-item admin-only" href="/me?section=releases" data-action="navigate-section" data-section="releases">
                 <span class="nav-icon">🚀</span> CLI 版本发布
             </a>
-            <a class="nav-item admin-only" href="/me?section=files" data-section="files" onclick="return showSection(event, 'files')">
+            <a class="nav-item admin-only" href="/me?section=files" data-action="navigate-section" data-section="files">
                 <span class="nav-icon">📦</span> 文件中心
             </a>
 
             <div class="nav-section">帮助与支持</div>
-            <a class="nav-item" href="/me?section=help" data-section="help" onclick="return showSection(event, 'help')">
+            <a class="nav-item" href="/me?section=help" data-action="navigate-section" data-section="help">
                 <span class="nav-icon">❓</span> 安装与使用指南
             </a>
 
@@ -93,7 +93,7 @@
                         </div>
                     </div>
                 </div>
-                <button class="logout-btn" onclick="window.location.href='/logout'">
+                <button class="logout-btn" data-action="logout">
                     <span>↪</span> 退出登录
                 </button>
             </div>
@@ -109,7 +109,7 @@
                         <div class="page-subtitle">AI 代码归属分析 - 组织级概览</div>
                     </div>
                     <div class="toolbar">
-                        <select id="time-range" onchange="refreshCurrentSection()">
+                        <select id="time-range" data-action="refresh-section" data-action-event="change">
                             <option value="7d">最近 7 天</option>
                             <option value="30d" selected>最近 30 天</option>
                             <option value="90d">最近 90 天</option>
@@ -119,7 +119,7 @@
                             <span class="refresh-dot"></span>
                             <span id="last-refresh">刷新中...</span>
                         </div>
-                        <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                        <button class="btn" data-action="refresh-section">🔄 刷新</button>
                     </div>
                 </div>
                 <div class="stats-grid" id="overview-stats">
@@ -158,13 +158,13 @@
                         <div class="page-subtitle">AI 代码归属随时间的变化趋势</div>
                     </div>
                     <div class="toolbar">
-                        <select id="trend-metric" onchange="refreshCurrentSection()">
+                        <select id="trend-metric" data-action="refresh-section" data-action-event="change">
                             <option value="ai_ratio">AI 占比</option>
                             <option value="ai_lines">AI 代码行数</option>
                             <option value="human_lines">非 AI 代码行数</option>
                             <option value="commits">提交数</option>
                         </select>
-                        <select id="trend-granularity" onchange="refreshCurrentSection()">
+                        <select id="trend-granularity" data-action="refresh-section" data-action-event="change">
                             <option value="day" selected>按天</option>
                             <option value="week">按周</option>
                             <option value="month">按月</option>
@@ -215,11 +215,11 @@
                     </div>
                     <div class="toolbar admin-only">
                         <label class="refresh-info" for="developer-sort-by">排序指标</label>
-                        <select id="developer-sort-by" onchange="changeDeveloperSorting()">
+                        <select id="developer-sort-by" data-action="change-developer-sorting" data-action-event="change">
                             <option value="ai_lines">AI 代码行</option>
                             <option value="ai_ratio">AI 代码占比</option>
                         </select>
-                        <select id="developer-sort-order" aria-label="排序方向" onchange="changeDeveloperSorting()">
+                        <select id="developer-sort-order" aria-label="排序方向" data-action="change-developer-sorting" data-action-event="change">
                             <option value="desc">从高到低</option>
                             <option value="asc">从低到高</option>
                         </select>
@@ -281,16 +281,16 @@
                         <div class="page-title">用户管理</div>
                         <div class="page-subtitle">管理本组织用户、Git 追踪上传授权及其 API 密钥</div>
                     </div>
-                    <button class="btn btn-primary" onclick="showCreateUserModal()">+ 创建用户</button>
+                    <button class="btn btn-primary" data-action="show-create-user">+ 创建用户</button>
                 </div>
                 <div class="table-card">
                     <div class="table-header">
                         <div id="users-bulk-selection" class="refresh-info">选择未授权用户后可批量授权</div>
-                        <button id="users-bulk-authorize" class="btn btn-primary btn-sm" onclick="bulkAuthorizeGitTrackingUpload(this)" disabled>一键授权 Git 追踪上传</button>
+                        <button id="users-bulk-authorize" class="btn btn-primary btn-sm" data-action="bulk-authorize-git-tracking" disabled>一键授权 Git 追踪上传</button>
                     </div>
                     <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="用户管理表，可横向滚动">
                         <table>
-                            <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" onchange="toggleAllGitTrackingUsers(this.checked)" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" data-action="toggle-all-git-tracking-users" data-action-event="change" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
                             <tbody id="users-table"><tr><td colspan="7">加载中...</td></tr></tbody>
                         </table>
                     </div>
@@ -305,11 +305,11 @@
                         <div class="page-title">部门</div>
                         <div class="page-subtitle">每个部门统计包含所有下级部门数据；管理员可逐层查看，开发者仅查看自己所属部门</div>
                     </div>
-                    <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
+                    <button class="btn btn-primary admin-only" data-action="show-create-department">+ 新增部门</button>
                 </div>
                 <div class="table-card">
                     <div style="display:flex;align-items:center;gap:0.75rem;padding:1rem 1rem 0.25rem;flex-wrap:wrap">
-                        <button id="departments-back" class="btn btn-sm" onclick="backDepartmentLevel()" style="display:none">← 上一级</button>
+                        <button id="departments-back" class="btn btn-sm" data-action="back-department-level" style="display:none">← 上一级</button>
                         <div>
                             <div id="departments-breadcrumb" style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap"><strong>全部部门</strong></div>
                         </div>
@@ -331,7 +331,7 @@
                         <div class="page-title">API 密钥管理</div>
                         <div class="page-subtitle">创建和管理 API 访问密钥</div>
                     </div>
-                    <button class="btn btn-primary" onclick="showCreateApiKeyModal()">+ 创建密钥</button>
+                    <button class="btn btn-primary" data-action="show-create-api-key">+ 创建密钥</button>
                 </div>
                 <div class="table-card">
                     <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="API 密钥管理表，可横向滚动">
@@ -351,7 +351,7 @@
                         <div class="page-title">CLI 版本发布</div>
                         <div class="page-subtitle">上传完整跨平台安装包，并安全更新企业版 latest 渠道</div>
                     </div>
-                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                    <button class="btn" data-action="refresh-section">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
@@ -366,14 +366,15 @@
                             <input id="release-files" class="form-input file-input" type="file" multiple
                                    data-max-file-bytes="__GITAI_RELEASE_FILE_MAX_BYTES__"
                                    data-max-total-bytes="__GITAI_RELEASE_TOTAL_MAX_BYTES__"
-                                   onchange="renderSelectedReleaseFiles()" />
+                                   data-action="render-selected-release-files"
+                                   data-action-event="change" />
                             <div class="form-hint">只需要选择六个平台二进制；单文件上限 __GITAI_RELEASE_FILE_MAX_MIB__ MiB，总计上限 __GITAI_RELEASE_TOTAL_MAX_MIB__ MiB。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
                         </div>
                     </div>
                     <div id="release-selected-files" class="selected-files">尚未选择文件</div>
                     <div class="publish-actions">
                         <label class="checkbox-label"><input id="release-promote-latest" type="checkbox" checked /> 发布后立即设为 latest</label>
-                        <button class="btn btn-primary" onclick="publishCliRelease(this)">上传并发布</button>
+                        <button class="btn btn-primary" data-action="publish-cli-release">上传并发布</button>
                     </div>
                     <div id="release-publish-status" class="publish-status"></div>
                 </div>
@@ -397,7 +398,7 @@
                         <div class="page-title">文件中心</div>
                         <div class="page-subtitle">管理文档、配置和压缩包的版本及稳定下载链接</div>
                     </div>
-                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                    <button class="btn" data-action="refresh-section">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
@@ -420,7 +421,8 @@
                             <label class="form-label" for="managed-file-upload">选择文件</label>
                             <input id="managed-file-upload" class="form-input file-input" type="file"
                                    data-max-file-bytes="__GITAI_MANAGED_FILE_MAX_BYTES__"
-                                   onchange="renderSelectedManagedFile()" />
+                                   data-action="render-selected-managed-file"
+                                   data-action-event="change" />
                             <div class="form-hint">单文件上限 __GITAI_MANAGED_FILE_MAX_MIB__ MiB；文件名不能包含路径分隔符。文件类型不设白名单。</div>
                         </div>
                         <div class="form-group publish-grid-wide">
@@ -434,7 +436,7 @@
                             <label class="checkbox-label"><input id="managed-file-public" type="checkbox" checked /> 公开下载（无需登录）</label>
                             <label class="checkbox-label"><input id="managed-file-publish-now" type="checkbox" checked /> 上传后立即发布为最新版</label>
                         </div>
-                        <button class="btn btn-primary" onclick="uploadManagedFile(this)">上传文件</button>
+                        <button class="btn btn-primary" data-action="upload-managed-file">上传文件</button>
                     </div>
                     <div id="managed-file-upload-status" class="publish-status"></div>
                 </div>
