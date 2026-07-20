@@ -36,7 +36,7 @@ function escapeAttributeSource() {
 
 function bootstrapSource() {
     const startMarker = 'function readDashboardBootstrap';
-    const endMarker = 'class ApiRequestError';
+    const endMarker = 'const dashboardBootstrap';
     const start = dashboardSource.indexOf(startMarker);
     const end = dashboardSource.indexOf(endMarker, start);
     assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
@@ -386,6 +386,22 @@ globalThis.bootstrapForTest = readDashboardBootstrap();`,
     assert.equal(parseBootstrap('{"isAdmin":"true"}').isAdmin, false);
     assert.equal(parseBootstrap('{invalid').isAdmin, false);
     assert.equal(parseBootstrap(null).isAdmin, false);
+});
+
+test('dashboard request infrastructure is loaded as an explicit module', () => {
+    assert.match(
+        dashboardSource,
+        /from '\.\/dashboard\/api\.js';/,
+    );
+    assert.match(
+        dashboardSource,
+        /createApiClient\(\{\s*fetchImpl: window\.fetch\.bind\(window\),\s*location: window\.location,/,
+    );
+    assert.doesNotMatch(dashboardSource, /class ApiRequestError/);
+    assert.match(
+        html,
+        /<script type="module" src="\/static\/dashboard\.js\?v=__GITAI_DASHBOARD_JS_VERSION__"><\/script>/,
+    );
 });
 
 test('dashboard action listeners are registered once per delegated event type', () => {

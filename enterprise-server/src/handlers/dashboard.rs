@@ -3200,6 +3200,7 @@ mod tests {
         for asset_path in [
             "dashboard.css",
             "dashboard.js",
+            "dashboard/api.js",
             "assets/vendor/chart.js/chart.umd.js",
         ] {
             let identity = app
@@ -3304,7 +3305,9 @@ mod tests {
             r#"src="/static/assets/vendor/chart.js/chart.umd.js?v={chart_version}""#
         )));
         assert!(html.contains(&format!(r#"href="/static/dashboard.css?v={css_version}""#)));
-        assert!(html.contains(&format!(r#"src="/static/dashboard.js?v={js_version}""#)));
+        assert!(html.contains(&format!(
+            r#"type="module" src="/static/dashboard.js?v={js_version}""#
+        )));
         assert!(html.contains(
             r#"<script type="application/json" id="dashboard-bootstrap">{"isAdmin":true}</script>"#
         ));
