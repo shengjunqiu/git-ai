@@ -17,6 +17,8 @@
 html, body { height: 100%; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
         background: var(--bg-primary); color: var(--text-primary); overflow: hidden; }
+.dashboard-role-member .admin-only,
+.dashboard-role-admin .member-only { display: none !important; }
 .layout { display: flex; height: 100vh; height: 100dvh; min-height: 100vh; overflow: hidden; }
 
 /* Sidebar */
@@ -176,6 +178,7 @@ tr:hover { background: var(--bg-card-hover); }
                   border-radius: 8px; color: var(--text-muted); font-size: 0.72rem; line-height: 1.65; }
 .selected-file-ok { color: var(--success); }
 .selected-file-missing { color: var(--danger); }
+.selected-file-summary { margin-top: 0.55rem; padding-top: 0.55rem; border-top: 1px solid var(--border); }
 .publish-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .checkbox-group { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .checkbox-label { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--text-secondary);
@@ -210,6 +213,7 @@ tr:hover { background: var(--bg-card-hover); }
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                   background: rgba(0,0,0,0.6); display: flex; align-items: center;
                   justify-content: center; z-index: 1000; }
+.department-row-action { cursor: pointer; }
 .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
           padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto; }
 .modal-title { font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; }

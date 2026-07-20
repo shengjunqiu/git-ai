@@ -1,3 +1,17 @@
+function readDashboardBootstrap() {
+    const element = document.getElementById('dashboard-bootstrap');
+    if (!element) return Object.freeze({ isAdmin: false });
+    try {
+        const value = JSON.parse(element.textContent || '{}');
+        return Object.freeze({ isAdmin: value?.isAdmin === true });
+    } catch {
+        return Object.freeze({ isAdmin: false });
+    }
+}
+
+const dashboardBootstrap = readDashboardBootstrap();
+const isAdmin = dashboardBootstrap.isAdmin;
+
 class ApiRequestError extends Error {
     constructor(message, { status = null, requestId = null, cause = null } = {}) {
         super(message, cause ? { cause } : undefined);
@@ -208,13 +222,6 @@ function escapeHtml(value) {
     div.textContent = value ?? '';
     return div.innerHTML;
 }
-function jsString(value) {
-    return JSON.stringify(String(value ?? ''))
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
 function escapeAttribute(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -380,9 +387,9 @@ function renderPaginationControls(key) {
     if (!container) return;
     const state = getTablePageState(key);
     replaceHtmlIfChanged(container, `
-        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'prev')" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
+        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="prev" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
         <span class="pagination-status">第 ${state.page} 页</span>
-        <button class="btn btn-sm" onclick="goToTablePage('${key}', 'next')" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
+        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="next" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
     `);
 }
 
@@ -483,19 +490,7 @@ function cancelOptionRequests() {
     optionRequestControllers.clear();
 }
 
-// Role-based UI: hide admin sections for non-admin users
-if (!isAdmin) {
-    document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
-    document.getElementById('admin-nav-section').style.display = 'none';
-    document.getElementById('admin-nav-users').style.display = 'none';
-    document.getElementById('admin-nav-apikeys').style.display = 'none';
-    const orgNavItem = document.getElementById('org-nav-item');
-    if (orgNavItem) orgNavItem.style.display = 'none';
-    const orgSection = document.getElementById('section-organizations');
-    if (orgSection) orgSection.style.display = 'none';
-    document.getElementById('gitai-status-card').style.display = '';
-    document.getElementById('developer-count-card').style.display = 'none';
-}
+// Role-based UI is rendered by the server and enforced before this script runs.
 document.getElementById('sidebar-gitai').style.display = 'none';
 
 const mobileNavigationMediaQuery = window.matchMedia('(max-width: 768px)');
@@ -682,12 +677,173 @@ function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } 
     loadSection(nextSection, { mode: RefreshMode.INITIAL });
 }
 
-function showSection(event, id) {
-    event.preventDefault();
-    if (!canAccessDashboardSection(id)) return false;
-    activateDashboardSection(id, { updateUrl: true });
-    closeMobileNavigation();
-    return false;
+function dashboardActionElement(event) {
+    return event.target?.closest?.('[data-action]') || null;
+}
+
+function handleDashboardAction(event) {
+    const actionElement = dashboardActionElement(event);
+    if (!actionElement) return;
+    const { action } = actionElement.dataset;
+    const actionEvent = actionElement.dataset.actionEvent || 'click';
+    if (event.type !== actionEvent) return;
+
+    switch (action) {
+        case 'navigate-section': {
+            event.preventDefault();
+            const section = actionElement.dataset.section;
+            if (!canAccessDashboardSection(section)) return;
+            activateDashboardSection(section, { updateUrl: true });
+            closeMobileNavigation();
+            break;
+        }
+        case 'logout':
+            window.location.href = '/logout';
+            break;
+        case 'refresh-section':
+            refreshCurrentSection();
+            break;
+        case 'table-page':
+            goToTablePage(
+                actionElement.dataset.tableKey,
+                actionElement.dataset.pageDirection,
+            );
+            break;
+        case 'change-developer-sorting':
+            changeDeveloperSorting();
+            break;
+        case 'show-developer-git-info':
+            showDeveloperGitInfo(actionElement.dataset.developerId);
+            break;
+        case 'show-create-user':
+            showCreateUserModal();
+            break;
+        case 'bulk-authorize-git-tracking':
+            bulkAuthorizeGitTrackingUpload(actionElement);
+            break;
+        case 'toggle-all-git-tracking-users':
+            toggleAllGitTrackingUsers(actionElement.checked);
+            break;
+        case 'toggle-git-tracking-user':
+            toggleGitTrackingUser(
+                actionElement.dataset.userId,
+                actionElement.checked,
+            );
+            break;
+        case 'set-git-tracking-authorization':
+            setGitTrackingUploadAuthorization(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+                actionElement.dataset.authorized === 'true',
+                actionElement,
+            );
+            break;
+        case 'show-create-api-key-for-user':
+            showCreateApiKeyForUser(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+            );
+            break;
+        case 'delete-user':
+            deleteUser(
+                actionElement.dataset.userId,
+                actionElement.dataset.userName,
+            );
+            break;
+        case 'show-create-department':
+            showCreateDepartmentModal();
+            break;
+        case 'back-department-level':
+            backDepartmentLevel();
+            break;
+        case 'open-department-level':
+            openDepartmentLevel(actionElement.dataset.departmentId || null);
+            break;
+        case 'show-create-api-key':
+            showCreateApiKeyModal();
+            break;
+        case 'revoke-api-key':
+            revokeApiKey(
+                actionElement.dataset.apiKeyId,
+                actionElement.dataset.apiKeyName,
+            );
+            break;
+        case 'render-selected-release-files':
+            renderSelectedReleaseFiles();
+            break;
+        case 'publish-cli-release':
+            publishCliRelease(actionElement);
+            break;
+        case 'promote-cli-release':
+            promoteCliRelease(
+                actionElement.dataset.version,
+                actionElement.dataset.checksum,
+            );
+            break;
+        case 'render-selected-managed-file':
+            renderSelectedManagedFile();
+            break;
+        case 'upload-managed-file':
+            uploadManagedFile(actionElement);
+            break;
+        case 'copy-published-url':
+            copyPublishedUrl(actionElement.dataset.path);
+            break;
+        case 'publish-managed-file-version':
+            publishManagedFileVersion(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.version,
+            );
+            break;
+        case 'delete-managed-file-version':
+            deleteManagedFileVersion(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.version,
+            );
+            break;
+        case 'show-edit-managed-file':
+            showEditManagedFileModal(
+                actionElement.dataset.fileSlug,
+                actionElement.dataset.fileName,
+                actionElement.dataset.fileDescription,
+                actionElement.dataset.filePublic === 'true',
+            );
+            break;
+        case 'close-modal-backdrop':
+            if (event.target === actionElement) closeModal();
+            break;
+        case 'close-modal':
+            closeModal();
+            break;
+        case 'create-user':
+            createUser();
+            break;
+        case 'create-department':
+            createDepartment();
+            break;
+        case 'copy-api-key':
+            copyKey();
+            break;
+        case 'create-api-key':
+            createApiKey();
+            break;
+        case 'create-api-key-for-user':
+            createApiKeyForUser();
+            break;
+        case 'save-managed-file-settings':
+            saveManagedFileSettings();
+            break;
+        case 'copy-help-command':
+            copyHelpCommand(actionElement);
+            break;
+        default:
+            break;
+    }
+}
+
+function initializeDashboardActions() {
+    document.addEventListener('click', handleDashboardAction);
+    document.addEventListener('change', handleDashboardAction);
 }
 
 window.addEventListener('popstate', () => {
@@ -782,7 +938,7 @@ async function performSectionLoad(id, { mode, controller }) {
         apikeys: loadApiKeys,
         releases: loadReleaseManagement,
         files: loadManagedFiles,
-        help: async () => {},
+        help: loadHelp,
     };
     try {
         await loaders[id]({ mode, signal: controller.signal });
@@ -845,6 +1001,38 @@ async function copyHelpText(text) {
     const copied = document.execCommand('copy');
     textarea.remove();
     if (!copied) throw new Error('Copy command was rejected');
+}
+
+// --- Lazy help content ---
+let helpContentLoaded = false;
+
+function scrollToHelpHash() {
+    const targetId = window.location.hash.slice(1);
+    if (!targetId.startsWith('help-')) return;
+    requestAnimationFrame(() => document.getElementById(targetId)?.scrollIntoView());
+}
+
+async function loadHelp({ signal, mode }) {
+    const container = document.getElementById('help-content');
+    if (!container) {
+        throw new InvalidResponseError('帮助内容容器不存在');
+    }
+    if (helpContentLoaded || container.dataset.loaded === 'true') {
+        if (!isSilentRefresh({ mode })) scrollToHelpHash();
+        return;
+    }
+
+    container.setAttribute('aria-busy', 'true');
+    const data = await apiRequest('/api/v1/dashboard/help', { signal });
+    if (typeof data?.html !== 'string' || !data.html.trim()) {
+        throw new InvalidResponseError('服务器返回了无效的帮助内容');
+    }
+
+    replaceHtmlIfChanged(container, data.html);
+    container.dataset.loaded = 'true';
+    container.removeAttribute('aria-busy');
+    helpContentLoaded = true;
+    if (!isSilentRefresh({ mode })) scrollToHelpHash();
 }
 
 // --- Time range helper ---
@@ -1291,7 +1479,7 @@ async function loadDevs({ signal, mode }) {
             const emailDisplay = escapeHtml(dev.email || '—');
             const nameDisplay = escapeHtml(dev.name || '');
             const departmentDisplay = escapeHtml(dev.department || '未设置');
-            const actionDevId = jsString(devId);
+            const actionDevId = escapeAttribute(devId);
             const label = dev.name && dev.name !== dev.email
                 ? `<strong>${nameDisplay}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${emailDisplay}</span>`
                 : `<strong>${emailDisplay}</strong>`;
@@ -1309,7 +1497,7 @@ async function loadDevs({ signal, mode }) {
                 <td>${fmt(ai)}</td>
                 <td>${fmt(dev.human_added_lines)}</td>
                 <td>${pctBar(dev.pct_ai)} <span style="font-size:0.8rem">${clampPercent(dev.pct_ai).toFixed(1)}%</span></td>
-                <td><button class="btn btn-sm" onclick="showDeveloperGitInfo(${actionDevId})">Git 信息</button></td>
+                <td><button class="btn btn-sm" data-action="show-developer-git-info" data-developer-id="${actionDevId}">Git 信息</button></td>
             </tr>`;
         }).join('');
         developerGitInfo = nextDeveloperGitInfo;
@@ -1344,7 +1532,7 @@ function showDeveloperGitInfo(devId) {
         : '<div class="empty-state"><div class="empty-icon">ℹ️</div><p>暂无 Git 用户名和邮箱信息</p></div>';
 
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">Git 信息</div>
             <div class="detail-list">
@@ -1355,7 +1543,7 @@ function showDeveloperGitInfo(devId) {
             <div class="form-label">Git 用户名和邮箱</div>
             <div class="git-identity-list">${gitList}</div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
+                <button class="btn" data-action="close-modal">关闭</button>
             </div>
         </div>
     </div>`;
@@ -1474,25 +1662,25 @@ async function loadUsers({ signal, mode }) {
             const created = u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '—';
             const displayName = escapeHtml(u.name || '—');
             const displayEmail = escapeHtml(u.email || '');
-            const actionName = jsString(u.name || u.email || '');
-            const actionUserId = jsString(u.id);
+            const actionName = escapeAttribute(u.name || u.email || '');
             const userIdAttribute = escapeAttribute(u.id);
+            const selectionLabel = escapeAttribute(`选择${u.name || '—'}`);
             const uploadEnabled = u.git_tracking_upload_enabled === true;
             const uploadStatus = uploadEnabled
                 ? '<span class="badge active">已授权</span>'
                 : '<span class="badge revoked">未授权</span>';
             const selected = !uploadEnabled && selectedGitTrackingUserIds.has(u.id);
             return `<tr>
-                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser(${actionUserId}, this.checked)" ${uploadEnabled ? 'disabled' : ''} ${selected ? 'checked' : ''} /></td>
+                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="${selectionLabel}" data-action="toggle-git-tracking-user" data-action-event="change" data-user-id="${userIdAttribute}" ${uploadEnabled ? 'disabled' : ''} ${selected ? 'checked' : ''} /></td>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
                 <td>${uploadStatus}</td>
                 <td>${keyCount > 0 ? keyBadges + moreKeys : '<span style="color:var(--text-muted)">无密钥</span>'}</td>
                 <td>${created}</td>
                 <td>
-                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" onclick="setGitTrackingUploadAuthorization(${actionUserId}, ${actionName}, ${!uploadEnabled}, this)">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
-                    <button class="btn btn-sm" onclick="showCreateApiKeyForUser(${actionUserId}, ${actionName})">🔑 创建密钥</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${actionUserId}, ${actionName})">删除</button>
+                    <button class="btn btn-sm ${uploadEnabled ? 'btn-danger' : 'btn-primary'}" data-action="set-git-tracking-authorization" data-user-id="${userIdAttribute}" data-user-name="${actionName}" data-authorized="${!uploadEnabled}">${uploadEnabled ? '撤销上传' : '授权上传'}</button>
+                    <button class="btn btn-sm" data-action="show-create-api-key-for-user" data-user-id="${userIdAttribute}" data-user-name="${actionName}">🔑 创建密钥</button>
+                    <button class="btn btn-sm btn-danger" data-action="delete-user" data-user-id="${userIdAttribute}" data-user-name="${actionName}">删除</button>
                 </td>
             </tr>`;
         }).join('');
@@ -1588,7 +1776,7 @@ async function setGitTrackingUploadAuthorization(userId, userName, authorized, b
 
 function showCreateUserModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">创建用户</div>
             <div class="form-group">
@@ -1622,8 +1810,8 @@ function showCreateUserModal() {
                 </label>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">取消</button>
-                <button class="btn btn-primary" onclick="createUser()">创建</button>
+                <button class="btn" data-action="close-modal">取消</button>
+                <button class="btn btn-primary" data-action="create-user">创建</button>
             </div>
         </div>
     </div>`;
@@ -1962,14 +2150,14 @@ function renderDepartmentBreadcrumb() {
     trail.reverse();
 
     const parts = [activeDepartmentParentId
-        ? '<button class="btn btn-sm" onclick="openDepartmentLevel(null)">全部部门</button>'
+        ? '<button class="btn btn-sm" data-action="open-department-level">全部部门</button>'
         : '<strong>全部部门</strong>'];
     trail.forEach((dept, index) => {
         parts.push('<span style="color:var(--text-muted)">/</span>');
         if (index === trail.length - 1) {
             parts.push(`<strong>${escapeHtml(dept.department || '—')}</strong>`);
         } else {
-            parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel(${jsString(dept.id)})">${escapeHtml(dept.department || '—')}</button>`);
+            parts.push(`<button class="btn btn-sm" data-action="open-department-level" data-department-id="${escapeAttribute(dept.id)}">${escapeHtml(dept.department || '—')}</button>`);
         }
     });
     replaceHtmlIfChanged(breadcrumb, parts.join(' '));
@@ -2007,7 +2195,7 @@ function renderDepartmentLevel() {
             const orgName = escapeHtml(dept.organization || '—');
             const nodeIcon = isAdmin && dept.has_children ? '›' : '•';
             const rowAction = isAdmin && dept.has_children
-                ? ` onclick="openDepartmentLevel(${jsString(dept.id)})" style="cursor:pointer"`
+                ? ` class="department-row-action" data-action="open-department-level" data-department-id="${escapeAttribute(dept.id)}"`
                 : '';
             const total = dept.w_total || 0;
             const pct = clampPercent(departmentAiPercentage(dept) * 100);
@@ -2036,7 +2224,7 @@ function departmentAiPercentage(department) {
 
 async function showCreateDepartmentModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">新增部门</div>
             <div class="form-group">
@@ -2064,8 +2252,8 @@ async function showCreateDepartmentModal() {
                 <div id="create-dept-parent-status" class="option-search-status" role="status" aria-live="polite">请先选择组织</div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">取消</button>
-                <button class="btn btn-primary" onclick="createDepartment()">新增</button>
+                <button class="btn" data-action="close-modal">取消</button>
+                <button class="btn btn-primary" data-action="create-department">新增</button>
             </div>
         </div>
     </div>`;
@@ -2266,7 +2454,8 @@ async function loadApiKeys({ signal, mode }) {
             const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未使用';
             const scopes = (k.scopes || []).map(s => `<span class="badge role" style="margin:0.1rem">${escapeHtml(s)}</span>`).join(' ');
             const keyName = escapeHtml(k.name || '未命名');
-            const actionName = jsString(k.name || k.key_prefix || '');
+            const actionName = escapeAttribute(k.name || k.key_prefix || '');
+            const actionKeyId = escapeAttribute(k.id);
             return `<tr>
                 <td><strong>${keyName}</strong></td>
                 <td><code style="color:var(--accent);font-size:0.8rem">${escapeHtml(k.key_prefix)}...</code></td>
@@ -2274,7 +2463,7 @@ async function loadApiKeys({ signal, mode }) {
                 <td>${created}</td>
                 <td>${expires}</td>
                 <td style="font-size:0.8rem">${lastUsed}</td>
-                <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey(${jsString(k.id)}, ${actionName})">撤销</button></td>
+                <td><button class="btn btn-sm btn-danger" data-action="revoke-api-key" data-api-key-id="${actionKeyId}" data-api-key-name="${actionName}">撤销</button></td>
             </tr>`;
         }).join('');
         replaceHtmlIfChanged(document.getElementById('apikeys-table'), nextHtml);
@@ -2287,7 +2476,7 @@ async function loadApiKeys({ signal, mode }) {
 
 function showCreateApiKeyModal() {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">创建 API 密钥</div>
             <div class="form-group">
@@ -2314,12 +2503,12 @@ function showCreateApiKeyModal() {
             <div id="new-key-result" style="display:none">
                 <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
                 <div class="api-key-display" id="new-key-value">
-                    <button class="copy-btn" onclick="copyKey()">复制</button>
+                    <button class="copy-btn" data-action="copy-api-key">复制</button>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
-                <button class="btn btn-primary" id="create-key-btn" onclick="createApiKey()">创建</button>
+                <button class="btn" data-action="close-modal">关闭</button>
+                <button class="btn btn-primary" id="create-key-btn" data-action="create-api-key">创建</button>
             </div>
         </div>
     </div>`;
@@ -2328,7 +2517,7 @@ function showCreateApiKeyModal() {
 function showCreateApiKeyForUser(userId, userName) {
     const safeUserName = escapeHtml(userName);
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">为用户「${safeUserName}」创建 API 密钥</div>
             <input type="hidden" id="create-key-user-id" value="${escapeAttribute(userId)}" />
@@ -2356,12 +2545,12 @@ function showCreateApiKeyForUser(userId, userName) {
             <div id="new-key-result" style="display:none">
                 <div class="form-label" style="color:var(--warning);margin-top:1rem">⚠️ 请妥善保存此密钥，关闭后将无法再次查看</div>
                 <div class="api-key-display" id="new-key-value">
-                    <button class="copy-btn" onclick="copyKey()">复制</button>
+                    <button class="copy-btn" data-action="copy-api-key">复制</button>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn" onclick="closeModal()">关闭</button>
-                <button class="btn btn-primary" id="create-key-btn" onclick="createApiKeyForUser()">创建</button>
+                <button class="btn" data-action="close-modal">关闭</button>
+                <button class="btn btn-primary" id="create-key-btn" data-action="create-api-key-for-user">创建</button>
             </div>
         </div>
     </div>`;
@@ -2459,6 +2648,12 @@ const REQUIRED_RELEASE_FILES = [
     'git-ai-macos-x64',
     'git-ai-macos-arm64',
 ];
+const BYTES_PER_MIB = 1024 * 1024;
+const DEFAULT_RELEASE_FILE_MAX_BYTES = 100 * BYTES_PER_MIB;
+const DEFAULT_RELEASE_TOTAL_MAX_BYTES = 500 * BYTES_PER_MIB;
+const DEFAULT_MANAGED_FILE_MAX_BYTES = 500 * BYTES_PER_MIB;
+const UPLOAD_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const activeUploads = new Map();
 
 function formatBytes(value) {
     const bytes = Number(value || 0);
@@ -2468,17 +2663,231 @@ function formatBytes(value) {
     return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function inputUploadLimit(input, datasetKey, fallback) {
+    const value = Number(input?.dataset?.[datasetKey]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function utf8ByteLength(value) {
+    return new TextEncoder().encode(String(value ?? '')).length;
+}
+
+function isValidUploadVersion(value) {
+    const version = String(value ?? '').trim();
+    return version !== '.'
+        && version !== '..'
+        && utf8ByteLength(version) <= 80
+        && /^[A-Za-z0-9._+-]+$/.test(version);
+}
+
+function isSafeUploadFilename(value) {
+    const filename = String(value ?? '').trim();
+    return Boolean(filename)
+        && filename !== '.'
+        && filename !== '..'
+        && utf8ByteLength(filename) <= 240
+        && !filename.includes('/')
+        && !filename.includes('\\')
+        && !filename.includes('\0');
+}
+
+function managedFileExtension(filename) {
+    const normalized = String(filename ?? '').trim().toLowerCase();
+    if (normalized.endsWith('.tar.gz')) return '.tar.gz';
+    const separator = normalized.lastIndexOf('.');
+    return separator > 0 && separator < normalized.length - 1
+        ? normalized.slice(separator)
+        : '无扩展名';
+}
+
+function analyzeReleaseFiles(
+    files,
+    {
+        maxFileBytes = DEFAULT_RELEASE_FILE_MAX_BYTES,
+        maxTotalBytes = DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+    } = {},
+) {
+    const selectedFiles = Array.from(files || []);
+    const filesByName = new Map();
+    const nameCounts = new Map();
+    selectedFiles.forEach(file => {
+        if (!filesByName.has(file.name)) filesByName.set(file.name, file);
+        nameCounts.set(file.name, (nameCounts.get(file.name) || 0) + 1);
+    });
+    const missing = REQUIRED_RELEASE_FILES.filter(filename => !filesByName.has(filename));
+    const unexpected = selectedFiles
+        .filter(file => !REQUIRED_RELEASE_FILES.includes(file.name))
+        .map(file => file.name);
+    const duplicates = Array.from(nameCounts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([filename]) => filename);
+    const empty = selectedFiles.filter(file => file.size === 0).map(file => file.name);
+    const oversized = selectedFiles
+        .filter(file => file.size > maxFileBytes)
+        .map(file => file.name);
+    const totalBytes = selectedFiles.reduce((total, file) => total + Number(file.size || 0), 0);
+    const valid = selectedFiles.length === REQUIRED_RELEASE_FILES.length
+        && missing.length === 0
+        && unexpected.length === 0
+        && duplicates.length === 0
+        && empty.length === 0
+        && oversized.length === 0
+        && totalBytes <= maxTotalBytes;
+
+    return {
+        duplicates,
+        empty,
+        files: selectedFiles,
+        filesByName,
+        maxFileBytes,
+        maxTotalBytes,
+        missing,
+        oversized,
+        totalBytes,
+        unexpected,
+        valid,
+    };
+}
+
+function releaseSelectionError(analysis) {
+    if (analysis.valid) return '';
+    const issues = [];
+    if (analysis.files.length !== REQUIRED_RELEASE_FILES.length) {
+        issues.push(`必须选择 ${REQUIRED_RELEASE_FILES.length} 个文件`);
+    }
+    if (analysis.missing.length) issues.push(`缺少：${analysis.missing.join('、')}`);
+    if (analysis.unexpected.length) issues.push(`文件名不正确：${analysis.unexpected.join('、')}`);
+    if (analysis.duplicates.length) issues.push(`文件名重复：${analysis.duplicates.join('、')}`);
+    if (analysis.empty.length) issues.push(`空文件：${analysis.empty.join('、')}`);
+    if (analysis.oversized.length) {
+        issues.push(
+            `单文件超过 ${formatBytes(analysis.maxFileBytes)}：${analysis.oversized.join('、')}`,
+        );
+    }
+    if (analysis.totalBytes > analysis.maxTotalBytes) {
+        issues.push(`总大小超过 ${formatBytes(analysis.maxTotalBytes)}`);
+    }
+    return issues.join('；');
+}
+
+function analyzeManagedFiles(
+    files,
+    { maxFileBytes = DEFAULT_MANAGED_FILE_MAX_BYTES } = {},
+) {
+    const selectedFiles = Array.from(files || []);
+    const file = selectedFiles[0] || null;
+    const invalidName = Boolean(file && !isSafeUploadFilename(file.name));
+    const empty = Boolean(file && file.size === 0);
+    const oversized = Boolean(file && file.size > maxFileBytes);
+    return {
+        empty,
+        extension: file ? managedFileExtension(file.name) : '',
+        file,
+        files: selectedFiles,
+        invalidName,
+        maxFileBytes,
+        oversized,
+        valid: selectedFiles.length === 1 && !invalidName && !empty && !oversized,
+    };
+}
+
+function managedSelectionError(analysis) {
+    if (analysis.valid) return '';
+    if (analysis.files.length !== 1) return '每次必须且只能选择一个文件';
+    if (analysis.invalidName) return '文件名无效或超过 240 字节';
+    if (analysis.empty) return '不能上传空文件';
+    if (analysis.oversized) {
+        return `文件超过 ${formatBytes(analysis.maxFileBytes)} 上限`;
+    }
+    return '文件无效';
+}
+
+function beginUpload(key, button, busyLabel) {
+    if (activeUploads.has(key)) return false;
+    activeUploads.set(key, {
+        button,
+        label: button?.textContent || '',
+    });
+    if (button) {
+        button.disabled = true;
+        button.textContent = busyLabel;
+    }
+    return true;
+}
+
+function finishUpload(key) {
+    const operation = activeUploads.get(key);
+    if (!operation) return;
+    if (operation.button) {
+        operation.button.disabled = false;
+        operation.button.textContent = operation.label;
+    }
+    activeUploads.delete(key);
+}
+
+function warnBeforeLeavingDuringUpload(event) {
+    if (activeUploads.size === 0) return;
+    event.preventDefault();
+    event.returnValue = '';
+}
+
 function renderSelectedReleaseFiles() {
     const input = document.getElementById('release-files');
     const target = document.getElementById('release-selected-files');
     if (!input || !target) return;
-    const selected = new Map(Array.from(input.files || []).map(file => [file.name, file]));
-    target.innerHTML = REQUIRED_RELEASE_FILES.map(filename => {
-        const file = selected.get(filename);
+    const analysis = analyzeReleaseFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_RELEASE_FILE_MAX_BYTES,
+        ),
+        maxTotalBytes: inputUploadLimit(
+            input,
+            'maxTotalBytes',
+            DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+        ),
+    });
+    const fileRows = REQUIRED_RELEASE_FILES.map(filename => {
+        const file = analysis.filesByName.get(filename);
         return file
             ? `<span class="selected-file-ok">✓ ${escapeHtml(filename)}（${formatBytes(file.size)}）</span>`
             : `<span class="selected-file-missing">缺少 ${escapeHtml(filename)}</span>`;
     }).join('<br>');
+    const unexpectedRows = analysis.unexpected
+        .map(filename => `<span class="selected-file-missing">文件名不正确：${escapeHtml(filename)}</span>`)
+        .join('<br>');
+    const summaryClass = analysis.valid ? 'selected-file-ok' : 'selected-file-missing';
+    target.innerHTML = `${fileRows}${unexpectedRows ? `<br>${unexpectedRows}` : ''}
+        <div class="selected-file-summary ${summaryClass}">
+            已选择 ${analysis.files.length}/${REQUIRED_RELEASE_FILES.length} 个文件 ·
+            总计 ${formatBytes(analysis.totalBytes)} / ${formatBytes(analysis.maxTotalBytes)}
+            ${analysis.valid ? ' · 可以上传' : ` · ${escapeHtml(releaseSelectionError(analysis))}`}
+        </div>`;
+}
+
+function renderSelectedManagedFile() {
+    const input = document.getElementById('managed-file-upload');
+    const target = document.getElementById('managed-file-selected');
+    if (!input || !target) return;
+    const analysis = analyzeManagedFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_MANAGED_FILE_MAX_BYTES,
+        ),
+    });
+    if (!analysis.file) {
+        target.textContent = '尚未选择文件';
+        return;
+    }
+    const stateClass = analysis.valid ? 'selected-file-ok' : 'selected-file-missing';
+    target.innerHTML = `<span class="${stateClass}">
+        ${analysis.valid ? '✓' : '⚠'} ${escapeHtml(analysis.file.name)}
+        · ${formatBytes(analysis.file.size)}
+        · 扩展名 ${escapeHtml(analysis.extension)}
+        · 上限 ${formatBytes(analysis.maxFileBytes)}
+        ${analysis.valid ? '' : ` · ${escapeHtml(managedSelectionError(analysis))}`}
+    </span>`;
 }
 
 async function loadReleaseManagement({ signal, mode }) {
@@ -2530,10 +2939,10 @@ async function loadReleaseManagement({ signal, mode }) {
                 .join('<br>');
             const actions = [];
             if (isPublished && !isLatest) {
-                actions.push(`<button class="btn btn-sm btn-primary" onclick="promoteCliRelease(${jsString(version)}, ${jsString(checksum)})">设为 latest</button>`);
+                actions.push(`<button class="btn btn-sm btn-primary" data-action="promote-cli-release" data-version="${escapeAttribute(version)}" data-checksum="${escapeAttribute(checksum)}">设为 latest</button>`);
             }
             if (isPublished) {
-                actions.push(`<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/worker/releases/${version}/download/install.sh`)})">复制安装链接</button>`);
+                actions.push(`<button class="btn btn-sm" data-action="copy-published-url" data-path="${escapeAttribute(`/worker/releases/${version}/download/install.sh`)}">复制安装链接</button>`);
             }
             return `<tr>
                 <td><strong>${escapeHtml(version)}</strong></td>
@@ -2550,32 +2959,44 @@ async function publishCliRelease(button) {
     const version = document.getElementById('release-version').value.trim();
     const input = document.getElementById('release-files');
     const status = document.getElementById('release-publish-status');
-    const selectedFiles = Array.from(input.files || []);
-    const selectedNames = new Set(selectedFiles.map(file => file.name));
-    const missing = REQUIRED_RELEASE_FILES.filter(filename => !selectedNames.has(filename));
-    const unexpected = selectedFiles.filter(file => !REQUIRED_RELEASE_FILES.includes(file.name)).map(file => file.name);
-    if (!version) {
-        showToast('请填写版本号', 'error');
+    const analysis = analyzeReleaseFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_RELEASE_FILE_MAX_BYTES,
+        ),
+        maxTotalBytes: inputUploadLimit(
+            input,
+            'maxTotalBytes',
+            DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+        ),
+    });
+    if (!isValidUploadVersion(version)) {
+        showToast('版本号只能使用字母、数字、点、短横线、下划线和加号', 'error');
         return;
     }
-    if (missing.length || unexpected.length || selectedFiles.length !== REQUIRED_RELEASE_FILES.length) {
-        showToast(`发布文件不完整${missing.length ? `，缺少：${missing.join('、')}` : ''}${unexpected.length ? `，多余：${unexpected.join('、')}` : ''}`, 'error');
+    const selectionError = releaseSelectionError(analysis);
+    if (selectionError) {
+        showToast(selectionError, 'error');
         renderSelectedReleaseFiles();
+        return;
+    }
+    if (!beginUpload('release', button, '正在上传...')) {
+        showToast('CLI 发布正在进行，请勿重复提交', 'error');
         return;
     }
 
     const data = new FormData();
     data.append('version', version);
     data.append('promote_to_latest', document.getElementById('release-promote-latest').checked ? 'true' : 'false');
-    selectedFiles.forEach(file => data.append('files', file, file.name));
-    button.disabled = true;
+    analysis.files.forEach(file => data.append('files', file, file.name));
     status.className = 'publish-status';
-    status.textContent = '正在上传并校验完整发布包，请不要关闭页面...';
+    status.textContent = `正在上传并校验 ${analysis.files.length} 个文件（共 ${formatBytes(analysis.totalBytes)}），请不要关闭页面...`;
     try {
         const result = await apiRequest('/api/admin/releases/publish', {
             method: 'POST',
             body: data,
-            timeoutMs: 120000,
+            timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
         });
         status.className = 'publish-status success';
         status.textContent = `版本 ${result.version} 发布成功${result.latest_updated ? '，latest 已更新' : ''}`;
@@ -2588,7 +3009,7 @@ async function publishCliRelease(button) {
         status.textContent = error.message || '发布失败';
         showToast(status.textContent, 'error');
     } finally {
-        button.disabled = false;
+        finishUpload('release');
     }
 }
 
@@ -2621,6 +3042,9 @@ async function loadManagedFiles({ signal, mode }) {
         const files = result.files || [];
         const nextHtml = files.map(file => {
             const isPublic = file.is_public === true;
+            const fileSlugAttribute = escapeAttribute(file.slug);
+            const fileNameAttribute = escapeAttribute(file.name);
+            const fileDescriptionAttribute = escapeAttribute(file.description || '');
             const versions = (file.versions || []).slice().sort((a, b) =>
                 b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: 'base' }));
             const versionList = versions.map(version => {
@@ -2633,11 +3057,14 @@ async function loadManagedFiles({ signal, mode }) {
             }).join('');
             const fixedLinkActions = versions
                 .filter(version => version.published_at)
-                .map(version => `<button class="btn btn-sm" onclick="copyPublishedUrl(${jsString(`/files/${file.slug}/${version.version}/download`)})">复制 ${escapeHtml(version.version)} 固定链接</button>`)
+                .map(version => `<button class="btn btn-sm" data-action="copy-published-url" data-path="${escapeAttribute(`/files/${file.slug}/${version.version}/download`)}">复制 ${escapeHtml(version.version)} 固定链接</button>`)
                 .join('');
             const versionActions = versions
                 .filter(version => version.version !== file.current_version)
-                .map(version => `<button class="btn btn-sm" onclick="publishManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">发布 ${escapeHtml(version.version)}</button><button class="btn btn-sm btn-danger" onclick="deleteManagedFileVersion(${jsString(file.slug)}, ${jsString(version.version)})">删除 ${escapeHtml(version.version)}</button>`)
+                .map(version => {
+                    const versionAttribute = escapeAttribute(version.version);
+                    return `<button class="btn btn-sm" data-action="publish-managed-file-version" data-file-slug="${fileSlugAttribute}" data-version="${versionAttribute}">发布 ${escapeHtml(version.version)}</button><button class="btn btn-sm btn-danger" data-action="delete-managed-file-version" data-file-slug="${fileSlugAttribute}" data-version="${versionAttribute}">删除 ${escapeHtml(version.version)}</button>`;
+                })
                 .join('');
             return `<tr>
                 <td><strong>${escapeHtml(file.name)}</strong><br><code style="color:var(--accent);font-size:0.72rem">${escapeHtml(file.slug)}</code><br><span style="color:var(--text-muted);font-size:0.7rem">${escapeHtml(file.description || '')}</span></td>
@@ -2645,8 +3072,8 @@ async function loadManagedFiles({ signal, mode }) {
                 <td><div class="version-list">${versionList || '暂无版本'}</div></td>
                 <td>${isPublic ? '<span class="badge active">公开</span>' : '<span class="badge role">登录后下载</span>'}</td>
                 <td><div class="action-group">
-                    ${file.current_version ? `<button class="btn btn-sm btn-primary" onclick="copyPublishedUrl(${jsString(file.latest_download_url)})">复制下载链接</button>` : ''}
-                    <button class="btn btn-sm" onclick="showEditManagedFileModal(${jsString(file.slug)}, ${jsString(file.name)}, ${jsString(file.description || '')}, ${isPublic})">设置</button>
+                    ${file.current_version ? `<button class="btn btn-sm btn-primary" data-action="copy-published-url" data-path="${escapeAttribute(file.latest_download_url)}">复制下载链接</button>` : ''}
+                    <button class="btn btn-sm" data-action="show-edit-managed-file" data-file-slug="${fileSlugAttribute}" data-file-name="${fileNameAttribute}" data-file-description="${fileDescriptionAttribute}" data-file-public="${isPublic}">设置</button>
                     ${fixedLinkActions}
                     ${versionActions}
                 </div></td>
@@ -2661,10 +3088,35 @@ async function uploadManagedFile(button) {
     const version = document.getElementById('managed-file-version').value.trim();
     const description = document.getElementById('managed-file-description').value.trim();
     const input = document.getElementById('managed-file-upload');
-    const file = input.files?.[0];
     const status = document.getElementById('managed-file-upload-status');
+    const analysis = analyzeManagedFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_MANAGED_FILE_MAX_BYTES,
+        ),
+    });
+    const file = analysis.file;
     if (!name || !slug || !version || !file) {
         showToast('请填写名称、文件标识、版本号并选择文件', 'error');
+        return;
+    }
+    if (!/^[a-z0-9_-]{1,80}$/.test(slug)) {
+        showToast('文件标识只能使用小写字母、数字、短横线和下划线', 'error');
+        return;
+    }
+    if (!isValidUploadVersion(version)) {
+        showToast('版本号只能使用字母、数字、点、短横线、下划线和加号', 'error');
+        return;
+    }
+    const selectionError = managedSelectionError(analysis);
+    if (selectionError) {
+        showToast(selectionError, 'error');
+        renderSelectedManagedFile();
+        return;
+    }
+    if (!beginUpload('managed-file', button, '正在上传...')) {
+        showToast('文件上传正在进行，请勿重复提交', 'error');
         return;
     }
 
@@ -2675,14 +3127,13 @@ async function uploadManagedFile(button) {
     data.append('description', description);
     data.append('is_public', document.getElementById('managed-file-public').checked ? 'true' : 'false');
     data.append('file', file, file.name);
-    button.disabled = true;
     status.className = 'publish-status';
-    status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}）...`;
+    status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}，${analysis.extension}）...`;
     try {
         const result = await apiRequest('/api/admin/files/upload', {
             method: 'POST',
             body: data,
-            timeoutMs: 120000,
+            timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
         });
         if (document.getElementById('managed-file-publish-now').checked) {
             await apiRequest(`/api/admin/files/${encodeURIComponent(result.slug)}/publish`, {
@@ -2695,13 +3146,14 @@ async function uploadManagedFile(button) {
         status.textContent = `文件 ${result.filename} ${document.getElementById('managed-file-publish-now').checked ? '上传并发布' : '上传为草稿'}成功`;
         showToast(status.textContent, 'success');
         input.value = '';
+        renderSelectedManagedFile();
         await loadSection('files');
     } catch (error) {
         status.className = 'publish-status error';
         status.textContent = error.message || '上传失败';
         showToast(status.textContent, 'error');
     } finally {
-        button.disabled = false;
+        finishUpload('managed-file');
     }
 }
 
@@ -2736,14 +3188,14 @@ async function deleteManagedFileVersion(slug, version) {
 
 function showEditManagedFileModal(slug, name, description, isPublic) {
     document.getElementById('modal-container').innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal-overlay" data-action="close-modal-backdrop">
         <div class="modal">
             <div class="modal-title">文件设置</div>
             <div class="form-group"><label class="form-label">文件标识</label><input id="edit-file-slug" class="form-input" value="${escapeAttribute(slug)}" disabled /></div>
             <div class="form-group"><label class="form-label">显示名称</label><input id="edit-file-name" class="form-input" value="${escapeAttribute(name)}" /></div>
             <div class="form-group"><label class="form-label">说明</label><input id="edit-file-description" class="form-input" value="${escapeAttribute(description)}" /></div>
             <label class="checkbox-label"><input id="edit-file-public" type="checkbox" ${isPublic ? 'checked' : ''} /> 公开下载（无需登录）</label>
-            <div class="form-actions"><button class="btn" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveManagedFileSettings()">保存</button></div>
+            <div class="form-actions"><button class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" data-action="save-managed-file-settings">保存</button></div>
         </div>
     </div>`;
 }
@@ -2790,8 +3242,10 @@ function closeModal() {
 }
 
 // --- Init ---
+initializeDashboardActions();
 initializeMobileNavigation();
 document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
+window.addEventListener('beforeunload', warnBeforeLeavingDuringUpload);
 const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);

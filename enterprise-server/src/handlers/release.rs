@@ -5,7 +5,7 @@ use axum::response::{Json, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::auth::middleware::{AdminGuard, OptionalAuth};
 use crate::error::AppError;
@@ -229,6 +229,10 @@ pub async fn upload_release_asset(
 const INSTALL_SH_TEMPLATE: &str = include_str!("../../../install.sh");
 const INSTALL_PS1_TEMPLATE: &str = include_str!("../../../install.ps1");
 
+pub(crate) const RELEASE_BINARY_MAX_BYTES: usize = 100 * 1024 * 1024;
+pub(crate) const RELEASE_UPLOAD_MAX_BYTES: usize = 500 * 1024 * 1024;
+pub(crate) const RELEASE_UPLOAD_BODY_MAX_BYTES: usize = 512 * 1024 * 1024;
+
 const RELEASE_BINARY_FILES: [&str; 6] = [
     "git-ai-linux-x64",
     "git-ai-linux-arm64",
@@ -258,6 +262,7 @@ pub async fn publish_release_bundle(
     let mut version = String::new();
     let mut promote_to_latest = true;
     let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut total_file_bytes = 0;
 
     while let Some(field) = multipart
         .next_field()
@@ -284,6 +289,12 @@ pub async fn publish_release_bundle(
                     .file_name()
                     .ok_or_else(|| AppError::BadRequest("Release file needs a filename".into()))?
                     .to_string();
+                if !RELEASE_BINARY_FILES.contains(&filename.as_str()) {
+                    return Err(AppError::BadRequest(format!(
+                        "Unexpected release file: {}",
+                        filename
+                    )));
+                }
                 if files.contains_key(&filename) {
                     return Err(AppError::BadRequest(format!(
                         "Duplicate release file: {}",
@@ -295,6 +306,8 @@ pub async fn publish_release_bundle(
                     .await
                     .map_err(|e| AppError::BadRequest(format!("File error: {}", e)))?
                     .to_vec();
+                total_file_bytes =
+                    validate_release_binary_size(&filename, data.len(), total_file_bytes)?;
                 files.insert(filename, data);
             }
             _ => {}
@@ -309,18 +322,6 @@ pub async fn publish_release_bundle(
         )));
     }
 
-    let allowed_files = RELEASE_BINARY_FILES.iter().copied().collect::<HashSet<_>>();
-    let unexpected = files
-        .keys()
-        .filter(|filename| !allowed_files.contains(filename.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unexpected.is_empty() {
-        return Err(AppError::BadRequest(format!(
-            "Unexpected release files: {}",
-            unexpected.join(", ")
-        )));
-    }
     let missing = RELEASE_BINARY_FILES
         .iter()
         .filter(|filename| !files.contains_key(**filename))
@@ -332,12 +333,6 @@ pub async fn publish_release_bundle(
             missing.join(", ")
         )));
     }
-    if files.values().any(Vec::is_empty) {
-        return Err(AppError::BadRequest(
-            "Release files must not be empty".into(),
-        ));
-    }
-
     let mut binary_manifest = String::new();
     for filename in RELEASE_BINARY_FILES {
         let data = &files[filename];
@@ -689,6 +684,36 @@ fn validate_release_version(value: &str) -> Result<&str, AppError> {
         ));
     }
     Ok(value)
+}
+
+fn validate_release_binary_size(
+    filename: &str,
+    size_bytes: usize,
+    current_total_bytes: usize,
+) -> Result<usize, AppError> {
+    if size_bytes == 0 {
+        return Err(AppError::BadRequest(format!(
+            "{} must not be empty",
+            filename
+        )));
+    }
+    if size_bytes > RELEASE_BINARY_MAX_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "{} exceeds the {} MiB release file limit",
+            filename,
+            RELEASE_BINARY_MAX_BYTES / 1024 / 1024
+        )));
+    }
+    let total_bytes = current_total_bytes
+        .checked_add(size_bytes)
+        .ok_or_else(|| AppError::BadRequest("Release upload size overflow".into()))?;
+    if total_bytes > RELEASE_UPLOAD_MAX_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "Release files exceed the {} MiB total limit",
+            RELEASE_UPLOAD_MAX_BYTES / 1024 / 1024
+        )));
+    }
+    Ok(total_bytes)
 }
 
 fn validate_pinned_installer(version: &str, filename: &str, data: &[u8]) -> Result<(), AppError> {
@@ -1185,6 +1210,27 @@ $EnterpriseReleaseChannel = '1.3.4'"#;
         assert!(generated_powershell
             .contains("$EnterpriseReleaseBaseUrl = 'http://example.test:38080'"));
         assert!(generated_powershell.contains("$EnterpriseReleaseChannel = '1.3.4'"));
+    }
+
+    #[test]
+    fn release_bundle_enforces_per_file_and_total_size_limits() {
+        assert!(validate_release_binary_size("git-ai-linux-x64", 0, 0).is_err());
+        assert!(
+            validate_release_binary_size("git-ai-linux-x64", RELEASE_BINARY_MAX_BYTES + 1, 0)
+                .is_err()
+        );
+        assert_eq!(
+            validate_release_binary_size(
+                "git-ai-linux-x64",
+                RELEASE_BINARY_MAX_BYTES,
+                RELEASE_UPLOAD_MAX_BYTES - RELEASE_BINARY_MAX_BYTES,
+            )
+            .unwrap(),
+            RELEASE_UPLOAD_MAX_BYTES
+        );
+        assert!(
+            validate_release_binary_size("git-ai-linux-x64", 1, RELEASE_UPLOAD_MAX_BYTES).is_err()
+        );
     }
 
     async fn download_asset(

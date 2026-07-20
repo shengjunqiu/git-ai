@@ -6,12 +6,9 @@
     <title>AI编码统计</title>
     <script src="/static/assets/vendor/chart.js/chart.umd.js?v=__GITAI_CHART_JS_VERSION__"></script>
     <link rel="stylesheet" href="/static/dashboard.css?v=__GITAI_DASHBOARD_CSS_VERSION__">
-    <script>
-        const isAdmin = __GITAI_IS_ADMIN__;
-        const currentUserId = __GITAI_CURRENT_USER_ID_JSON__;
-    </script>
+    <script type="application/json" id="dashboard-bootstrap">__GITAI_DASHBOARD_BOOTSTRAP__</script>
 </head>
-<body>
+<body class="__GITAI_DASHBOARD_ROLE_CLASS__">
     <div class="layout">
         <header class="mobile-topbar">
             <button id="mobile-menu-button" class="mobile-menu-button" type="button"
@@ -35,44 +32,44 @@
             <div class="sidebar-subtitle">AI 代码归属分析平台</div>
 
             <div class="nav-section">数据概览</div>
-            <a class="nav-item active" href="/me" data-section="overview" onclick="return showSection(event, 'overview')">
+            <a class="nav-item active" href="/me" data-action="navigate-section" data-section="overview">
                 <span class="nav-icon">📊</span> 总览
             </a>
-            <a class="nav-item" href="/me?section=trends" data-section="trends" onclick="return showSection(event, 'trends')">
+            <a class="nav-item" href="/me?section=trends" data-action="navigate-section" data-section="trends">
                 <span class="nav-icon">📈</span> 趋势分析
             </a>
-            <a class="nav-item" id="org-nav-item" href="/me?section=organizations" data-section="organizations" onclick="return showSection(event, 'organizations')">
+            <a class="nav-item admin-only" id="org-nav-item" href="/me?section=organizations" data-action="navigate-section" data-section="organizations">
                 <span class="nav-icon">🏢</span> 组织
             </a>
-            <a class="nav-item" href="/me?section=departments" data-section="departments" onclick="return showSection(event, 'departments')">
+            <a class="nav-item" href="/me?section=departments" data-action="navigate-section" data-section="departments">
                 <span class="nav-icon">🏷️</span> 部门
             </a>
-            <a class="nav-item" href="/me?section=developers" data-section="developers" onclick="return showSection(event, 'developers')">
+            <a class="nav-item" href="/me?section=developers" data-action="navigate-section" data-section="developers">
                 <span class="nav-icon">👥</span> 开发者
             </a>
-            <a class="nav-item" href="/me?section=projects" data-section="projects" onclick="return showSection(event, 'projects')">
+            <a class="nav-item" href="/me?section=projects" data-action="navigate-section" data-section="projects">
                 <span class="nav-icon">📁</span> 项目
             </a>
-            <a class="nav-item" href="/me?section=tools" data-section="tools" onclick="return showSection(event, 'tools')">
+            <a class="nav-item" href="/me?section=tools" data-action="navigate-section" data-section="tools">
                 <span class="nav-icon">🤖</span> AI 工具
             </a>
 
-            <div class="nav-section" id="admin-nav-section">系统管理</div>
-            <a class="nav-item" id="admin-nav-users" href="/me?section=users" data-section="users" onclick="return showSection(event, 'users')">
+            <div class="nav-section admin-only" id="admin-nav-section">系统管理</div>
+            <a class="nav-item admin-only" id="admin-nav-users" href="/me?section=users" data-action="navigate-section" data-section="users">
                 <span class="nav-icon">👤</span> 用户管理
             </a>
-            <a class="nav-item" id="admin-nav-apikeys" href="/me?section=apikeys" data-section="apikeys" onclick="return showSection(event, 'apikeys')">
+            <a class="nav-item admin-only" id="admin-nav-apikeys" href="/me?section=apikeys" data-action="navigate-section" data-section="apikeys">
                 <span class="nav-icon">🔑</span> API 密钥
             </a>
-            <a class="nav-item admin-only" href="/me?section=releases" data-section="releases" onclick="return showSection(event, 'releases')">
+            <a class="nav-item admin-only" href="/me?section=releases" data-action="navigate-section" data-section="releases">
                 <span class="nav-icon">🚀</span> CLI 版本发布
             </a>
-            <a class="nav-item admin-only" href="/me?section=files" data-section="files" onclick="return showSection(event, 'files')">
+            <a class="nav-item admin-only" href="/me?section=files" data-action="navigate-section" data-section="files">
                 <span class="nav-icon">📦</span> 文件中心
             </a>
 
             <div class="nav-section">帮助与支持</div>
-            <a class="nav-item" href="/me?section=help" data-section="help" onclick="return showSection(event, 'help')">
+            <a class="nav-item" href="/me?section=help" data-action="navigate-section" data-section="help">
                 <span class="nav-icon">❓</span> 安装与使用指南
             </a>
 
@@ -94,7 +91,7 @@
                         </div>
                     </div>
                 </div>
-                <button class="logout-btn" onclick="window.location.href='/logout'">
+                <button class="logout-btn" data-action="logout">
                     <span>↪</span> 退出登录
                 </button>
             </div>
@@ -110,7 +107,7 @@
                         <div class="page-subtitle">AI 代码归属分析 - 组织级概览</div>
                     </div>
                     <div class="toolbar">
-                        <select id="time-range" onchange="refreshCurrentSection()">
+                        <select id="time-range" data-action="refresh-section" data-action-event="change">
                             <option value="7d">最近 7 天</option>
                             <option value="30d" selected>最近 30 天</option>
                             <option value="90d">最近 90 天</option>
@@ -120,16 +117,16 @@
                             <span class="refresh-dot"></span>
                             <span id="last-refresh">刷新中...</span>
                         </div>
-                        <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                        <button class="btn" data-action="refresh-section">🔄 刷新</button>
                     </div>
                 </div>
                 <div class="stats-grid" id="overview-stats">
-                    <div class="stat-card" id="gitai-status-card" style="display:none"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
+                    <div class="stat-card member-only" id="gitai-status-card"><div class="stat-label">git-ai 登录状态</div><div class="stat-value total" id="s-gitai-status">—</div><div class="stat-detail" id="s-gitai-detail">—</div></div>
                     <div class="stat-card"><div class="stat-label">总提交数</div><div class="stat-value total" id="s-commits">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 生成代码行</div><div class="stat-value ai" id="s-ai-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">非 AI 代码行</div><div class="stat-value human" id="s-human-lines">—</div></div>
                     <div class="stat-card"><div class="stat-label">AI 代码占比</div><div class="stat-value pct" id="s-ai-pct">—</div></div>
-                    <div class="stat-card" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
+                    <div class="stat-card admin-only" id="developer-count-card"><div class="stat-label">开发者数量</div><div class="stat-value total" id="s-devs">—</div></div>
                     <div class="stat-card"><div class="stat-label">项目数量</div><div class="stat-value total" id="s-projects">—</div></div>
                 </div>
 
@@ -159,13 +156,13 @@
                         <div class="page-subtitle">AI 代码归属随时间的变化趋势</div>
                     </div>
                     <div class="toolbar">
-                        <select id="trend-metric" onchange="refreshCurrentSection()">
+                        <select id="trend-metric" data-action="refresh-section" data-action-event="change">
                             <option value="ai_ratio">AI 占比</option>
                             <option value="ai_lines">AI 代码行数</option>
                             <option value="human_lines">非 AI 代码行数</option>
                             <option value="commits">提交数</option>
                         </select>
-                        <select id="trend-granularity" onchange="refreshCurrentSection()">
+                        <select id="trend-granularity" data-action="refresh-section" data-action-event="change">
                             <option value="day" selected>按天</option>
                             <option value="week">按周</option>
                             <option value="month">按月</option>
@@ -189,7 +186,7 @@
             </div>
 
             <!-- Organizations Section -->
-            <div id="section-organizations" class="section">
+            <div id="section-organizations" class="section admin-only">
                 <div class="page-header">
                     <div>
                         <div class="page-title">组织</div>
@@ -216,11 +213,11 @@
                     </div>
                     <div class="toolbar admin-only">
                         <label class="refresh-info" for="developer-sort-by">排序指标</label>
-                        <select id="developer-sort-by" onchange="changeDeveloperSorting()">
+                        <select id="developer-sort-by" data-action="change-developer-sorting" data-action-event="change">
                             <option value="ai_lines">AI 代码行</option>
                             <option value="ai_ratio">AI 代码占比</option>
                         </select>
-                        <select id="developer-sort-order" aria-label="排序方向" onchange="changeDeveloperSorting()">
+                        <select id="developer-sort-order" aria-label="排序方向" data-action="change-developer-sorting" data-action-event="change">
                             <option value="desc">从高到低</option>
                             <option value="asc">从低到高</option>
                         </select>
@@ -282,16 +279,16 @@
                         <div class="page-title">用户管理</div>
                         <div class="page-subtitle">管理本组织用户、Git 追踪上传授权及其 API 密钥</div>
                     </div>
-                    <button class="btn btn-primary" onclick="showCreateUserModal()">+ 创建用户</button>
+                    <button class="btn btn-primary" data-action="show-create-user">+ 创建用户</button>
                 </div>
                 <div class="table-card">
                     <div class="table-header">
                         <div id="users-bulk-selection" class="refresh-info">选择未授权用户后可批量授权</div>
-                        <button id="users-bulk-authorize" class="btn btn-primary btn-sm" onclick="bulkAuthorizeGitTrackingUpload(this)" disabled>一键授权 Git 追踪上传</button>
+                        <button id="users-bulk-authorize" class="btn btn-primary btn-sm" data-action="bulk-authorize-git-tracking" disabled>一键授权 Git 追踪上传</button>
                     </div>
                     <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="用户管理表，可横向滚动">
                         <table>
-                            <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" onchange="toggleAllGitTrackingUsers(this.checked)" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <thead><tr><th class="selection-column"><input id="users-select-all" type="checkbox" aria-label="选择当前页全部未授权用户" data-action="toggle-all-git-tracking-users" data-action-event="change" /></th><th>用户名</th><th>邮箱</th><th>Git 追踪上传</th><th>API 密钥</th><th>创建时间</th><th>操作</th></tr></thead>
                             <tbody id="users-table"><tr><td colspan="7">加载中...</td></tr></tbody>
                         </table>
                     </div>
@@ -306,11 +303,11 @@
                         <div class="page-title">部门</div>
                         <div class="page-subtitle">每个部门统计包含所有下级部门数据；管理员可逐层查看，开发者仅查看自己所属部门</div>
                     </div>
-                    <button class="btn btn-primary admin-only" onclick="showCreateDepartmentModal()">+ 新增部门</button>
+                    <button class="btn btn-primary admin-only" data-action="show-create-department">+ 新增部门</button>
                 </div>
                 <div class="table-card">
                     <div style="display:flex;align-items:center;gap:0.75rem;padding:1rem 1rem 0.25rem;flex-wrap:wrap">
-                        <button id="departments-back" class="btn btn-sm" onclick="backDepartmentLevel()" style="display:none">← 上一级</button>
+                        <button id="departments-back" class="btn btn-sm" data-action="back-department-level" style="display:none">← 上一级</button>
                         <div>
                             <div id="departments-breadcrumb" style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap"><strong>全部部门</strong></div>
                         </div>
@@ -332,7 +329,7 @@
                         <div class="page-title">API 密钥管理</div>
                         <div class="page-subtitle">创建和管理 API 访问密钥</div>
                     </div>
-                    <button class="btn btn-primary" onclick="showCreateApiKeyModal()">+ 创建密钥</button>
+                    <button class="btn btn-primary" data-action="show-create-api-key">+ 创建密钥</button>
                 </div>
                 <div class="table-card">
                     <div class="table-scroll table-scroll-wide" tabindex="0" role="region" aria-label="API 密钥管理表，可横向滚动">
@@ -352,7 +349,7 @@
                         <div class="page-title">CLI 版本发布</div>
                         <div class="page-subtitle">上传完整跨平台安装包，并安全更新企业版 latest 渠道</div>
                     </div>
-                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                    <button class="btn" data-action="refresh-section">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
@@ -364,14 +361,18 @@
                         </div>
                         <div class="form-group publish-grid-wide">
                             <label class="form-label" for="release-files">平台二进制（必须完整选择 6 个文件）</label>
-                            <input id="release-files" class="form-input file-input" type="file" multiple onchange="renderSelectedReleaseFiles()" />
-                            <div class="form-hint">只需要选择六个平台二进制。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
+                            <input id="release-files" class="form-input file-input" type="file" multiple
+                                   data-max-file-bytes="__GITAI_RELEASE_FILE_MAX_BYTES__"
+                                   data-max-total-bytes="__GITAI_RELEASE_TOTAL_MAX_BYTES__"
+                                   data-action="render-selected-release-files"
+                                   data-action-event="change" />
+                            <div class="form-hint">只需要选择六个平台二进制；单文件上限 __GITAI_RELEASE_FILE_MAX_MIB__ MiB，总计上限 __GITAI_RELEASE_TOTAL_MAX_MIB__ MiB。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
                         </div>
                     </div>
                     <div id="release-selected-files" class="selected-files">尚未选择文件</div>
                     <div class="publish-actions">
                         <label class="checkbox-label"><input id="release-promote-latest" type="checkbox" checked /> 发布后立即设为 latest</label>
-                        <button class="btn btn-primary" onclick="publishCliRelease(this)">上传并发布</button>
+                        <button class="btn btn-primary" data-action="publish-cli-release">上传并发布</button>
                     </div>
                     <div id="release-publish-status" class="publish-status"></div>
                 </div>
@@ -395,7 +396,7 @@
                         <div class="page-title">文件中心</div>
                         <div class="page-subtitle">管理文档、配置和压缩包的版本及稳定下载链接</div>
                     </div>
-                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
+                    <button class="btn" data-action="refresh-section">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
@@ -416,19 +417,24 @@
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="managed-file-upload">选择文件</label>
-                            <input id="managed-file-upload" class="form-input file-input" type="file" />
+                            <input id="managed-file-upload" class="form-input file-input" type="file"
+                                   data-max-file-bytes="__GITAI_MANAGED_FILE_MAX_BYTES__"
+                                   data-action="render-selected-managed-file"
+                                   data-action-event="change" />
+                            <div class="form-hint">单文件上限 __GITAI_MANAGED_FILE_MAX_MIB__ MiB；文件名不能包含路径分隔符。文件类型不设白名单。</div>
                         </div>
                         <div class="form-group publish-grid-wide">
                             <label class="form-label" for="managed-file-description">说明</label>
                             <input id="managed-file-description" class="form-input" placeholder="可选，说明文件用途或本次更新内容" />
                         </div>
                     </div>
+                    <div id="managed-file-selected" class="selected-files">尚未选择文件</div>
                     <div class="publish-actions">
                         <div class="checkbox-group">
                             <label class="checkbox-label"><input id="managed-file-public" type="checkbox" checked /> 公开下载（无需登录）</label>
                             <label class="checkbox-label"><input id="managed-file-publish-now" type="checkbox" checked /> 上传后立即发布为最新版</label>
                         </div>
-                        <button class="btn btn-primary" onclick="uploadManagedFile(this)">上传文件</button>
+                        <button class="btn btn-primary" data-action="upload-managed-file">上传文件</button>
                     </div>
                     <div id="managed-file-upload-status" class="publish-status"></div>
                 </div>
@@ -446,6 +452,7 @@
 
             <!-- Help Section -->
             <div id="section-help" class="section">
+                <!-- DASHBOARD_HELP_START -->
                 <div class="page-header help-page-header">
                     <div>
                         <div class="page-title">安装与使用指南</div>
@@ -503,14 +510,14 @@
                                 <div class="help-check-item">
                                     <span class="help-check-icon">3</span>
                                     <div><h3>登录并授权</h3><p>运行登录命令，在打开的浏览器中确认授权，再检查当前账号：</p></div>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div>
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div>
                                     <p class="help-note"><code>git-ai whoami</code> 能显示当前账号即表示授权成功。</p>
                                 </div>
                                 <div class="help-check-item">
                                     <span class="help-check-icon">4</span>
                                     <div><h3>安装并配置编辑器扩展</h3><p>下载并导入安装编辑器扩展，然后在编辑器设置中开启 checkpoint 与 AI Tab 追踪：</p></div>
                                     <a class="help-link-btn" href="/static/downloads/git-ai-extension.vsix">下载 git-ai 扩展</a>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>{
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>{
   "gitai.enableCheckpointLogging": true,
   "gitai.experiments.aiTabTracking": true
 }</code></pre></div>
@@ -519,7 +526,7 @@
                                 <div class="help-check-item">
                                     <span class="help-check-icon">5</span>
                                     <div><h3>开始使用</h3><p>无需为每个 Git 仓库单独初始化。直接使用支持的 AI 工具编辑代码，照常执行 <code>git add</code>、<code>git commit</code> 等 Git 命令；提交时会自动上传 AI 与人工代码归属统计。</p><p>查看当前归属统计：</p></div>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai status</code></pre></div>
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai status</code></pre></div>
                                     <p class="help-note">需要更新时运行 <code>git-ai update</code>；遇到问题时运行 <code>git-ai debug</code>，并将输出发给管理员。</p>
                                 </div>
                             </div>
@@ -534,15 +541,15 @@
                                 <div class="help-check-item">
                                     <span class="help-check-icon">1</span>
                                     <div><h3>检查 Git</h3><p>在终端或 PowerShell 中运行：</p></div>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git --version</code></pre></div>
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git --version</code></pre></div>
                                     <p class="help-note">看到类似 <code>git version 2.x.x</code> 的输出即可。如果提示找不到 Git，请先安装 Git。</p>
                                 </div>
                                 <div class="help-check-item">
                                     <span class="help-check-icon">2</span>
                                     <div><h3>检查服务器连接</h3><p>macOS / Linux：</p></div>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -fsS __GITAI_PUBLIC_BASE_URL__/health</code></pre></div>
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>curl -fsS __GITAI_PUBLIC_BASE_URL__/health</code></pre></div>
                                     <p>Windows PowerShell：</p>
-                                    <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Invoke-RestMethod __GITAI_PUBLIC_BASE_URL__/health</code></pre></div>
+                                    <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>Invoke-RestMethod __GITAI_PUBLIC_BASE_URL__/health</code></pre></div>
                                     <p class="help-note">服务正常时会返回 <code>status: ok</code>。</p>
                                 </div>
                                 <div class="help-check-item">
@@ -564,7 +571,7 @@
                                     <div class="help-os-title"><span>⊞</span><h3>Windows</h3></div>
                                     <div class="help-os-body">
                                         <p>打开 PowerShell，下载脚本和校验清单，核对脚本后再执行：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>$base = "__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>$base = "__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
 Invoke-WebRequest "$base/install.ps1" -OutFile install.ps1
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
 $expected = ((Select-String -Path SHA256SUMS -Pattern "  install.ps1$").Line -split "\s+")[0].ToLower()
@@ -572,7 +579,7 @@ $actual = (Get-FileHash .\install.ps1 -Algorithm SHA256).Hash.ToLower()
 if ($actual -ne $expected) { throw "install.ps1 SHA256 mismatch" }
 &amp; .\install.ps1</code></pre></div>
                                         <p>如 PowerShell 禁止运行脚本，先为当前窗口临时放行：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code></pre></div>
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code></pre></div>
                                         <p class="help-note">安装后关闭并重新打开 PowerShell，再运行 <code>git-ai --version</code>。</p>
                                     </div>
                                 </article>
@@ -580,26 +587,26 @@ if ($actual -ne $expected) { throw "install.ps1 SHA256 mismatch" }
                                     <div class="help-os-title"><span></span><h3>macOS</h3></div>
                                     <div class="help-os-body">
                                         <p>打开“终端”，下载脚本和校验清单，核对脚本后再执行：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>base="__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>base="__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
 curl -fSLo install.sh "$base/install.sh"
 curl -fSLo SHA256SUMS "$base/SHA256SUMS"
 grep '  install.sh$' SHA256SUMS | shasum -a 256 -c -
 bash ./install.sh</code></pre></div>
                                         <p>关闭并重新打开终端，然后检查版本：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version</code></pre></div>
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai --version</code></pre></div>
                                     </div>
                                 </article>
                                 <article class="help-os-card">
                                     <div class="help-os-title"><span>◉</span><h3>Linux</h3></div>
                                     <div class="help-os-body">
                                         <p>打开终端，下载脚本和校验清单，核对脚本后再执行：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>base="__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>base="__GITAI_PUBLIC_BASE_URL__/worker/releases/latest/download"
 curl -fSLo install.sh "$base/install.sh"
 curl -fSLo SHA256SUMS "$base/SHA256SUMS"
 grep '  install.sh$' SHA256SUMS | sha256sum -c -
 bash ./install.sh</code></pre></div>
                                         <p>重新打开终端，或刷新当前窗口的 PATH：</p>
-                                        <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
+                                        <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
 git-ai --version</code></pre></div>
                                     </div>
                                 </article>
@@ -612,14 +619,14 @@ git-ai --version</code></pre></div>
                                 <div><h2>登录与网页授权</h2><p>安装完成后，将 CLI 与你的企业账号关联。</p></div>
                             </div>
                             <h3>有图形界面的电脑</h3>
-                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div>
+                            <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div>
                             <p>命令会打开浏览器。已有账号可直接登录并确认授权，也可以手动打开 <a href="/login" target="_blank" rel="noreferrer">企业登录页面 ↗</a>。</p>
                             <h3>没有图形界面的 Linux 服务器</h3>
-                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__ --no-browser</code></pre></div>
+                            <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__ --no-browser</code></pre></div>
                             <p>复制终端显示的授权地址，在有浏览器的电脑上打开并完成授权。</p>
                             <div class="help-command-row">
-                                <div><h3>检查登录状态</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai whoami</code></pre></div></div>
-                                <div><h3>切换账号</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai logout
+                                <div><h3>检查登录状态</h3><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai whoami</code></pre></div></div>
+                                <div><h3>切换账号</h3><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai logout
 git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div></div>
                             </div>
                         </section>
@@ -629,16 +636,16 @@ git-ai login --server __GITAI_PUBLIC_BASE_URL__</code></pre></div></div>
                                 <span class="help-step">04</span>
                                 <div><h2>检查安装结果与更新</h2><p>验证版本、账号、服务器地址和真实 Git 路径。</p></div>
                             </div>
-                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai --version
+                            <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai --version
 git-ai whoami
 git-ai config api_base_url
 git-ai git-path</code></pre></div>
                             <div class="help-callout"><strong>预期结果</strong><p>服务器地址为 <code>__GITAI_PUBLIC_BASE_URL__</code>；<code>git-ai git-path</code> 显示真实 Git 路径，例如 macOS / Linux 上的 <code>/usr/bin/git</code>，或 Windows 上 Git for Windows 的 <code>git.exe</code>。</p></div>
                             <h3>更新 Git AI</h3>
                             <div class="help-command-row">
-                                <div><p>安装企业服务器上的最新版本：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai update
+                                <div><p>安装企业服务器上的最新版本：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai update
 git-ai --version</code></pre></div></div>
-                                <div><p>强制重新安装当前最新版：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai update --force</code></pre></div></div>
+                                <div><p>强制重新安装当前最新版：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai update --force</code></pre></div></div>
                             </div>
                             <p class="help-note">也可以重新运行对应系统的安装命令。安装程序会覆盖旧版本，并保留现有登录和配置。</p>
                         </section>
@@ -649,7 +656,7 @@ git-ai --version</code></pre></div></div>
                                 <div><h2>编辑器与 AI 工具集成</h2><p>使用前请安装扩展 <strong>git-ai-0.1.22.vsix</strong>，并开启 checkpoint 与 AI Tab 追踪。</p></div>
                             </div>
                             <a class="help-link-btn" href="/static/downloads/git-ai-extension.vsix">下载 git-ai 扩展</a>
-                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>{
+                            <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>{
   "gitai.enableCheckpointLogging": true,
   "gitai.experiments.aiTabTracking": true
 }</code></pre></div>
@@ -668,8 +675,8 @@ git-ai --version</code></pre></div></div>
                             </div>
                             <div class="help-callout success"><strong>数据如何上传</strong><p>执行 <code>git commit</code> 时，AI 与人工代码归属统计数据会上传至统计后台。</p></div>
                             <div class="help-command-row">
-                                <div><h3>查看归属统计</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai status</code></pre></div></div>
-                                <div><h3>查看更多命令</h3><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai help</code></pre></div></div>
+                                <div><h3>查看归属统计</h3><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai status</code></pre></div></div>
+                                <div><h3>查看更多命令</h3><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai help</code></pre></div></div>
                             </div>
                         </section>
 
@@ -679,15 +686,15 @@ git-ai --version</code></pre></div></div>
                                 <div><h2>常见问题</h2><p>点击问题查看处理方法。</p></div>
                             </div>
                             <div class="help-faq-list">
-                                <details><summary>提示 git-ai: command not found</summary><div><p>先关闭并重新打开终端。macOS / Linux 也可以临时执行：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
+                                <details><summary>提示 git-ai: command not found</summary><div><p>先关闭并重新打开终端。macOS / Linux 也可以临时执行：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>export PATH="$HOME/.git-ai/bin:$PATH"
 git-ai --version</code></pre></div></div></details>
-                                <details><summary>提示无法找到标准 Git</summary><div><p>运行下面两条命令。macOS 系统 Git 通常位于 <code>/usr/bin/git</code>；如果仍然报错，请把输出发给管理员。</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git --version
+                                <details><summary>提示无法找到标准 Git</summary><div><p>运行下面两条命令。macOS 系统 Git 通常位于 <code>/usr/bin/git</code>；如果仍然报错，请把输出发给管理员。</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git --version
 command -v git</code></pre></div></div></details>
-                                <details><summary>登录页面没有自动打开</summary><div><p>重新运行登录命令；如果仍未打开，使用无浏览器模式并手动复制授权地址。</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__ --no-browser</code></pre></div></div></details>
-                                <details><summary>无法连接企业服务器</summary><div><p>macOS / Linux：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>curl -v __GITAI_PUBLIC_BASE_URL__/health</code></pre></div><p>Windows PowerShell：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>Invoke-WebRequest __GITAI_PUBLIC_BASE_URL__/health</code></pre></div><p>如果连接失败，请确认当前网络允许访问 <code>__GITAI_PUBLIC_BASE_URL__</code>，必要时联系管理员。</p></div></details>
+                                <details><summary>登录页面没有自动打开</summary><div><p>重新运行登录命令；如果仍未打开，使用无浏览器模式并手动复制授权地址。</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai login --server __GITAI_PUBLIC_BASE_URL__ --no-browser</code></pre></div></div></details>
+                                <details><summary>无法连接企业服务器</summary><div><p>macOS / Linux：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>curl -v __GITAI_PUBLIC_BASE_URL__/health</code></pre></div><p>Windows PowerShell：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>Invoke-WebRequest __GITAI_PUBLIC_BASE_URL__/health</code></pre></div><p>如果连接失败，请确认当前网络允许访问 <code>__GITAI_PUBLIC_BASE_URL__</code>，必要时联系管理员。</p></div></details>
                                 <details><summary>macOS 提示开发者或安全限制</summary><div><p>请确认安装命令来自本页企业服务器地址。安装器会尝试移除下载文件的隔离属性；如果仍被系统阻止，请将完整提示截图发给管理员。</p></div></details>
-                                <details><summary>Windows 安装后仍找不到 git-ai</summary><div><p>关闭所有 PowerShell 或命令提示符窗口，重新打开后运行 <code>git-ai --version</code>。如果仍然找不到，请确认用户 PATH 包含：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>%USERPROFILE%\.git-ai\bin</code></pre></div></div></details>
-                                <details><summary>Hooks 自动配置失败或新安装了编辑器</summary><div><p>重新执行 Hooks 安装：</p><div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai install-hooks</code></pre></div></div></details>
+                                <details><summary>Windows 安装后仍找不到 git-ai</summary><div><p>关闭所有 PowerShell 或命令提示符窗口，重新打开后运行 <code>git-ai --version</code>。如果仍然找不到，请确认用户 PATH 包含：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>%USERPROFILE%\.git-ai\bin</code></pre></div></div></details>
+                                <details><summary>Hooks 自动配置失败或新安装了编辑器</summary><div><p>重新执行 Hooks 安装：</p><div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai install-hooks</code></pre></div></div></details>
                             </div>
                         </section>
 
@@ -696,11 +703,12 @@ command -v git</code></pre></div></div></details>
                                 <span class="help-step">08</span>
                                 <div><h2>获取诊断信息</h2><p>遇到问题时运行诊断命令，并将结果交给管理员。</p></div>
                             </div>
-                            <div class="help-code-block"><button type="button" onclick="copyHelpCommand(this)">复制</button><pre><code>git-ai debug</code></pre></div>
+                            <div class="help-code-block"><button type="button" data-action="copy-help-command">复制</button><pre><code>git-ai debug</code></pre></div>
                             <p>请同时提供操作系统版本、<code>git-ai --version</code> 输出和报错截图，以便更快定位问题。</p>
                         </section>
                     </div>
                 </div>
+                <!-- DASHBOARD_HELP_END -->
             </div>
         </main>
     </div>
@@ -708,10 +716,6 @@ command -v git</code></pre></div></div></details>
     <!-- Modal Container -->
     <div id="modal-container"></div>
 
-    <script>
-        const name = __GITAI_USER_NAME_JSON__;
-        const email = __GITAI_USER_EMAIL_JSON__;
-    </script>
     <script src="/static/dashboard.js?v=__GITAI_DASHBOARD_JS_VERSION__"></script>
 </body>
 </html>

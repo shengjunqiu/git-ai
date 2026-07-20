@@ -8,7 +8,11 @@ const dashboardSource = fs.readFileSync(
     path.join(__dirname, 'dashboard.js'),
     'utf8',
 );
-const requestLayerSource = dashboardSource.split('// --- Auto refresh ---')[0];
+const requestLayerStart = dashboardSource.indexOf('class ApiRequestError');
+const requestLayerEnd = dashboardSource.indexOf('// --- Auto refresh ---', requestLayerStart);
+assert.notEqual(requestLayerStart, -1);
+assert.notEqual(requestLayerEnd, -1);
+const requestLayerSource = dashboardSource.slice(requestLayerStart, requestLayerEnd);
 
 function createHarness(fetchImpl) {
     let assignedUrl = null;

@@ -13,6 +13,9 @@ use crate::auth::middleware::{AdminGuard, OptionalAuth};
 use crate::error::AppError;
 use crate::routes::AppState;
 
+pub(crate) const MANAGED_FILE_MAX_BYTES: usize = 500 * 1024 * 1024;
+pub(crate) const MANAGED_FILE_UPLOAD_BODY_MAX_BYTES: usize = 512 * 1024 * 1024;
+
 pub async fn list_managed_files(
     State(state): State<AppState>,
     _auth: AdminGuard,
@@ -120,10 +123,16 @@ pub async fn upload_managed_file(
                 is_public = matches!(multipart_text(field).await?.as_str(), "true" | "1" | "on")
             }
             "file" => {
+                if upload.is_some() {
+                    return Err(AppError::BadRequest(
+                        "Only one managed file can be uploaded at a time".into(),
+                    ));
+                }
                 let filename = field
                     .file_name()
                     .ok_or_else(|| AppError::BadRequest("Uploaded file needs a filename".into()))?
                     .to_string();
+                validate_filename(&filename)?;
                 let content_type = field
                     .content_type()
                     .unwrap_or("application/octet-stream")
@@ -133,6 +142,7 @@ pub async fn upload_managed_file(
                     .await
                     .map_err(|e| AppError::BadRequest(format!("File error: {}", e)))?
                     .to_vec();
+                validate_managed_file_size(data.len())?;
                 upload = Some((filename, content_type, data));
             }
             _ => {}
@@ -144,11 +154,6 @@ pub async fn upload_managed_file(
     let version = validate_version(&version)?.to_string();
     let (filename, content_type, data) =
         upload.ok_or_else(|| AppError::BadRequest("file is required".into()))?;
-    validate_filename(&filename)?;
-    if data.is_empty() {
-        return Err(AppError::BadRequest("Uploaded file is empty".into()));
-    }
-
     let existing_file_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM managed_files WHERE slug = $1")
             .bind(&slug)
@@ -470,6 +475,19 @@ fn validate_filename(value: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_managed_file_size(size_bytes: usize) -> Result<(), AppError> {
+    if size_bytes == 0 {
+        return Err(AppError::BadRequest("Uploaded file is empty".into()));
+    }
+    if size_bytes > MANAGED_FILE_MAX_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "Uploaded file exceeds the {} MiB limit",
+            MANAGED_FILE_MAX_BYTES / 1024 / 1024
+        )));
+    }
+    Ok(())
+}
+
 fn require_text<'a>(value: &'a str, field: &str) -> Result<&'a str, AppError> {
     let value = value.trim();
     if value.is_empty() {
@@ -517,6 +535,13 @@ mod tests {
         assert!(validate_version("../../secret").is_err());
         assert!(validate_version("..").is_err());
         assert!(validate_filename("../secret.txt").is_err());
+    }
+
+    #[test]
+    fn managed_file_size_rejects_empty_and_oversized_uploads() {
+        assert!(validate_managed_file_size(0).is_err());
+        assert!(validate_managed_file_size(MANAGED_FILE_MAX_BYTES).is_ok());
+        assert!(validate_managed_file_size(MANAGED_FILE_MAX_BYTES + 1).is_err());
     }
 
     #[test]
