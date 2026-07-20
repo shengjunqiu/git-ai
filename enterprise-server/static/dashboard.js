@@ -1,3 +1,36 @@
+import {
+    AbortError,
+    AuthExpiredError,
+    InvalidResponseError,
+    createApiClient,
+} from './dashboard/api.js';
+import { createDashboardPagination } from './dashboard/pagination.js';
+import {
+    RefreshMode,
+    createDashboardRefresh,
+    isSilentRefresh,
+} from './dashboard/refresh.js';
+import {
+    clampPercent,
+    escapeAttribute,
+    escapeHtml,
+    fmt,
+    fmtTimeAgo,
+    formatRefreshTime,
+    pctBar,
+    replaceHtmlIfChanged,
+    setClassNameIfChanged,
+    setDisplayIfChanged,
+    setTextIfChanged,
+    setTitleIfChanged,
+} from './dashboard/render.js';
+import { createDashboardRouter } from './dashboard/router.js';
+import {
+    DASHBOARD_DEFAULT_SECTION,
+    createDashboardState,
+} from './dashboard/state.js';
+import { createToast } from './dashboard/ui/toast.js';
+
 function readDashboardBootstrap() {
     const element = document.getElementById('dashboard-bootstrap');
     if (!element) return Object.freeze({ isAdmin: false });
@@ -11,406 +44,83 @@ function readDashboardBootstrap() {
 
 const dashboardBootstrap = readDashboardBootstrap();
 const isAdmin = dashboardBootstrap.isAdmin;
-
-class ApiRequestError extends Error {
-    constructor(message, { status = null, requestId = null, cause = null } = {}) {
-        super(message, cause ? { cause } : undefined);
-        this.name = this.constructor.name;
-        this.status = status;
-        this.requestId = requestId;
-    }
-}
-class AuthExpiredError extends ApiRequestError {}
-class PermissionDeniedError extends ApiRequestError {}
-class HttpError extends ApiRequestError {}
-class InvalidResponseError extends ApiRequestError {}
-class NetworkError extends ApiRequestError {}
-class TimeoutError extends ApiRequestError {}
-class AbortError extends ApiRequestError {}
-
-const API_DEFAULT_TIMEOUT_MS = 15000;
-const API_GET_RETRIES = 1;
-const API_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
-
-function requestIdFromResponse(response) {
-    return response.headers?.get?.('x-request-id') || null;
-}
-
-function safeResponseMessage(data, status, fallback) {
-    if (status >= 500) return fallback;
-    const value = typeof data?.error === 'string'
-        ? data.error
-        : typeof data?.message === 'string'
-            ? data.message
-            : '';
-    const message = value.replace(/\s+/g, ' ').trim();
-    return message && message.length <= 300 ? message : fallback;
-}
-
-function authReturnTo() {
-    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
-}
-
-function redirectToLogin() {
-    const loginUrl = `/auth/login?return_to=${encodeURIComponent(authReturnTo())}`;
-    window.location.assign(loginUrl);
-}
-
-function waitForRetry(delayMs, signal) {
-    return new Promise((resolve, reject) => {
-        if (signal?.aborted) {
-            reject(new AbortError('请求已取消'));
-            return;
-        }
-        const onAbort = () => {
-            clearTimeout(timer);
-            reject(new AbortError('请求已取消'));
+const {
+    canAccessDashboardSection,
+    dashboardSectionFromLocation,
+    requestedDashboardSection,
+    updateDashboardSectionUrl,
+} = createDashboardRouter({
+    isAdmin,
+    location: window.location,
+    history: window.history,
+});
+const { apiRequest } = createApiClient({
+    fetchImpl: window.fetch.bind(window),
+    location: window.location,
+});
+const appState = createDashboardState();
+const { showToast } = createToast({ document });
+const {
+    currentSectionRequestSignal,
+    getRefreshSnapshot,
+    handleVisibilityChange: handleDashboardVisibilityChange,
+    loadSection,
+    refreshCurrentSection,
+    startAutoRefresh,
+} = createDashboardRefresh({
+    currentSection: () => appState.currentSection,
+    isPageHidden: () => document.hidden,
+    loadSectionData: async (id, context) => {
+        const loaders = {
+            overview: loadOverview,
+            trends: loadTrends,
+            organizations: loadOrgs,
+            developers: loadDevs,
+            projects: loadProjects,
+            tools: loadTools,
+            users: loadUsers,
+            departments: loadDepartments,
+            apikeys: loadApiKeys,
+            releases: loadReleaseManagement,
+            files: loadManagedFiles,
+            help: loadHelp,
         };
-        const timer = setTimeout(() => {
-            signal?.removeEventListener('abort', onAbort);
-            resolve();
-        }, delayMs);
-        signal?.addEventListener('abort', onAbort, { once: true });
-    });
-}
-
-function createRequestSignal(externalSignal, timeoutMs) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const onExternalAbort = () => controller.abort(externalSignal.reason);
-    if (externalSignal?.aborted) onExternalAbort();
-    else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
-    const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            controller.abort();
-        }, timeoutMs)
-        : null;
-    return {
-        signal: controller.signal,
-        timedOut: () => timedOut,
-        cleanup: () => {
-            if (timeout) clearTimeout(timeout);
-            externalSignal?.removeEventListener('abort', onExternalAbort);
-        },
-    };
-}
-
-async function parseApiResponse(response) {
-    const requestId = requestIdFromResponse(response);
-    const contentType = response.headers?.get?.('content-type') || '';
-    const body = await response.text();
-    let data = null;
-    if (body) {
-        if (!contentType.toLowerCase().includes('application/json')) {
-            if (response.ok) {
-                throw new InvalidResponseError('服务器返回了非 JSON 响应', {
-                    status: response.status,
-                    requestId,
-                });
-            }
-        } else {
-            try {
-                data = JSON.parse(body);
-            } catch (cause) {
-                if (response.ok) {
-                    throw new InvalidResponseError('服务器返回了无效 JSON', {
-                        status: response.status,
-                        requestId,
-                        cause,
-                    });
-                }
-            }
+        await loaders[id](context);
+    },
+    afterSectionSuccess: async (id, { mode, signal }) => {
+        if (!isAdmin && appState.currentSection === id) {
+            await loadClientStatus({ mode, signal, sectionId: id });
         }
-    }
-
-    if (response.ok) {
-        if (!body && response.status !== 204) {
-            throw new InvalidResponseError('服务器返回了空响应', {
-                status: response.status,
-                requestId,
-            });
-        }
-        return data;
-    }
-    if (response.status === 401) {
-        throw new AuthExpiredError('登录已过期，请重新登录', {
-            status: response.status,
-            requestId,
-        });
-    }
-    if (response.status === 403) {
-        throw new PermissionDeniedError(
-            safeResponseMessage(data, response.status, '没有执行此操作的权限'),
-            { status: response.status, requestId },
-        );
-    }
-    throw new HttpError(
-        safeResponseMessage(data, response.status, `请求失败（HTTP ${response.status}）`),
-        { status: response.status, requestId },
-    );
-}
-
-async function apiRequest(url, options = {}) {
-    const method = String(options.method || 'GET').toUpperCase();
-    const retries = options.retries ?? (method === 'GET' ? API_GET_RETRIES : 0);
-    const headers = new Headers(options.headers || {});
-    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        const requestSignal = createRequestSignal(
-            options.signal,
-            options.timeoutMs ?? API_DEFAULT_TIMEOUT_MS,
-        );
-        try {
-            const response = await fetch(url, {
-                ...options,
-                method,
-                headers,
-                signal: requestSignal.signal,
-            });
-            if (
-                method === 'GET'
-                && API_RETRYABLE_STATUSES.has(response.status)
-                && attempt < retries
-            ) {
-                requestSignal.cleanup();
-                await response.body?.cancel?.();
-                await waitForRetry(250 * (2 ** attempt), options.signal);
-                continue;
-            }
-            const data = await parseApiResponse(response);
-            requestSignal.cleanup();
-            return data;
-        } catch (error) {
-            const didTimeout = requestSignal.timedOut();
-            requestSignal.cleanup();
-            let typedError = error;
-            if (options.signal?.aborted) {
-                typedError = new AbortError('请求已取消', { cause: error });
-            } else if (didTimeout) {
-                typedError = new TimeoutError('请求超时，请稍后重试', { cause: error });
-            } else if (error instanceof TypeError || error?.name === 'TypeError') {
-                typedError = new NetworkError('网络连接失败，请检查网络后重试', {
-                    cause: error,
-                });
-            }
-
-            const retryableTransportError =
-                typedError instanceof NetworkError || typedError instanceof TimeoutError;
-            if (method === 'GET' && retryableTransportError && attempt < retries) {
-                await waitForRetry(250 * (2 ** attempt), options.signal);
-                continue;
-            }
-            if (typedError instanceof AuthExpiredError) redirectToLogin();
-            throw typedError;
-        }
-    }
-}
-
-const fmt = n => typeof n === 'number' ? n.toLocaleString() : '0';
-function finiteNumber(value, fallback = 0) {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : fallback;
-}
-function clampPercent(value) {
-    return Math.min(100, Math.max(0, finiteNumber(value)));
-}
-const pctBar = (pct) => `<div class="bar"><div class="bar-fill" style="width:${clampPercent(pct)}%"></div></div>`;
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value ?? '';
-    return div.innerHTML;
-}
-function escapeAttribute(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-function fmtTimeAgo(value) {
-    if (!value) return '从未';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '未知';
-    const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-    if (seconds < 60) return '刚刚';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes} 分钟前`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} 小时前`;
-    const days = Math.floor(hours / 24);
-    return `${days} 天前`;
-}
+    },
+    onSectionSuccess: clearSectionError,
+    onSectionError: showSectionLoadError,
+    onStatusChange: updateRefreshTime,
+});
+const {
+    fetchPaginatedJson,
+    getTablePageSnapshot,
+    goToTablePage,
+    pageItems,
+    renderPaginationControls,
+    resetTablePage,
+} = createDashboardPagination({
+    apiRequest,
+    document,
+    reloadTable: () => loadSection(appState.currentSection, { mode: RefreshMode.MANUAL }),
+});
 
 // --- Auto refresh ---
-let refreshInterval = null;
-const AUTO_REFRESH_MS = 60000; // 60 seconds
-const RefreshMode = Object.freeze({
-    INITIAL: 'initial',
-    MANUAL: 'manual',
-    AUTO: 'auto',
-});
-const DASHBOARD_DEFAULT_SECTION = 'overview';
-const DASHBOARD_SECTIONS = [
-    'overview',
-    'trends',
-    'organizations',
-    'departments',
-    'developers',
-    'projects',
-    'tools',
-    'users',
-    'apikeys',
-    'releases',
-    'files',
-    'help',
-];
-const ADMIN_ONLY_DASHBOARD_SECTIONS = ['organizations', 'users', 'apikeys', 'releases', 'files'];
-let currentSection = 'overview';
-const sectionRefreshes = new Map();
-const queuedManualRefreshes = new Map();
-let lastRefreshAttemptAt = null;
-let lastRefreshSuccessAt = null;
-const successfulSections = new Set();
 let departmentTreeRows = [];
 let currentDepartmentLevelRows = [];
 const departmentLevelCache = new Map();
 const DEPARTMENT_LEVEL_CACHE_MS = 30000;
 let activeDepartmentParentId = null;
-const TABLE_PAGE_SIZE = 25;
-const tablePageState = {};
-const tablePagerContainers = {
-    organizations: 'org-pagination',
-    departments: 'departments-pagination',
-    developers: 'dev-pagination',
-    projects: 'proj-pagination',
-    tools: 'tools-pagination',
-    users: 'users-pagination',
-    apikeys: 'apikeys-pagination',
-};
-
-function isSilentRefresh(options) {
-    return options?.mode === RefreshMode.AUTO;
-}
-
-function currentSectionRequestSignal() {
-    return sectionRefreshes.get(currentSection)?.controller.signal;
-}
-
-function refreshCollisionAction(mode, hasInFlight) {
-    if (!hasInFlight) return 'start';
-    if (mode === RefreshMode.AUTO) return 'skip';
-    if (mode === RefreshMode.MANUAL) return 'queue';
-    return 'replace';
-}
-
-function getTablePageState(key) {
-    if (!tablePageState[key]) {
-        tablePageState[key] = {
-            page: 1,
-            cursors: [null],
-            nextCursor: null,
-            hasMore: false,
-            loading: false,
-        };
-    }
-    return tablePageState[key];
-}
-
-function resetTablePage(key) {
-    tablePageState[key] = {
-        page: 1,
-        cursors: [null],
-        nextCursor: null,
-        hasMore: false,
-        loading: false,
-    };
-}
-
-function addPaginationParams(url, key) {
-    const state = getTablePageState(key);
-    const cursor = state.cursors[state.page - 1];
-    const params = new URLSearchParams({ limit: String(TABLE_PAGE_SIZE) });
-    if (cursor) params.set('cursor', cursor);
-    return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
-}
-
-async function fetchPaginatedJson(key, url, errorMessage, signal) {
-    const state = getTablePageState(key);
-    state.loading = true;
-    try {
-        const d = await apiRequest(addPaginationParams(url, key), { signal });
-        const pagination = d.pagination || {};
-        state.nextCursor = pagination.next_cursor || null;
-        state.hasMore = Boolean(pagination.has_more);
-        return d;
-    } catch (error) {
-        if (!(error instanceof ApiRequestError)) {
-            throw new InvalidResponseError(errorMessage, { cause: error });
-        }
-        throw error;
-    } finally {
-        state.loading = false;
-    }
-}
-
-function pageItems(data, field) {
-    return (data[field] || []).slice(0, TABLE_PAGE_SIZE);
-}
-
-function replaceHtmlIfChanged(element, nextHtml) {
-    if (!element) return false;
-    let comparableHtml = nextHtml;
-    if (typeof element.cloneNode === 'function') {
-        const comparisonElement = element.cloneNode(false);
-        comparisonElement.innerHTML = nextHtml;
-        comparableHtml = comparisonElement.innerHTML;
-    }
-    if (element.innerHTML === comparableHtml) return false;
-    element.innerHTML = nextHtml;
-    return true;
-}
-
 function setTableLoading(tbodyId, colspan, options) {
     if (isSilentRefresh(options)) return;
     replaceHtmlIfChanged(
         document.getElementById(tbodyId),
         `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`,
     );
-}
-
-function renderPaginationControls(key) {
-    const containerId = tablePagerContainers[key];
-    const container = containerId ? document.getElementById(containerId) : null;
-    if (!container) return;
-    const state = getTablePageState(key);
-    replaceHtmlIfChanged(container, `
-        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="prev" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
-        <span class="pagination-status">第 ${state.page} 页</span>
-        <button class="btn btn-sm" data-action="table-page" data-table-key="${escapeAttribute(key)}" data-page-direction="next" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
-    `);
-}
-
-async function goToTablePage(key, direction) {
-    const state = getTablePageState(key);
-    if (state.loading) return;
-    if (direction === 'next') {
-        if (!state.hasMore || !state.nextCursor) return;
-        state.cursors[state.page] = state.nextCursor;
-        state.page += 1;
-    } else if (direction === 'prev') {
-        if (state.page <= 1) return;
-        state.page -= 1;
-        state.cursors = state.cursors.slice(0, state.page);
-    }
-    await reloadPaginatedTable(key);
-}
-
-function reloadPaginatedTable(key) {
-    if (!tablePagerContainers[key]) return Promise.resolve();
-    return loadSection(currentSection, { mode: RefreshMode.MANUAL });
 }
 
 const OPTION_PAGE_LIMIT = 100;
@@ -604,69 +314,21 @@ function initializeMobileNavigation() {
     syncMobileNavigation();
 }
 
-function startAutoRefresh() {
-    stopAutoRefresh();
-    refreshInterval = setInterval(
-        () => {
-            if (!document.hidden) refreshCurrentSection({ mode: RefreshMode.AUTO });
-        },
-        AUTO_REFRESH_MS,
-    );
-}
-function stopAutoRefresh() {
-    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
-}
-function formatRefreshTime(value) {
-    if (!value) return '—';
-    return value.toLocaleTimeString('zh-CN', { hour12: false });
-}
-
-function updateRefreshTime({ stale = false } = {}) {
+function updateRefreshTime({
+    lastRefreshAttemptAt = null,
+    lastRefreshSuccessAt = null,
+    stale = false,
+} = {}) {
     const status = document.getElementById('last-refresh');
     status.textContent = `最后成功: ${formatRefreshTime(lastRefreshSuccessAt)} · 最后尝试: ${formatRefreshTime(lastRefreshAttemptAt)}`;
     status.title = stale ? '后台刷新失败，当前显示的数据可能已过期' : '';
     document.querySelector('.refresh-dot')?.classList.toggle('stale', stale);
 }
 
-async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
-    const sectionId = currentSection;
-    return loadSection(sectionId, { mode });
-}
-
-function handleDashboardVisibilityChange() {
-    if (!document.hidden) {
-        refreshCurrentSection({ mode: RefreshMode.AUTO });
-    }
-}
-
 // --- Navigation ---
-function canAccessDashboardSection(id) {
-    return DASHBOARD_SECTIONS.includes(id)
-        && (isAdmin || !ADMIN_ONLY_DASHBOARD_SECTIONS.includes(id));
-}
-
-function dashboardSectionFromLocation() {
-    const requestedSection = new URL(window.location.href).searchParams.get('section');
-    return canAccessDashboardSection(requestedSection)
-        ? requestedSection
-        : DASHBOARD_DEFAULT_SECTION;
-}
-
-function updateDashboardSectionUrl(id, replace = false) {
-    const url = new URL(window.location.href);
-    url.hash = '';
-    if (id === DASHBOARD_DEFAULT_SECTION) {
-        url.searchParams.delete('section');
-    } else {
-        url.searchParams.set('section', id);
-    }
-    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-    window.history[replace ? 'replaceState' : 'pushState']({ section: id }, '', nextUrl);
-}
-
 function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } = {}) {
     const nextSection = canAccessDashboardSection(id) ? id : DASHBOARD_DEFAULT_SECTION;
-    currentSection = nextSection;
+    appState.currentSection = nextSection;
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.getElementById('section-' + nextSection).classList.add('active');
@@ -866,9 +528,9 @@ function showSectionLoadError(id, error, { background = false } = {}) {
         error,
     });
     if (error instanceof AuthExpiredError) return;
-    if (background && successfulSections.has(id)) {
-        if (currentSection === id) {
-            updateRefreshTime({ stale: true });
+    if (background) {
+        if (appState.currentSection === id) {
+            updateRefreshTime({ ...getRefreshSnapshot(), stale: true });
             showToast(`后台刷新失败，当前数据可能已过期。${error.message}${requestId}`, 'error');
         }
         return;
@@ -887,87 +549,6 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     retry.addEventListener('click', () => loadSection(id, { mode: RefreshMode.MANUAL }));
     banner.append(message, retry);
     section.prepend(banner);
-}
-
-function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
-    const existingRefresh = sectionRefreshes.get(id);
-    const collisionAction = refreshCollisionAction(mode, Boolean(existingRefresh));
-    if (collisionAction === 'skip') return Promise.resolve(false);
-    if (collisionAction === 'queue') {
-        const existingQueuedRefresh = queuedManualRefreshes.get(id);
-        if (existingQueuedRefresh) return existingQueuedRefresh;
-
-        // A manual refresh wins over an in-flight AUTO by running once after it settles.
-        // Repeated clicks share this queued promise instead of adding more requests.
-        const queuedRefresh = existingRefresh.promise.then(() => {
-            queuedManualRefreshes.delete(id);
-            return loadSection(id, { mode: RefreshMode.MANUAL });
-        });
-        queuedManualRefreshes.set(id, queuedRefresh);
-        return queuedRefresh;
-    }
-    if (collisionAction === 'replace') existingRefresh.controller.abort();
-
-    const controller = new AbortController();
-    const refresh = { controller, promise: null };
-    refresh.promise = performSectionLoad(id, { mode, controller })
-        .finally(() => {
-            if (sectionRefreshes.get(id) === refresh) {
-                sectionRefreshes.delete(id);
-            }
-        });
-    sectionRefreshes.set(id, refresh);
-    return refresh.promise;
-}
-
-async function performSectionLoad(id, { mode, controller }) {
-    const background = isSilentRefresh({ mode }) && successfulSections.has(id);
-    if (currentSection === id) {
-        lastRefreshAttemptAt = new Date();
-        updateRefreshTime({ stale: false });
-    }
-    const loaders = {
-        overview: loadOverview,
-        trends: loadTrends,
-        organizations: loadOrgs,
-        developers: loadDevs,
-        projects: loadProjects,
-        tools: loadTools,
-        users: loadUsers,
-        departments: loadDepartments,
-        apikeys: loadApiKeys,
-        releases: loadReleaseManagement,
-        files: loadManagedFiles,
-        help: loadHelp,
-    };
-    try {
-        await loaders[id]({ mode, signal: controller.signal });
-        if (controller.signal.aborted) return false;
-        successfulSections.add(id);
-        clearSectionError(id);
-        if (!isAdmin && currentSection === id) {
-            await loadClientStatus({ mode, signal: controller.signal, sectionId: id });
-        }
-        if (currentSection === id) {
-            lastRefreshSuccessAt = new Date();
-            updateRefreshTime({ stale: false });
-        }
-        return true;
-    } catch (error) {
-        showSectionLoadError(id, error, { background });
-        return false;
-    }
-}
-
-// --- Toast notifications ---
-function showToast(message, type = 'info') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
 }
 
 async function copyHelpCommand(button) {
@@ -1061,31 +642,6 @@ let trendChartType = null;
 let agentComparisonChart = null;
 const chartDataSignatures = new WeakMap();
 let developerGitInfo = new Map();
-
-function setDisplayIfChanged(element, display) {
-    if (!element || element.style.display === display) return false;
-    element.style.display = display;
-    return true;
-}
-
-function setTextIfChanged(element, text) {
-    const nextText = String(text);
-    if (!element || element.textContent === nextText) return false;
-    element.textContent = nextText;
-    return true;
-}
-
-function setClassNameIfChanged(element, className) {
-    if (!element || element.className === className) return false;
-    element.className = className;
-    return true;
-}
-
-function setTitleIfChanged(element, title) {
-    if (!element || element.title === title) return false;
-    element.title = title;
-    return true;
-}
 
 function chartDataSignature(labels, datasets) {
     return JSON.stringify({ labels, datasets });
@@ -1228,7 +784,7 @@ function renderOverviewDevelopers(data) {
     replaceHtmlIfChanged(document.getElementById('top-developers'), nextHtml);
 }
 
-async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
+async function loadClientStatus({ signal, mode, sectionId = appState.currentSection }) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -1239,7 +795,7 @@ async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
     if ((!cardEl || !statusEl || !detailEl || !dotEl) && !overviewStatusEl) return;
     try {
         const d = await apiRequest('/api/v1/client/status', { signal });
-        if (currentSection !== sectionId) return;
+        if (appState.currentSection !== sectionId) return;
         if (!d.detected) {
             if (overviewStatusEl) {
                 setTextIfChanged(overviewStatusEl, '未检测到');
@@ -1299,7 +855,7 @@ async function loadClientStatus({ signal, mode, sectionId = currentSection }) {
     } catch(error) {
         if (error instanceof AbortError || error instanceof AuthExpiredError) throw error;
         console.error('Client status request failed', error);
-        if (currentSection !== sectionId) return;
+        if (appState.currentSection !== sectionId) return;
         if (isSilentRefresh({ mode })) return;
         if (overviewStatusEl) {
             setTextIfChanged(overviewStatusEl, '检测失败');
@@ -2088,8 +1644,8 @@ async function loadDepartments({ signal, mode }) {
 }
 
 function departmentLevelCacheKey() {
-    const state = getTablePageState('departments');
-    const cursor = state.cursors[state.page - 1] || '';
+    const state = getTablePageSnapshot('departments');
+    const cursor = state.cursor || '';
     return `${activeDepartmentParentId || 'root'}:${state.page}:${cursor}`;
 }
 
@@ -2574,7 +2130,7 @@ async function createApiKey() {
         document.getElementById('create-key-btn').style.display = 'none';
         showToast('API 密钥创建成功', 'success');
         resetTablePage('apikeys');
-        if (currentSection === 'apikeys') loadSection('apikeys');
+        if (appState.currentSection === 'apikeys') loadSection('apikeys');
     } catch(e) {
         showToast(`创建失败：${e.message}`, 'error');
     }
@@ -2600,7 +2156,9 @@ async function createApiKeyForUser() {
         showToast('API 密钥创建成功', 'success');
         resetTablePage('users');
         resetTablePage('apikeys');
-        if (['users', 'apikeys'].includes(currentSection)) loadSection(currentSection);
+        if (['users', 'apikeys'].includes(appState.currentSection)) {
+            loadSection(appState.currentSection);
+        }
     } catch(e) {
         showToast(`创建失败：${e.message}`, 'error');
     }
@@ -3246,11 +2804,11 @@ initializeDashboardActions();
 initializeMobileNavigation();
 document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
 window.addEventListener('beforeunload', warnBeforeLeavingDuringUpload);
-const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
+const requestedInitialSection = requestedDashboardSection();
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);
 if (requestedInitialSection && requestedInitialSection !== initialSection) {
     updateDashboardSectionUrl(initialSection, true);
 }
-updateRefreshTime();
+updateRefreshTime(getRefreshSnapshot());
 startAutoRefresh();

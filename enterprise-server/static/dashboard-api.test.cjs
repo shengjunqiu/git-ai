@@ -2,54 +2,30 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const dashboardSource = fs.readFileSync(
-    path.join(__dirname, 'dashboard.js'),
+const apiSource = fs.readFileSync(
+    path.join(__dirname, 'dashboard', 'api.js'),
     'utf8',
 );
-const requestLayerStart = dashboardSource.indexOf('class ApiRequestError');
-const requestLayerEnd = dashboardSource.indexOf('// --- Auto refresh ---', requestLayerStart);
-assert.notEqual(requestLayerStart, -1);
-assert.notEqual(requestLayerEnd, -1);
-const requestLayerSource = dashboardSource.slice(requestLayerStart, requestLayerEnd);
+const apiModulePromise = import(
+    `data:text/javascript;base64,${Buffer.from(apiSource).toString('base64')}`
+);
 
-function createHarness(fetchImpl) {
+async function createHarness(fetchImpl) {
+    const apiModule = await apiModulePromise;
     let assignedUrl = null;
-    const context = vm.createContext({
-        AbortController,
-        DOMException,
-        Headers,
-        Response,
-        URL,
-        clearTimeout,
-        console,
-        fetch: fetchImpl,
-        setTimeout,
-        window: {
-            location: {
-                hash: '#details',
-                pathname: '/me',
-                search: '?section=users',
-                assign(url) {
-                    assignedUrl = url;
-                },
-            },
+    const location = {
+        hash: '#details',
+        pathname: '/me',
+        search: '?section=users',
+        assign(url) {
+            assignedUrl = url;
         },
-    });
-    vm.runInContext(`${requestLayerSource}
-globalThis.requestTestExports = {
-    apiRequest,
-    AbortError,
-    AuthExpiredError,
-    HttpError,
-    InvalidResponseError,
-    NetworkError,
-    PermissionDeniedError,
-    TimeoutError,
-};`, context);
+    };
+    const { apiRequest } = apiModule.createApiClient({ fetchImpl, location });
     return {
-        ...context.requestTestExports,
+        ...apiModule,
+        apiRequest,
         assignedUrl: () => assignedUrl,
     };
 }
@@ -66,7 +42,7 @@ function jsonResponse(data, { status = 200, requestId = 'req-test' } = {}) {
 
 test('adds Accept and parses a JSON success response', async () => {
     let accept = null;
-    const harness = createHarness(async (_url, options) => {
+    const harness = await createHarness(async (_url, options) => {
         accept = options.headers.get('Accept');
         return jsonResponse({ ok: true });
     });
@@ -76,7 +52,7 @@ test('adds Accept and parses a JSON success response', async () => {
 });
 
 test('401 preserves metadata and redirects back to the current page', async () => {
-    const harness = createHarness(async () =>
+    const harness = await createHarness(async () =>
         jsonResponse({ error: 'expired' }, { status: 401, requestId: 'req-401' }));
 
     await assert.rejects(
@@ -95,7 +71,7 @@ test('401 preserves metadata and redirects back to the current page', async () =
 });
 
 test('403 is a typed permission error', async () => {
-    const harness = createHarness(async () =>
+    const harness = await createHarness(async () =>
         jsonResponse({ error: '仅管理员可操作' }, { status: 403 }));
 
     await assert.rejects(
@@ -107,7 +83,7 @@ test('403 is a typed permission error', async () => {
 
 test('GET retries one 429 but POST transport errors are not retried', async () => {
     let getAttempts = 0;
-    const getHarness = createHarness(async () => {
+    const getHarness = await createHarness(async () => {
         getAttempts += 1;
         return getAttempts === 1
             ? jsonResponse({ error: 'slow down' }, { status: 429 })
@@ -117,7 +93,7 @@ test('GET retries one 429 but POST transport errors are not retried', async () =
     assert.equal(getAttempts, 2);
 
     let postAttempts = 0;
-    const postHarness = createHarness(async () => {
+    const postHarness = await createHarness(async () => {
         postAttempts += 1;
         throw new TypeError('offline');
     });
@@ -129,7 +105,7 @@ test('GET retries one 429 but POST transport errors are not retried', async () =
 });
 
 test('500 hides server details and keeps request ID', async () => {
-    const harness = createHarness(async () =>
+    const harness = await createHarness(async () =>
         jsonResponse(
             { error: 'database password and internal stack' },
             { status: 500, requestId: 'req-500' },
@@ -158,7 +134,7 @@ test('HTML, malformed JSON, and empty success responses are typed invalid respon
             headers: { 'content-type': 'application/json' },
         }),
     ]) {
-        const harness = createHarness(async () => response);
+        const harness = await createHarness(async () => response);
         await assert.rejects(
             harness.apiRequest('/invalid', { retries: 0 }),
             error => error.name === 'InvalidResponseError',
@@ -167,7 +143,7 @@ test('HTML, malformed JSON, and empty success responses are typed invalid respon
 });
 
 test('offline, timeout, and caller cancellation have distinct error types', async () => {
-    const offlineHarness = createHarness(async () => {
+    const offlineHarness = await createHarness(async () => {
         throw new TypeError('offline');
     });
     await assert.rejects(
@@ -182,13 +158,13 @@ test('offline, timeout, and caller cancellation have distinct error types', asyn
             { once: true },
         );
     });
-    const timeoutHarness = createHarness(hangingFetch);
+    const timeoutHarness = await createHarness(hangingFetch);
     await assert.rejects(
         timeoutHarness.apiRequest('/slow', { retries: 0, timeoutMs: 5 }),
         error => error.name === 'TimeoutError',
     );
 
-    const slowBodyHarness = createHarness(async (_url, options) => ({
+    const slowBodyHarness = await createHarness(async (_url, options) => ({
         headers: new Headers({ 'content-type': 'application/json' }),
         ok: true,
         status: 200,
@@ -205,7 +181,7 @@ test('offline, timeout, and caller cancellation have distinct error types', asyn
         error => error.name === 'TimeoutError',
     );
 
-    const cancelHarness = createHarness(hangingFetch);
+    const cancelHarness = await createHarness(hangingFetch);
     const controller = new AbortController();
     const request = cancelHarness.apiRequest('/cancel', {
         retries: 0,
