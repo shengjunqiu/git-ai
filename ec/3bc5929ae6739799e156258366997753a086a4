@@ -1,0 +1,38 @@
+src/commands/checkpoint.rs
+  033b38519f34eb08 150-152,2378-2408
+src/report/model.rs
+  033b38519f34eb08 78
+src/report/scan.rs
+  033b38519f34eb08 175-176,197,199
+src/authorship/post_commit.rs
+  033b38519f34eb08 601-603,766-768
+src/metrics/attrs.rs
+  033b38519f34eb08 26
+src/repo_url.rs
+  033b38519f34eb08 1-3,6-7,46-82,125-155
+tests/integration/report.rs
+  033b38519f34eb08 4,46-54
+src/authorship/git_ai_hooks.rs
+  033b38519f34eb08 209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.13",
+  "base_commit_sha": "ec3bc5929ae6739799e156258366997753a086a4",
+  "prompts": {
+    "033b38519f34eb08": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7e5d-4210-7210-aae1-5b959f3fe1ea",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "linewell <test@linewell.com>",
+      "messages": [],
+      "total_additions": 141,
+      "total_deletions": 57,
+      "accepted_lines": 6985,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/37b7ef2f3c743b8d24360a76974946833ed43b84f1a411c627b465bb946c3925"
+    }
+  }
+}
