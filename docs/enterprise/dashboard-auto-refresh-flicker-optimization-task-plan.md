@@ -112,19 +112,19 @@ async function loadDepartments({ mode = RefreshMode.INITIAL } = {}) {
 
 步骤：
 
-- [ ] 查看当前工作区状态：
+- [x] 查看当前工作区状态：
 
 ```bash
 git status --short
 ```
 
-- [ ] 记录已有未提交改动，避免覆盖用户工作。
-- [ ] 确认本任务主要修改 `enterprise-server/static/dashboard.js`；只有增加测试时才修改其他文件。
+- [x] 记录已有未提交改动，避免覆盖用户工作。
+- [x] 确认本任务主要修改 `enterprise-server/static/dashboard.js`；只有增加测试时才修改其他文件。
 
 验收标准：
 
-- [ ] 已记录工作区状态。
-- [ ] 已确认本任务与其他未提交改动没有冲突。
+- [x] 已记录工作区状态。
+- [x] 已确认本任务与其他未提交改动没有冲突。
 
 ### 0.2 记录当前自动刷新行为
 
@@ -140,22 +140,22 @@ git status --short
 
 验收标准：
 
-- [ ] 确认只有当前激活栏目发起自动刷新请求。
-- [ ] 确认部门等表格页面在请求开始时清空已有内容。
-- [ ] 确认总览和趋势页面的图表会销毁重建。
-- [ ] 保存至少一组优化前截图或录屏，供阶段 7 对比。
+- [x] 确认只有当前激活栏目发起自动刷新请求。
+- [x] 确认部门等表格页面在请求开始时清空已有内容。
+- [x] 确认总览和趋势页面的图表会销毁重建。
+- [x] 保存至少一组优化前截图或录屏，供阶段 7 对比（复用阶段 0 三视口截图）。
 
 ### 0.3 运行基线检查
 
 步骤：
 
-- [ ] 检查 JavaScript 语法：
+- [x] 检查 JavaScript 语法：
 
 ```bash
 node --check enterprise-server/static/dashboard.js
 ```
 
-- [ ] 运行 Enterprise Server 测试：
+- [x] 运行 Enterprise Server 测试：
 
 ```bash
 cargo test --manifest-path enterprise-server/Cargo.toml
@@ -163,8 +163,8 @@ cargo test --manifest-path enterprise-server/Cargo.toml
 
 验收标准：
 
-- [ ] JavaScript 语法检查通过。
-- [ ] Enterprise Server 测试通过，或已记录与本任务无关的既有失败。
+- [x] JavaScript 语法检查通过。
+- [x] Enterprise Server 测试通过，或已记录与本任务无关的既有失败。
 
 ## 阶段 1：建立统一刷新上下文
 
@@ -174,41 +174,41 @@ cargo test --manifest-path enterprise-server/Cargo.toml
 
 步骤：
 
-- [ ] 在自动刷新常量附近增加 `RefreshMode`。
-- [ ] 增加 `isSilentRefresh(options)` 辅助函数。
-- [ ] 不修改 `AUTO_REFRESH_MS`。
+- [x] 在自动刷新常量附近增加 `RefreshMode`。
+- [x] 增加 `isSilentRefresh(options)` 辅助函数。
+- [x] 不修改 `AUTO_REFRESH_MS`。
 
 验收标准：
 
-- [ ] 刷新模式只在一个位置定义。
-- [ ] 后续 loader 不直接判断计时器或全局时间，而是读取显式模式。
+- [x] 刷新模式只在一个位置定义。
+- [x] 后续 loader 不直接判断计时器或全局时间，而是读取显式模式。
 
 ### 1.2 让 `loadSection()` 返回 Promise
 
 步骤：
 
-- [ ] 把 `loadSection(id)` 改为 `loadSection(id, options)`。
-- [ ] 每个 `case` 使用 `return loadX(options)`，不再只调用后 `break`。
-- [ ] `help` 返回 `Promise.resolve()` 或保持为可等待的空结果。
-- [ ] `activateDashboardSection()` 以 `INITIAL` 模式加载栏目。
-- [ ] 时间范围、趋势指标和粒度等用户操作以 `MANUAL` 模式刷新。
+- [x] 把 `loadSection(id)` 改为 `loadSection(id, options)`。
+- [x] 每个 loader 使用 `return loadX(options)` 的等价映射并可等待。
+- [x] `help` 返回 `Promise.resolve()` 或保持为可等待的空结果。
+- [x] `activateDashboardSection()` 以 `INITIAL` 模式加载栏目。
+- [x] 时间范围、趋势指标和粒度等用户操作以 `MANUAL` 模式刷新。
 
 验收标准：
 
-- [ ] 调用者可以 `await loadSection(...)`。
-- [ ] 切换栏目和现有按钮功能不变。
-- [ ] URL、浏览器前进/后退和权限判断不受影响。
+- [x] 调用者可以 `await loadSection(...)`。
+- [x] 切换栏目和现有按钮功能不变。
+- [x] URL、浏览器前进/后退和权限判断不受影响。
 
 ### 1.3 改造 `refreshCurrentSection()`
 
 步骤：
 
-- [ ] 接收 `{ mode = RefreshMode.MANUAL }`。
-- [ ] 记录刷新开始时的 section ID。
-- [ ] `await loadSection(sectionId, { mode })`。
-- [ ] 只在请求成功且用户仍停留在同一栏目时更新“上次刷新时间”。
-- [ ] 自动刷新使用 `RefreshMode.AUTO`。
-- [ ] 刷新按钮和时间范围选择使用 `RefreshMode.MANUAL`。
+- [x] 接收 `{ mode = RefreshMode.MANUAL }`。
+- [x] 记录刷新开始时的 section ID。
+- [x] `await loadSection(sectionId, { mode })`。
+- [x] 只在请求成功且用户仍停留在同一栏目时更新“上次刷新时间”。
+- [x] 自动刷新使用 `RefreshMode.AUTO`。
+- [x] 刷新按钮和时间范围选择使用 `RefreshMode.MANUAL`。
 
 推荐结构：
 
@@ -224,9 +224,9 @@ async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
 
 验收标准：
 
-- [ ] “上次刷新时间”不再早于数据请求完成时间。
-- [ ] 自动刷新与手动刷新模式可以从调用链传到具体 loader。
-- [ ] 某个 loader 的异常不会形成未处理的 Promise rejection。
+- [x] “上次刷新时间”不再早于数据请求完成时间。
+- [x] 自动刷新与手动刷新模式可以从调用链传到具体 loader。
+- [x] 某个 loader 的异常不会形成未处理的 Promise rejection。
 
 ### 阶段 1 验证
 
@@ -234,7 +234,7 @@ async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
 node --check enterprise-server/static/dashboard.js
 ```
 
-- [ ] 语法检查通过。
+- [x] 语法检查通过。
 - [ ] 首次进入、切换栏目、前进/后退和手动刷新均正常。
 - [ ] 此阶段允许页面仍然闪烁；行为分流完成即可。
 
@@ -627,4 +627,3 @@ Test silent dashboard refresh behavior
 - 不建议通过删除自动刷新或单纯调大 `AUTO_REFRESH_MS` 作为长期回滚方案。
 - 若 Chart.js 原地更新在特定类型切换中不稳定，只允许对“图表类型真实变化”的情况局部回退到重建实例。
 - 回滚时不得移除首次加载、手动刷新、分页和错误状态的现有能力。
-

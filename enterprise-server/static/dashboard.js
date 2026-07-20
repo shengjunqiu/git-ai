@@ -240,6 +240,11 @@ function fmtTimeAgo(value) {
 // --- Auto refresh ---
 let refreshInterval = null;
 const AUTO_REFRESH_MS = 60000; // 60 seconds
+const RefreshMode = Object.freeze({
+    INITIAL: 'initial',
+    MANUAL: 'manual',
+    AUTO: 'auto',
+});
 const DASHBOARD_DEFAULT_SECTION = 'overview';
 const DASHBOARD_SECTIONS = [
     'overview',
@@ -274,6 +279,10 @@ const tablePagerContainers = {
     users: 'users-pagination',
     apikeys: 'apikeys-pagination',
 };
+
+function isSilentRefresh(options) {
+    return options?.mode === RefreshMode.AUTO;
+}
 
 function getTablePageState(key) {
     if (!tablePageState[key]) {
@@ -331,8 +340,8 @@ function pageItems(data, field) {
     return (data[field] || []).slice(0, TABLE_PAGE_SIZE);
 }
 
-function setTableLoading(tbodyId, colspan) {
-    if (successfulSections.has(currentSection)) return;
+function setTableLoading(tbodyId, colspan, options) {
+    if (isSilentRefresh(options)) return;
     document.getElementById(tbodyId).innerHTML =
         `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`;
 }
@@ -366,7 +375,7 @@ async function goToTablePage(key, direction) {
 
 function reloadPaginatedTable(key) {
     if (!tablePagerContainers[key]) return Promise.resolve();
-    return loadSection(currentSection);
+    return loadSection(currentSection, { mode: RefreshMode.MANUAL });
 }
 
 async function fetchAllPaginated(url, field, signal) {
@@ -514,7 +523,10 @@ function initializeMobileNavigation() {
 
 function startAutoRefresh() {
     stopAutoRefresh();
-    refreshInterval = setInterval(() => refreshCurrentSection(), AUTO_REFRESH_MS);
+    refreshInterval = setInterval(
+        () => refreshCurrentSection({ mode: RefreshMode.AUTO }),
+        AUTO_REFRESH_MS,
+    );
 }
 function stopAutoRefresh() {
     if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
@@ -531,8 +543,9 @@ function updateRefreshTime({ stale = false } = {}) {
     document.querySelector('.refresh-dot')?.classList.toggle('stale', stale);
 }
 
-function refreshCurrentSection() {
-    loadSection(currentSection, { background: successfulSections.has(currentSection) });
+async function refreshCurrentSection({ mode = RefreshMode.MANUAL } = {}) {
+    const sectionId = currentSection;
+    return loadSection(sectionId, { mode });
 }
 
 // --- Navigation ---
@@ -570,7 +583,7 @@ function activateDashboardSection(id, { updateUrl = false, replaceUrl = false } 
         .find(item => item.dataset.section === nextSection);
     if (activeNavItem) activeNavItem.classList.add('active');
     if (updateUrl) updateDashboardSectionUrl(nextSection, replaceUrl);
-    loadSection(nextSection);
+    loadSection(nextSection, { mode: RefreshMode.INITIAL });
 }
 
 function showSection(event, id) {
@@ -617,17 +630,20 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     retry.type = 'button';
     retry.className = 'btn btn-sm';
     retry.textContent = '重试';
-    retry.addEventListener('click', () => loadSection(id));
+    retry.addEventListener('click', () => loadSection(id, { mode: RefreshMode.MANUAL }));
     banner.append(message, retry);
     section.prepend(banner);
 }
 
-async function loadSection(id, { background = false } = {}) {
+async function loadSection(id, { mode = RefreshMode.MANUAL } = {}) {
     activeSectionRequestController?.abort();
     const controller = new AbortController();
     activeSectionRequestController = controller;
-    lastRefreshAttemptAt = new Date();
-    updateRefreshTime({ stale: false });
+    const background = isSilentRefresh({ mode }) && successfulSections.has(id);
+    if (currentSection === id) {
+        lastRefreshAttemptAt = new Date();
+        updateRefreshTime({ stale: false });
+    }
     const loaders = {
         overview: loadOverview,
         trends: loadTrends,
@@ -643,15 +659,19 @@ async function loadSection(id, { background = false } = {}) {
         help: async () => {},
     };
     try {
-        await loaders[id](controller.signal);
-        if (controller.signal.aborted) return;
+        await loaders[id]({ mode, signal: controller.signal });
+        if (controller.signal.aborted) return false;
         successfulSections.add(id);
-        lastRefreshSuccessAt = new Date();
         clearSectionError(id);
-        updateRefreshTime({ stale: false });
-        if (!isAdmin) await loadClientStatus(controller.signal);
+        if (!isAdmin) await loadClientStatus({ mode, signal: controller.signal });
+        if (currentSection === id) {
+            lastRefreshSuccessAt = new Date();
+            updateRefreshTime({ stale: false });
+        }
+        return true;
     } catch (error) {
         showSectionLoadError(id, error, { background });
+        return false;
     }
 }
 
@@ -725,7 +745,7 @@ let agentComparisonChart = null;
 let developerGitInfo = new Map();
 
 // --- Overview ---
-async function loadOverview(signal) {
+async function loadOverview({ signal, mode }) {
     const rangeLabel = getTimeRangeLabel();
     document.getElementById('overview-trend-title').textContent = `AI 代码趋势（${rangeLabel}）`;
 
@@ -764,11 +784,11 @@ async function loadOverview(signal) {
         }).join('') || '<div class="empty-state"><div class="empty-icon">📭</div><p>暂无开发者数据</p></div>';
     })();
 
-    const trendPromise = loadOverviewTrend(signal);
+    const trendPromise = loadOverviewTrend({ signal, mode });
     await Promise.all([summaryPromise, developersPromise, trendPromise]);
 }
 
-async function loadClientStatus(signal) {
+async function loadClientStatus({ signal }) {
     if (isAdmin) return;
     const cardEl = document.getElementById('sidebar-gitai');
     const statusEl = document.getElementById('sidebar-gitai-status');
@@ -856,7 +876,7 @@ async function loadClientStatus(signal) {
     }
 }
 
-async function loadOverviewTrend(signal) {
+async function loadOverviewTrend({ signal }) {
         const d = await apiRequest(
             withTimeRange('/api/v1/aggregate/trends?metric=ai_lines&granularity=day'),
             { signal },
@@ -903,7 +923,7 @@ async function loadOverviewTrend(signal) {
 }
 
 // --- Trends ---
-async function loadTrends(signal) {
+async function loadTrends({ signal }) {
     const metric = document.getElementById('trend-metric').value;
     const granularity = document.getElementById('trend-granularity').value;
 
@@ -996,8 +1016,8 @@ async function loadTrends(signal) {
 }
 
 // --- Organizations ---
-async function loadOrgs(signal) {
-    setTableLoading('org-table', 5);
+async function loadOrgs({ signal, mode }) {
+    setTableLoading('org-table', 5, { mode });
     try {
         const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败', signal);
         document.getElementById('org-table').innerHTML = pageItems(d, 'organizations').map(o => {
@@ -1024,11 +1044,11 @@ function changeDeveloperSorting() {
     developerSortBy = document.getElementById('developer-sort-by')?.value || 'ai_lines';
     developerSortOrder = document.getElementById('developer-sort-order')?.value || 'desc';
     resetTablePage('developers');
-    loadSection('developers');
+    loadSection('developers', { mode: RefreshMode.MANUAL });
 }
 
-async function loadDevs(signal) {
-    setTableLoading('dev-table', 8);
+async function loadDevs({ signal, mode }) {
+    setTableLoading('dev-table', 8, { mode });
     try {
         const developerUrl = `/api/v1/aggregate/developers?sort_by=${encodeURIComponent(developerSortBy)}&sort_order=${encodeURIComponent(developerSortOrder)}`;
         const d = await fetchPaginatedJson('developers', developerUrl, '加载开发者数据失败', signal);
@@ -1117,8 +1137,8 @@ function showDeveloperGitInfo(devId) {
 }
 
 // --- Projects ---
-async function loadProjects(signal) {
-    setTableLoading('proj-table', 6);
+async function loadProjects({ signal, mode }) {
+    setTableLoading('proj-table', 6, { mode });
     try {
         const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败', signal);
         document.getElementById('proj-table').innerHTML = pageItems(d, 'projects').map(p => {
@@ -1145,8 +1165,8 @@ async function loadProjects(signal) {
 }
 
 // --- Tools ---
-async function loadTools(signal) {
-    setTableLoading('tools-table', 5);
+async function loadTools({ signal, mode }) {
+    setTableLoading('tools-table', 5, { mode });
     try {
         const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败', signal);
         const tools = pageItems(d, 'tools');
@@ -1185,11 +1205,11 @@ async function loadTools(signal) {
 const selectedGitTrackingUserIds = new Set();
 let visibleGitTrackingUserIds = [];
 
-async function loadUsers(signal) {
+async function loadUsers({ signal, mode }) {
     selectedGitTrackingUserIds.clear();
     visibleGitTrackingUserIds = [];
     updateGitTrackingBulkSelection();
-    setTableLoading('users-table', 7);
+    setTableLoading('users-table', 7, { mode });
     try {
         const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败', signal);
         const users = pageItems(d, 'users');
@@ -1492,8 +1512,8 @@ async function loadAdminOrganizations(signal = activeSectionRequestController?.s
     return adminOrganizationsCache;
 }
 
-async function loadDepartments(signal) {
-    setTableLoading('departments-table', 6);
+async function loadDepartments({ signal, mode }) {
+    setTableLoading('departments-table', 6, { mode });
     try {
         departmentTreeRows = await fetchAllPaginated(
             '/api/v1/aggregate/departments',
@@ -1723,8 +1743,8 @@ async function createDepartment() {
 }
 
 // --- API Key Management ---
-async function loadApiKeys(signal) {
-    setTableLoading('apikeys-table', 7);
+async function loadApiKeys({ signal, mode }) {
+    setTableLoading('apikeys-table', 7, { mode });
     try {
         const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败', signal);
         const keys = pageItems(d, 'api_keys');
@@ -1954,10 +1974,10 @@ function renderSelectedReleaseFiles() {
     }).join('<br>');
 }
 
-async function loadReleaseManagement(signal) {
+async function loadReleaseManagement({ signal, mode }) {
     const table = document.getElementById('release-table');
     if (!table) return;
-    if (!successfulSections.has('releases')) {
+    if (!isSilentRefresh({ mode })) {
         table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
     }
         const [metadata, assetData] = await Promise.all([
@@ -2076,10 +2096,10 @@ async function promoteCliRelease(version, checksum) {
 }
 
 // --- Managed File Center ---
-async function loadManagedFiles(signal) {
+async function loadManagedFiles({ signal, mode }) {
     const table = document.getElementById('managed-files-table');
     if (!table) return;
-    if (!successfulSections.has('files')) {
+    if (!isSilentRefresh({ mode })) {
         table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
     }
         const result = await apiRequest('/api/admin/files', { signal });

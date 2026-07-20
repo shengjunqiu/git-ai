@@ -582,9 +582,9 @@ Make enterprise dashboard navigation responsive
 
 ### 4.1 确认前置条件
 
-- [ ] 阶段 2 的 `apiRequest()` 已支持 `AbortSignal`。
-- [ ] 首次、手动和自动刷新可以区分。
-- [ ] 错误展示支持保留旧数据。
+- [x] 阶段 2 的 `apiRequest()` 已支持 `AbortSignal`。
+- [x] 首次、手动和自动刷新可以区分。
+- [x] 错误展示支持保留旧数据。
 
 ### 4.2 执行专项计划
 

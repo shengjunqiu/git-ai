@@ -159,13 +159,13 @@
                         <div class="page-subtitle">AI 代码归属随时间的变化趋势</div>
                     </div>
                     <div class="toolbar">
-                        <select id="trend-metric" onchange="loadTrends()">
+                        <select id="trend-metric" onchange="refreshCurrentSection()">
                             <option value="ai_ratio">AI 占比</option>
                             <option value="ai_lines">AI 代码行数</option>
                             <option value="human_lines">非 AI 代码行数</option>
                             <option value="commits">提交数</option>
                         </select>
-                        <select id="trend-granularity" onchange="loadTrends()">
+                        <select id="trend-granularity" onchange="refreshCurrentSection()">
                             <option value="day" selected>按天</option>
                             <option value="week">按周</option>
                             <option value="month">按月</option>
@@ -348,7 +348,7 @@
                         <div class="page-title">CLI 版本发布</div>
                         <div class="page-subtitle">上传完整跨平台安装包，并安全更新企业版 latest 渠道</div>
                     </div>
-                    <button class="btn" onclick="loadReleaseManagement()">🔄 刷新</button>
+                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
@@ -391,7 +391,7 @@
                         <div class="page-title">文件中心</div>
                         <div class="page-subtitle">管理文档、配置和压缩包的版本及稳定下载链接</div>
                     </div>
-                    <button class="btn" onclick="loadManagedFiles()">🔄 刷新</button>
+                    <button class="btn" onclick="refreshCurrentSection()">🔄 刷新</button>
                 </div>
 
                 <div class="publish-card">
