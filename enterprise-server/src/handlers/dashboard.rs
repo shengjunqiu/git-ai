@@ -4003,6 +4003,98 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "manual isolated database scale benchmark"]
+    async fn department_aggregate_scale_benchmark() -> anyhow::Result<()> {
+        const PAGE_SIZE: i64 = 25;
+        const WARM_RUNS: usize = 7;
+
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let mut state = db.state()?;
+        state.config.dashboard_use_rollups = true;
+
+        for department_count in [100_i32, 1_000, 10_000] {
+            let (org_id, org_slug) = insert_organization(
+                &db.pool,
+                &format!("Department Benchmark {department_count}"),
+            )
+            .await?;
+            insert_department_benchmark_fixture(
+                &db.pool,
+                org_id,
+                &format!("benchmark-{}", org_id.simple()),
+                department_count,
+            )
+            .await?;
+            let admin_id = insert_user(&db.pool, org_id, "Admin", "admin", None).await?;
+            let auth = org_admin_auth(admin_id, org_id, &org_slug);
+            sqlx::query("ANALYZE departments").execute(&db.pool).await?;
+
+            let first_started = std::time::Instant::now();
+            let Json(first_page) = aggregate_departments(
+                State(state.clone()),
+                auth.clone(),
+                Query(aggregate_query(
+                    Some(org_slug.clone()),
+                    None,
+                    Some(PAGE_SIZE),
+                    None,
+                )),
+            )
+            .await?;
+            let first_ms = first_started.elapsed().as_secs_f64() * 1_000.0;
+            let returned = first_page["departments"]
+                .as_array()
+                .expect("departments should be an array")
+                .len();
+            let has_more = first_page["pagination"]["has_more"]
+                .as_bool()
+                .expect("has_more should be a boolean");
+            assert_eq!(returned, PAGE_SIZE as usize);
+            assert!(has_more);
+
+            let mut warm_durations_ms = Vec::with_capacity(WARM_RUNS);
+            for _ in 0..WARM_RUNS {
+                let started = std::time::Instant::now();
+                let Json(page) = aggregate_departments(
+                    State(state.clone()),
+                    auth.clone(),
+                    Query(aggregate_query(
+                        Some(org_slug.clone()),
+                        None,
+                        Some(PAGE_SIZE),
+                        None,
+                    )),
+                )
+                .await?;
+                warm_durations_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+                assert_eq!(
+                    page["departments"]
+                        .as_array()
+                        .expect("departments should be an array")
+                        .len(),
+                    PAGE_SIZE as usize
+                );
+            }
+            warm_durations_ms.sort_by(f64::total_cmp);
+            let median_ms = warm_durations_ms[WARM_RUNS / 2];
+            let p95_ms = *warm_durations_ms
+                .last()
+                .expect("the benchmark should contain warm runs");
+
+            eprintln!(
+                "DEPARTMENT_BENCHMARK departments={department_count} page_size={PAGE_SIZE} \
+                 initial_api_requests=1 returned={returned} has_more={has_more} \
+                 first_ms={first_ms:.2} median_ms={median_ms:.2} p95_ms={p95_ms:.2}"
+            );
+        }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dashboard_stat_aggregates_cursor_paginate() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
@@ -4387,6 +4479,29 @@ mod tests {
 
     async fn insert_department(pool: &PgPool, org_id: Uuid, name: &str) -> anyhow::Result<Uuid> {
         insert_department_with_parent(pool, org_id, name, None).await
+    }
+
+    async fn insert_department_benchmark_fixture(
+        pool: &PgPool,
+        org_id: Uuid,
+        slug_prefix: &str,
+        count: i32,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO departments (org_id, code, name, slug) \
+             SELECT $1, \
+                    'F' || LPAD(series::text, 6, '0'), \
+                    'Department ' || LPAD(series::text, 6, '0'), \
+                    $2 || '-' || series::text \
+             FROM generate_series(1, $3::integer) AS series",
+        )
+        .bind(org_id)
+        .bind(slug_prefix)
+        .bind(count)
+        .execute(pool)
+        .await?;
+
+        Ok(())
     }
 
     async fn insert_department_with_parent(
