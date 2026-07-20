@@ -1,0 +1,30 @@
+docs/enterprise/dashboard-auto-refresh-flicker-optimization-task-plan.md
+  69e86842745e0e94 255-260,284-287,293-300,304-308,314-318,322-324
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 341-353,356-359,367,371,1036,1045,1070,1072-1076,1081,1092,1109-1110,1163,1179,1194-1197,1201,1219,1236-1251,1253-1257,1261,1278,1280,1293,1305-1307,1318,1559-1570,1572-1573,1575-1576,1578,1601,1628,1651-1654,1658,1682,1797-1800,1804,1821,2029-2032,2053,2057,2061,2087,2156-2159,2163,2196
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 591-593
+docs/enterprise/enterprise-dashboard-auto-refresh.md
+  69e86842745e0e94 50-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.12",
+  "base_commit_sha": "34e274ba15e0c015d197f886f9670856222862f1",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 165,
+      "total_deletions": 91,
+      "accepted_lines": 166,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/3539d427c04eab41a4de1e3d776812249b89daf678c77363212cb4cd0fd47179"
+    }
+  }
+}
