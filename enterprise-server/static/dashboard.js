@@ -325,8 +325,6 @@ async function fetchPaginatedJson(key, url, errorMessage, signal) {
         state.hasMore = Boolean(pagination.has_more);
         return d;
     } catch (error) {
-        state.nextCursor = null;
-        state.hasMore = false;
         if (!(error instanceof ApiRequestError)) {
             throw new InvalidResponseError(errorMessage, { cause: error });
         }
@@ -340,10 +338,25 @@ function pageItems(data, field) {
     return (data[field] || []).slice(0, TABLE_PAGE_SIZE);
 }
 
+function replaceHtmlIfChanged(element, nextHtml) {
+    if (!element) return false;
+    let comparableHtml = nextHtml;
+    if (typeof element.cloneNode === 'function') {
+        const comparisonElement = element.cloneNode(false);
+        comparisonElement.innerHTML = nextHtml;
+        comparableHtml = comparisonElement.innerHTML;
+    }
+    if (element.innerHTML === comparableHtml) return false;
+    element.innerHTML = nextHtml;
+    return true;
+}
+
 function setTableLoading(tbodyId, colspan, options) {
     if (isSilentRefresh(options)) return;
-    document.getElementById(tbodyId).innerHTML =
-        `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`;
+    replaceHtmlIfChanged(
+        document.getElementById(tbodyId),
+        `<tr><td colspan="${colspan}" style="color:var(--text-muted)">加载中...</td></tr>`,
+    );
 }
 
 function renderPaginationControls(key) {
@@ -351,11 +364,11 @@ function renderPaginationControls(key) {
     const container = containerId ? document.getElementById(containerId) : null;
     if (!container) return;
     const state = getTablePageState(key);
-    container.innerHTML = `
+    replaceHtmlIfChanged(container, `
         <button class="btn btn-sm" onclick="goToTablePage('${key}', 'prev')" ${state.page <= 1 || state.loading ? 'disabled' : ''}>上一页</button>
         <span class="pagination-status">第 ${state.page} 页</span>
         <button class="btn btn-sm" onclick="goToTablePage('${key}', 'next')" ${!state.hasMore || state.loading ? 'disabled' : ''}>下一页</button>
-    `;
+    `);
 }
 
 async function goToTablePage(key, direction) {
@@ -1020,7 +1033,7 @@ async function loadOrgs({ signal, mode }) {
     setTableLoading('org-table', 5, { mode });
     try {
         const d = await fetchPaginatedJson('organizations', '/api/v1/aggregate/organizations', '加载组织数据失败', signal);
-        document.getElementById('org-table').innerHTML = pageItems(d, 'organizations').map(o => {
+        const nextHtml = pageItems(d, 'organizations').map(o => {
             return `<tr>
                 <td><strong>${escapeHtml(o.organization)}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(o.org_slug || '')}</span></td>
                 <td>${fmt(o.total_commits)}</td>
@@ -1029,6 +1042,7 @@ async function loadOrgs({ signal, mode }) {
                 <td>${pctBar(o.pct_ai)} <span style="font-size:0.8rem">${clampPercent(o.pct_ai).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">暂无组织数据</td></tr>';
+        replaceHtmlIfChanged(document.getElementById('org-table'), nextHtml);
         renderPaginationControls('organizations');
     } catch(e) {
         renderPaginationControls('organizations');
@@ -1053,15 +1067,18 @@ async function loadDevs({ signal, mode }) {
         const developerUrl = `/api/v1/aggregate/developers?sort_by=${encodeURIComponent(developerSortBy)}&sort_order=${encodeURIComponent(developerSortOrder)}`;
         const d = await fetchPaginatedJson('developers', developerUrl, '加载开发者数据失败', signal);
         const developers = pageItems(d, 'developers');
-        developerGitInfo = new Map();
+        const nextDeveloperGitInfo = new Map();
         if (developers.length === 0) {
-            document.getElementById('dev-table').innerHTML =
-                '<tr><td colspan="8" style="color:var(--text-muted)">暂无开发者数据</td></tr>';
+            developerGitInfo = nextDeveloperGitInfo;
+            replaceHtmlIfChanged(
+                document.getElementById('dev-table'),
+                '<tr><td colspan="8" style="color:var(--text-muted)">暂无开发者数据</td></tr>',
+            );
             renderPaginationControls('developers');
             return;
         }
 
-        document.getElementById('dev-table').innerHTML = developers.map(dev => {
+        const nextHtml = developers.map(dev => {
             const total = dev.total_added_lines || 0;
             const ai = dev.ai_added_lines || 0;
             const devId = dev.id || dev.email || '';
@@ -1072,7 +1089,7 @@ async function loadDevs({ signal, mode }) {
             const label = dev.name && dev.name !== dev.email
                 ? `<strong>${nameDisplay}</strong><br><span style="color:var(--text-muted);font-size:0.75rem">${emailDisplay}</span>`
                 : `<strong>${emailDisplay}</strong>`;
-            developerGitInfo.set(devId, {
+            nextDeveloperGitInfo.set(devId, {
                 name: dev.name || '',
                 email: dev.email || '',
                 department: dev.department || '',
@@ -1089,6 +1106,8 @@ async function loadDevs({ signal, mode }) {
                 <td><button class="btn btn-sm" onclick="showDeveloperGitInfo(${actionDevId})">Git 信息</button></td>
             </tr>`;
         }).join('');
+        developerGitInfo = nextDeveloperGitInfo;
+        replaceHtmlIfChanged(document.getElementById('dev-table'), nextHtml);
         renderPaginationControls('developers');
     } catch(e) {
         renderPaginationControls('developers');
@@ -1141,7 +1160,7 @@ async function loadProjects({ signal, mode }) {
     setTableLoading('proj-table', 6, { mode });
     try {
         const d = await fetchPaginatedJson('projects', '/api/v1/aggregate/projects', '加载项目数据失败', signal);
-        document.getElementById('proj-table').innerHTML = pageItems(d, 'projects').map(p => {
+        const nextHtml = pageItems(d, 'projects').map(p => {
             const displayName = escapeHtml(p.project_name || (p.repo_url ? p.repo_url.split('/').pop() : '—'));
             const displayUrl = escapeHtml(p.repo_url || p.remote_url_hash || '');
             const branch = escapeHtml(p.branch || '—');
@@ -1157,6 +1176,7 @@ async function loadProjects({ signal, mode }) {
                 <td>${pctBar(p.pct_ai)} <span style="font-size:0.8rem">${clampPercent(p.pct_ai).toFixed(1)}%</span></td>
             </tr>`;
         }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">暂无项目数据</td></tr>';
+        replaceHtmlIfChanged(document.getElementById('proj-table'), nextHtml);
         renderPaginationControls('projects');
     } catch(e) {
         renderPaginationControls('projects');
@@ -1171,12 +1191,14 @@ async function loadTools({ signal, mode }) {
         const d = await fetchPaginatedJson('tools', '/api/v1/aggregate/tools', '加载工具数据失败', signal);
         const tools = pageItems(d, 'tools');
         if (tools.length === 0) {
-            document.getElementById('tools-table').innerHTML =
-                '<tr><td colspan="5" style="color:var(--text-muted)">暂无工具使用数据，数据将在报告上传或指标事件后显示</td></tr>';
+            replaceHtmlIfChanged(
+                document.getElementById('tools-table'),
+                '<tr><td colspan="5" style="color:var(--text-muted)">暂无工具使用数据，数据将在报告上传或指标事件后显示</td></tr>',
+            );
             renderPaginationControls('tools');
             return;
         }
-        document.getElementById('tools-table').innerHTML = tools.map(t => {
+        const nextHtml = tools.map(t => {
             const ai = t.ai_additions || 0;
             const mixed = t.mixed_additions || 0;
             const accepted = t.ai_accepted || 0;
@@ -1194,6 +1216,7 @@ async function loadTools({ signal, mode }) {
                 <td>${fmt(total)}</td>
             </tr>`;
         }).join('');
+        replaceHtmlIfChanged(document.getElementById('tools-table'), nextHtml);
         renderPaginationControls('tools');
     } catch(e) {
         renderPaginationControls('tools');
@@ -1206,23 +1229,36 @@ const selectedGitTrackingUserIds = new Set();
 let visibleGitTrackingUserIds = [];
 
 async function loadUsers({ signal, mode }) {
-    selectedGitTrackingUserIds.clear();
-    visibleGitTrackingUserIds = [];
-    updateGitTrackingBulkSelection();
     setTableLoading('users-table', 7, { mode });
     try {
         const d = await fetchPaginatedJson('users', '/api/admin/users/list', '加载用户列表失败', signal);
         const users = pageItems(d, 'users');
+        const previousVisibleUserIds = new Set(visibleGitTrackingUserIds);
+        const nextVisibleUserIds = users
+            .filter(user => user.git_tracking_upload_enabled !== true)
+            .map(user => user.id);
+        const nextVisibleUserIdSet = new Set(nextVisibleUserIds);
+        if (isSilentRefresh({ mode })) {
+            selectedGitTrackingUserIds.forEach(userId => {
+                if (previousVisibleUserIds.has(userId) && !nextVisibleUserIdSet.has(userId)) {
+                    selectedGitTrackingUserIds.delete(userId);
+                }
+            });
+        } else {
+            selectedGitTrackingUserIds.clear();
+        }
+        visibleGitTrackingUserIds = nextVisibleUserIds;
+
         if (users.length === 0) {
-            document.getElementById('users-table').innerHTML =
-                '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>';
+            replaceHtmlIfChanged(
+                document.getElementById('users-table'),
+                '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">👤</div><p>暂无用户，点击上方按钮创建</p></div></td></tr>',
+            );
+            updateGitTrackingBulkSelection();
             renderPaginationControls('users');
             return;
         }
-        visibleGitTrackingUserIds = users
-            .filter(user => user.git_tracking_upload_enabled !== true)
-            .map(user => user.id);
-        document.getElementById('users-table').innerHTML = users.map(u => {
+        const nextHtml = users.map(u => {
             const apiKeys = u.api_keys || [];
             const keyCount = apiKeys.length;
             const keyBadges = apiKeys.slice(0, 3).map(k =>
@@ -1239,8 +1275,9 @@ async function loadUsers({ signal, mode }) {
             const uploadStatus = uploadEnabled
                 ? '<span class="badge active">已授权</span>'
                 : '<span class="badge revoked">未授权</span>';
+            const selected = !uploadEnabled && selectedGitTrackingUserIds.has(u.id);
             return `<tr>
-                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser(${actionUserId}, this.checked)" ${uploadEnabled ? 'disabled' : ''} /></td>
+                <td class="selection-column"><input class="git-tracking-user-checkbox" type="checkbox" value="${userIdAttribute}" aria-label="选择${displayName}" onchange="toggleGitTrackingUser(${actionUserId}, this.checked)" ${uploadEnabled ? 'disabled' : ''} ${selected ? 'checked' : ''} /></td>
                 <td><strong>${displayName}</strong></td>
                 <td>${displayEmail}</td>
                 <td>${uploadStatus}</td>
@@ -1253,6 +1290,7 @@ async function loadUsers({ signal, mode }) {
                 </td>
             </tr>`;
         }).join('');
+        replaceHtmlIfChanged(document.getElementById('users-table'), nextHtml);
         updateGitTrackingBulkSelection();
         renderPaginationControls('users');
     } catch(e) {
@@ -1264,6 +1302,9 @@ async function loadUsers({ signal, mode }) {
 function toggleGitTrackingUser(userId, selected) {
     if (selected) selectedGitTrackingUserIds.add(userId);
     else selectedGitTrackingUserIds.delete(userId);
+    const checkbox = Array.from(document.querySelectorAll('.git-tracking-user-checkbox'))
+        .find(element => element.value === userId);
+    checkbox?.toggleAttribute('checked', selected);
     updateGitTrackingBulkSelection();
 }
 
@@ -1274,6 +1315,7 @@ function toggleAllGitTrackingUsers(selected) {
     });
     document.querySelectorAll('.git-tracking-user-checkbox:not(:disabled)').forEach(checkbox => {
         checkbox.checked = selected;
+        checkbox.toggleAttribute('checked', selected);
     });
     updateGitTrackingBulkSelection();
 }
@@ -1514,26 +1556,26 @@ async function loadAdminOrganizations(signal = activeSectionRequestController?.s
 
 async function loadDepartments({ signal, mode }) {
     setTableLoading('departments-table', 6, { mode });
-    try {
-        departmentTreeRows = await fetchAllPaginated(
-            '/api/v1/aggregate/departments',
-            'departments',
-            signal,
+    const nextDepartmentTreeRows = await fetchAllPaginated(
+        '/api/v1/aggregate/departments',
+        'departments',
+        signal,
+    );
+    departmentTreeRows = nextDepartmentTreeRows;
+    if (departmentTreeRows.length === 0) {
+        activeDepartmentParentId = null;
+        renderDepartmentBreadcrumb();
+        replaceHtmlIfChanged(
+            document.getElementById('departments-table'),
+            `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`,
         );
-        if (departmentTreeRows.length === 0) {
-            renderDepartmentBreadcrumb();
-            document.getElementById('departments-table').innerHTML =
-                `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>${isAdmin ? '暂无部门数据' : '当前账号尚未分配部门'}</p></div></td></tr>`;
-            return;
-        }
-
-        if (activeDepartmentParentId && !departmentTreeRows.some(dept => dept.id === activeDepartmentParentId)) {
-            activeDepartmentParentId = null;
-        }
-        renderDepartmentLevel();
-    } catch(e) {
-        throw e;
+        return;
     }
+
+    if (activeDepartmentParentId && !departmentTreeRows.some(dept => dept.id === activeDepartmentParentId)) {
+        activeDepartmentParentId = null;
+    }
+    renderDepartmentLevel();
 }
 
 function openDepartmentLevel(parentId) {
@@ -1556,7 +1598,7 @@ function renderDepartmentBreadcrumb() {
     if (!breadcrumb || !backButton) return;
 
     if (!isAdmin) {
-        breadcrumb.innerHTML = '<strong>我的部门</strong>';
+        replaceHtmlIfChanged(breadcrumb, '<strong>我的部门</strong>');
         backButton.style.display = 'none';
         return;
     }
@@ -1583,7 +1625,7 @@ function renderDepartmentBreadcrumb() {
             parts.push(`<button class="btn btn-sm" onclick="openDepartmentLevel(${jsString(dept.id)})">${escapeHtml(dept.department || '—')}</button>`);
         }
     });
-    breadcrumb.innerHTML = parts.join(' ');
+    replaceHtmlIfChanged(breadcrumb, parts.join(' '));
 
     backButton.style.display = activeDepartmentParentId ? '' : 'none';
 }
@@ -1606,12 +1648,14 @@ function renderDepartmentLevel() {
         });
 
     if (departments.length === 0) {
-        document.getElementById('departments-table').innerHTML =
-            '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>当前层级暂无下级部门</p></div></td></tr>';
+        replaceHtmlIfChanged(
+            document.getElementById('departments-table'),
+            '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🏷️</div><p>当前层级暂无下级部门</p></div></td></tr>',
+        );
         return;
     }
 
-    document.getElementById('departments-table').innerHTML = departments.map(dept => {
+    const nextHtml = departments.map(dept => {
             const departmentName = escapeHtml(dept.department || '—');
             const departmentCode = escapeHtml(dept.code || '—');
             const orgName = escapeHtml(dept.organization || '—');
@@ -1635,6 +1679,7 @@ function renderDepartmentLevel() {
                 <td>${fmt(total)}</td>
             </tr>`;
     }).join('');
+    replaceHtmlIfChanged(document.getElementById('departments-table'), nextHtml);
 }
 
 function departmentAiPercentage(department) {
@@ -1749,12 +1794,14 @@ async function loadApiKeys({ signal, mode }) {
         const d = await fetchPaginatedJson('apikeys', '/api/admin/api-keys', '加载密钥列表失败', signal);
         const keys = pageItems(d, 'api_keys');
         if (keys.length === 0) {
-            document.getElementById('apikeys-table').innerHTML =
-                '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔑</div><p>暂无 API 密钥，点击上方按钮创建</p></div></td></tr>';
+            replaceHtmlIfChanged(
+                document.getElementById('apikeys-table'),
+                '<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔑</div><p>暂无 API 密钥，点击上方按钮创建</p></div></td></tr>',
+            );
             renderPaginationControls('apikeys');
             return;
         }
-        document.getElementById('apikeys-table').innerHTML = keys.map(k => {
+        const nextHtml = keys.map(k => {
             const created = k.created_at ? new Date(k.created_at).toLocaleDateString('zh-CN') : '—';
             const expires = k.expires_at ? new Date(k.expires_at).toLocaleDateString('zh-CN') : '永不过期';
             const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未使用';
@@ -1771,6 +1818,7 @@ async function loadApiKeys({ signal, mode }) {
                 <td><button class="btn btn-sm btn-danger" onclick="revokeApiKey(${jsString(k.id)}, ${actionName})">撤销</button></td>
             </tr>`;
         }).join('');
+        replaceHtmlIfChanged(document.getElementById('apikeys-table'), nextHtml);
         renderPaginationControls('apikeys');
     } catch(e) {
         renderPaginationControls('apikeys');
@@ -1978,7 +2026,10 @@ async function loadReleaseManagement({ signal, mode }) {
     const table = document.getElementById('release-table');
     if (!table) return;
     if (!isSilentRefresh({ mode })) {
-        table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+        replaceHtmlIfChanged(
+            table,
+            '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>',
+        );
     }
         const [metadata, assetData] = await Promise.all([
             apiRequest('/worker/releases', { signal }),
@@ -1999,14 +2050,15 @@ async function loadReleaseManagement({ signal, mode }) {
         });
 
         const stats = document.getElementById('release-channel-stats');
-        stats.innerHTML = `
+        const nextStatsHtml = `
             <div class="stat-card"><div class="stat-label">LATEST</div><div class="stat-value total">${escapeHtml(latest?.version || '未发布')}</div><div class="stat-detail">${latest ? '客户端自动更新目标' : '尚未设置 latest 渠道'}</div></div>
             <div class="stat-card"><div class="stat-label">版本数量</div><div class="stat-value total">${versionGroups.size}</div><div class="stat-detail">包含草稿和已发布版本</div></div>
             <div class="stat-card"><div class="stat-label">发布文件</div><div class="stat-value total">${(assetData.assets || []).length}</div><div class="stat-detail">跨平台二进制、脚本与校验文件</div></div>`;
+        replaceHtmlIfChanged(stats, nextStatsHtml);
 
         const versions = Array.from(versionGroups.keys()).sort((a, b) =>
             b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
-        table.innerHTML = versions.map(version => {
+        const nextTableHtml = versions.map(version => {
             const assets = versionGroups.get(version) || [];
             const versionChannel = channels[version];
             const checksum = versionChannel?.checksum || assets.find(asset => asset.filename === 'SHA256SUMS')?.sha256 || '';
@@ -2032,6 +2084,7 @@ async function loadReleaseManagement({ signal, mode }) {
                 <td><div class="action-group">${actions.join('') || '—'}</div></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🚀</div><p>尚未上传 CLI 版本</p></div></td></tr>';
+        replaceHtmlIfChanged(table, nextTableHtml);
 }
 
 async function publishCliRelease(button) {
@@ -2100,11 +2153,14 @@ async function loadManagedFiles({ signal, mode }) {
     const table = document.getElementById('managed-files-table');
     if (!table) return;
     if (!isSilentRefresh({ mode })) {
-        table.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>';
+        replaceHtmlIfChanged(
+            table,
+            '<tr><td colspan="5" style="color:var(--text-muted)">加载中...</td></tr>',
+        );
     }
         const result = await apiRequest('/api/admin/files', { signal });
         const files = result.files || [];
-        table.innerHTML = files.map(file => {
+        const nextHtml = files.map(file => {
             const isPublic = file.is_public === true;
             const versions = (file.versions || []).slice().sort((a, b) =>
                 b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: 'base' }));
@@ -2137,6 +2193,7 @@ async function loadManagedFiles({ signal, mode }) {
                 </div></td>
             </tr>`;
         }).join('') || '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📦</div><p>尚未上传普通文件</p></div></td></tr>';
+        replaceHtmlIfChanged(table, nextHtml);
 }
 
 async function uploadManagedFile(button) {

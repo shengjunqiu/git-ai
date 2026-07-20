@@ -252,12 +252,12 @@ Add dashboard refresh modes
 
 依次处理：
 
-- [ ] `loadOrgs(options)`
-- [ ] `loadDevs(options)`
-- [ ] `loadProjects(options)`
-- [ ] `loadTools(options)`
-- [ ] `loadUsers(options)`
-- [ ] `loadApiKeys(options)`
+- [x] `loadOrgs(options)`
+- [x] `loadDevs(options)`
+- [x] `loadProjects(options)`
+- [x] `loadTools(options)`
+- [x] `loadUsers(options)`
+- [x] `loadApiKeys(options)`
 
 每个函数按以下顺序修改：
 
@@ -281,47 +281,47 @@ function replaceHtmlIfChanged(element, nextHtml) {
 
 验收标准：
 
-- [ ] 六个表格页面自动刷新时不出现“加载中...”。
-- [ ] 数据不变时不替换表格 DOM。
-- [ ] 当前页码和 cursor 保持不变。
-- [ ] 首次加载、空状态、错误状态和分页按钮仍正常。
+- [x] 六个表格页面自动刷新时不出现“加载中...”。
+- [x] 数据不变时不替换表格 DOM。
+- [x] 当前页码和 cursor 保持不变。
+- [x] 首次加载、空状态、错误状态和分页按钮仍正常。
 
 ### 2.2 单独改造部门页
 
 步骤：
 
-- [ ] 把 `loadDepartments()` 改为接收刷新模式。
-- [ ] 自动刷新时不调用 `setTableLoading('departments-table', 6)`。
-- [ ] 先把请求结果保存在局部变量中，不要在请求完成前覆盖 `departmentTreeRows`。
-- [ ] 请求成功后再更新 `departmentTreeRows`。
-- [ ] 保留有效的 `activeDepartmentParentId`。
-- [ ] 只有当前父部门已不存在时才退回根层级。
-- [ ] 让 `renderDepartmentBreadcrumb()` 和 `renderDepartmentLevel()` 使用“内容变化才写入”的方式。
-- [ ] 自动刷新失败时保留旧部门树、面包屑和当前层级。
+- [x] 把 `loadDepartments()` 改为接收刷新模式。
+- [x] 自动刷新时不调用 `setTableLoading('departments-table', 6)`。
+- [x] 先把请求结果保存在局部变量中，不要在请求完成前覆盖 `departmentTreeRows`。
+- [x] 请求成功后再更新 `departmentTreeRows`。
+- [x] 保留有效的 `activeDepartmentParentId`。
+- [x] 只有当前父部门已不存在时才退回根层级。
+- [x] 让 `renderDepartmentBreadcrumb()` 和 `renderDepartmentLevel()` 使用“内容变化才写入”的方式。
+- [x] 自动刷新失败时保留旧部门树、面包屑和当前层级。
 
 验收标准：
 
-- [ ] 在根部门和任意子部门层级停留超过 60 秒均不闪烁。
-- [ ] 自动刷新后仍处于原部门层级。
-- [ ] 当前层级数据变化时只更新一次。
-- [ ] 当前父部门被删除后安全回到根层级。
-- [ ] 非管理员的“我的部门”视图行为不变。
+- [ ] 在根部门和任意子部门层级停留超过 60 秒均不闪烁（待浏览器验收）。
+- [x] 自动刷新后仍处于原部门层级。
+- [x] 当前层级数据变化时只更新一次。
+- [x] 当前父部门被删除后安全回到根层级。
+- [x] 非管理员的“我的部门”视图行为不变。
 
 ### 2.3 改造版本发布和文件中心
 
 步骤：
 
-- [ ] `loadReleaseManagement(options)` 自动刷新时不写入中间加载行。
-- [ ] 发布统计卡和发布表格分别使用内容比较后更新。
-- [ ] `loadManagedFiles(options)` 自动刷新时不写入中间加载行。
-- [ ] 文件表格使用内容比较后更新。
-- [ ] 后台请求失败时保留已有发布信息和文件列表。
+- [x] `loadReleaseManagement(options)` 自动刷新时不写入中间加载行。
+- [x] 发布统计卡和发布表格分别使用内容比较后更新。
+- [x] `loadManagedFiles(options)` 自动刷新时不写入中间加载行。
+- [x] 文件表格使用内容比较后更新。
+- [x] 后台请求失败时保留已有发布信息和文件列表。
 
 验收标准：
 
-- [ ] 版本发布和文件中心自动刷新时不清空内容。
-- [ ] 上传、发布、删除等用户操作完成后仍能主动刷新并显示结果。
-- [ ] 模态框和操作中的按钮状态不会被自动刷新打断。
+- [x] 版本发布和文件中心自动刷新时不清空内容。
+- [x] 上传、发布、删除等用户操作完成后仍能主动刷新并显示结果。
+- [x] 模态框和操作中的按钮状态不会被自动刷新打断。
 
 ### 阶段 2 验证
 
