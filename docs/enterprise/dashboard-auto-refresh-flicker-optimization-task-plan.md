@@ -521,19 +521,19 @@ Prevent overlapping dashboard refreshes
 
 步骤：
 
-- [ ] 保留 `node --check` 作为必跑语法检查。
-- [ ] 如果实现中提取了不依赖 DOM 的纯函数，使用 Node 内置 `node:test` 为刷新模式和内容比较逻辑增加测试。
-- [ ] 如果不适合提取纯函数，在 PR 中明确记录浏览器手动验证矩阵，不写只检查字符串存在的脆弱测试。
-- [ ] 服务端 API 未修改时，仍运行 Enterprise Server 完整测试防止静态资源或路由回归。
+- [x] 保留 `node --check` 作为必跑语法检查。
+- [x] 使用 Node 内置 `node:test` 为刷新模式、内容比较、冲突策略和图表更新逻辑增加行为测试。
+- [x] 浏览器手动验证矩阵保留在阶段 7，没有增加只检查字符串存在的专项测试。
+- [x] 服务端 API 未修改，仍运行 Enterprise Server 完整测试防止静态资源或路由回归。
 
 最低测试场景：
 
-- [ ] `AUTO` 模式不调用 loading renderer。
-- [ ] `INITIAL` 和 `MANUAL` 模式仍允许 loading renderer。
-- [ ] 相同 HTML 不触发 DOM 替换。
-- [ ] 不同 HTML 只触发一次替换。
-- [ ] 同栏目重复自动刷新被合并或跳过。
-- [ ] 图表数据不变时不重建 Chart 实例。
+- [x] `AUTO` 模式不调用 loading renderer。
+- [x] `INITIAL` 和 `MANUAL` 模式仍允许 loading renderer。
+- [x] 相同 HTML 不触发 DOM 替换。
+- [x] 不同 HTML 只触发一次替换。
+- [x] 同栏目重复自动刷新被跳过。
+- [x] 图表数据不变时保留 Chart 实例且不调用 `update()`。
 
 ### 6.2 执行完整检查
 
@@ -546,15 +546,15 @@ task lint
 如果增加 Node 测试，再运行对应命令，例如：
 
 ```bash
-node --test enterprise-server/static/*.test.js
+node --test enterprise-server/static/*.test.cjs
 ```
 
 验收标准：
 
-- [ ] JavaScript 语法检查通过。
-- [ ] 新增的刷新逻辑测试通过。
-- [ ] Enterprise Server 测试通过。
-- [ ] 根仓库 lint 通过，或已记录与本任务无关的既有失败。
+- [x] JavaScript 语法检查通过。
+- [x] 新增的刷新逻辑测试通过（专项 4/4，全部静态前端测试 17/17）。
+- [x] Enterprise Server 测试通过（170/170）。
+- [x] 根仓库 lint 的既有失败已记录：`src/mdm/agents/codebuddy.rs`、`qoder.rs`、`trae.rs` 共 4 个未使用导入/`needless_return` 错误，与 Dashboard 改动无关。
 
 建议提交信息：
 
