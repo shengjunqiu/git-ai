@@ -42,10 +42,38 @@ DATABASE_URL=postgresql://gitai:gitai@localhost:5433/gitai_enterprise \
 
 部门聚合测试覆盖根层、直属子层、后代汇总、父节点不存在、跨层游标拒绝，以及受限用户
 忽略 `parent_id`。测试已连接仓库 Docker Compose 中的 PostgreSQL 并实际执行，专项 3/3、
-完整 Enterprise 170/170 通过；静态前端测试 17/17 通过。
+手动规模基准 1/1、完整 Enterprise 174 项通过且 1 项基准按预期忽略；静态前端测试
+28/28 通过。
 
-尚待：
+### 规模基准
 
-- 100、1,000、10,000 个部门的实际请求数和响应时间记录。
+新增默认忽略的 `department_aggregate_scale_benchmark`，在独立临时数据库中为每个规模创建
+一个组织和同一根层的部门，使用 PostgreSQL 16、启用 rollup 路径、每页 25 条调用真实
+`aggregate_departments` handler。每组记录第一次调用，并在随后 7 次调用中计算中位数和
+P95；测试结束后自动删除临时数据库。
+
+运行命令：
+
+```bash
+DATABASE_URL=postgresql://gitai:gitai@localhost:5433/gitai_enterprise \
+  cargo test --manifest-path enterprise-server/Cargo.toml \
+  department_aggregate_scale_benchmark -- --ignored --nocapture
+```
+
+2026-07-20 本地 Docker 基准结果：
+
+| 部门数 | 旧前端首屏请求数 | 新前端首屏请求数 | 返回行数 | 首次响应 | 预热中位数 | 预热 P95 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 1 | 1 | 25 | 26.73 ms | 6.72 ms | 18.57 ms |
+| 1,000 | 10 | 1 | 25 | 13.28 ms | 12.17 ms | 13.40 ms |
+| 10,000 | 50，且只得到前 5,000 条 | 1 | 25 | 894.21 ms | 155.97 ms | 246.45 ms |
+
+首屏 API 请求数和响应体行数已保持有界，不再随部门总数线性增长，也不再有 5,000 条
+静默截断。基准同时暴露了一个后续服务端优化点：当前递归 CTE 仍会遍历组织的完整部门树，
+因此 10,000 条数据下 SQL 计算时间仍随总量增长。本阶段解决的是前端全量拉取和请求瀑布；
+后续应将“先选择当前层页面、再递归汇总选中节点的后代”作为独立数据库查询优化。
+
+尚待浏览器验收：
+
 - 完整服务环境下的面包屑、分页和父节点删除浏览器验收。
 - 创建部门上级选择器的关键词搜索和有界加载。

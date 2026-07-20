@@ -23,6 +23,11 @@ const TREND_MONTH_BUCKET_LIMIT: i64 = 120;
 const DASHBOARD_HTML_CACHE_CONTROL: &str = "no-cache";
 const DASHBOARD_ASSET_REVALIDATE_CACHE_CONTROL: &str = "public, max-age=0, must-revalidate";
 const DASHBOARD_ASSET_IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const DASHBOARD_HELP_START_MARKER: &str = "<!-- DASHBOARD_HELP_START -->";
+const DASHBOARD_HELP_END_MARKER: &str = "<!-- DASHBOARD_HELP_END -->";
+const DASHBOARD_HELP_PLACEHOLDER: &str = r#"<div id="help-content" aria-busy="true">
+                    <div class="empty-state"><div class="empty-icon">❓</div><p>正在加载安装与使用指南...</p></div>
+                </div>"#;
 
 /// GET / — Redirect to the dashboard entry point.
 pub async fn dashboard_root() -> Redirect {
@@ -30,13 +35,26 @@ pub async fn dashboard_root() -> Redirect {
 }
 
 /// GET /me — Dashboard home page
-pub async fn dashboard_me(State(state): State<AppState>, auth: OptionalAuth) -> impl IntoResponse {
+pub async fn dashboard_me(auth: OptionalAuth) -> impl IntoResponse {
     let response = match auth.0 {
-        Some(auth) => match render_dashboard_template(&auth, &state.config.base_url) {
+        Some(auth) => match render_dashboard_template(&auth) {
             Ok(html) => Html(html).into_response(),
             Err(error) => error.into_response(),
         },
         None => Redirect::to("/auth/login?return_to=/me").into_response(),
+    };
+
+    with_dashboard_html_cache_control(response)
+}
+
+/// GET /api/v1/dashboard/help — Authenticated, lazily loaded help content.
+pub async fn dashboard_help(
+    State(state): State<AppState>,
+    _auth: DashboardAuth,
+) -> impl IntoResponse {
+    let response = match render_dashboard_help_template(&state.config.base_url) {
+        Ok(html) => Json(json!({ "html": html })).into_response(),
+        Err(error) => error.into_response(),
     };
 
     with_dashboard_html_cache_control(response)
@@ -144,18 +162,45 @@ fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
         })
 }
 
-fn render_dashboard_template(
-    auth: &crate::models::user::AuthIdentity,
-    public_base_url: &str,
-) -> Result<String, AppError> {
+fn read_dashboard_template() -> Result<String, AppError> {
     let template_path = dashboard_template_path()?;
-    let template = std::fs::read_to_string(&template_path).map_err(|error| {
+    std::fs::read_to_string(&template_path).map_err(|error| {
         AppError::Internal(format!(
             "Failed to read dashboard template {}: {}",
             template_path.display(),
             error
         ))
-    })?;
+    })
+}
+
+fn split_dashboard_help_template(template: &str) -> Result<(String, String), AppError> {
+    let help_start = template
+        .find(DASHBOARD_HELP_START_MARKER)
+        .ok_or_else(|| AppError::Internal("Dashboard help start marker is missing".to_string()))?;
+    let content_start = help_start + DASHBOARD_HELP_START_MARKER.len();
+    let relative_end = template[content_start..]
+        .find(DASHBOARD_HELP_END_MARKER)
+        .ok_or_else(|| AppError::Internal("Dashboard help end marker is missing".to_string()))?;
+    let content_end = content_start + relative_end;
+    let marker_end = content_end + DASHBOARD_HELP_END_MARKER.len();
+
+    let mut shell = String::with_capacity(
+        template.len() - (marker_end - help_start) + DASHBOARD_HELP_PLACEHOLDER.len(),
+    );
+    shell.push_str(&template[..help_start]);
+    shell.push_str(DASHBOARD_HELP_PLACEHOLDER);
+    shell.push_str(&template[marker_end..]);
+
+    Ok((
+        shell,
+        template[content_start..content_end].trim().to_string(),
+    ))
+}
+
+fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result<String, AppError> {
+    let template = read_dashboard_template()?;
+    let (template, _) = split_dashboard_help_template(&template)?;
+    let template_path = dashboard_template_path()?;
     let static_dir = template_path.parent().ok_or_else(|| {
         AppError::Internal("Dashboard template path has no parent directory".to_string())
     })?;
@@ -165,6 +210,12 @@ fn render_dashboard_template(
     let dashboard_js_version = dashboard_asset_file_version(static_dir, "dashboard.js")?;
 
     let is_admin = auth.is_admin();
+    let dashboard_bootstrap = serialize_script_safe_json(&DashboardBootstrap { is_admin })?;
+    let dashboard_role_class = if is_admin {
+        "dashboard-role-admin"
+    } else {
+        "dashboard-role-member"
+    };
     let user_initial = auth
         .name
         .chars()
@@ -172,6 +223,66 @@ fn render_dashboard_template(
         .unwrap_or('G')
         .to_string();
     let user_role_label = if is_admin { "管理员" } else { "开发者" };
+
+    Ok(template
+        .replace("__GITAI_CHART_JS_VERSION__", &chart_js_version)
+        .replace("__GITAI_DASHBOARD_CSS_VERSION__", &dashboard_css_version)
+        .replace("__GITAI_DASHBOARD_JS_VERSION__", &dashboard_js_version)
+        .replace(
+            "__GITAI_RELEASE_FILE_MAX_BYTES__",
+            &crate::handlers::release::RELEASE_BINARY_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_FILE_MAX_MIB__",
+            &(crate::handlers::release::RELEASE_BINARY_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_TOTAL_MAX_BYTES__",
+            &crate::handlers::release::RELEASE_UPLOAD_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_TOTAL_MAX_MIB__",
+            &(crate::handlers::release::RELEASE_UPLOAD_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace(
+            "__GITAI_MANAGED_FILE_MAX_BYTES__",
+            &crate::handlers::managed_files::MANAGED_FILE_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_MANAGED_FILE_MAX_MIB__",
+            &(crate::handlers::managed_files::MANAGED_FILE_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace("__GITAI_DASHBOARD_BOOTSTRAP__", &dashboard_bootstrap)
+        .replace("__GITAI_DASHBOARD_ROLE_CLASS__", dashboard_role_class)
+        .replace("__GITAI_USER_NAME__", &html_escape(&auth.name))
+        .replace("__GITAI_USER_EMAIL__", &html_escape(&auth.email))
+        .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
+        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label)))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardBootstrap {
+    is_admin: bool,
+}
+
+fn serialize_script_safe_json<T: Serialize>(value: &T) -> Result<String, AppError> {
+    let json = serde_json::to_string(value).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to serialize dashboard bootstrap data: {error}"
+        ))
+    })?;
+    Ok(json
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
+}
+
+fn render_dashboard_help_template(public_base_url: &str) -> Result<String, AppError> {
+    let template = read_dashboard_template()?;
+    let (_, help_template) = split_dashboard_help_template(&template)?;
     let public_base_url = public_base_url.trim_end_matches('/');
     let install_security_notice = if public_base_url.starts_with("https://") {
         r#"<div class="help-callout success"><strong>可信下载边界</strong><p>安装脚本、SHA256SUMS 和客户端二进制均从本页配置的同一 HTTPS 服务下载。请先核对脚本哈希，再执行本地文件。</p></div>"#
@@ -179,27 +290,7 @@ fn render_dashboard_template(
         r#"<div class="help-callout warning"><strong>当前部署使用不安全的 HTTP</strong><p>网络中的第三方可能篡改安装脚本或登录流量。此地址只应在已明确接受风险的隔离开发环境使用；生产部署必须配置 HTTPS。下面的命令不会把下载内容直接传给 shell。</p></div>"#
     };
 
-    Ok(template
-        .replace("__GITAI_CHART_JS_VERSION__", &chart_js_version)
-        .replace("__GITAI_DASHBOARD_CSS_VERSION__", &dashboard_css_version)
-        .replace("__GITAI_DASHBOARD_JS_VERSION__", &dashboard_js_version)
-        .replace(
-            "__GITAI_IS_ADMIN__",
-            if is_admin { "true" } else { "false" },
-        )
-        .replace(
-            "__GITAI_CURRENT_USER_ID_JSON__",
-            &json_string_literal(&auth.user_id.to_string()),
-        )
-        .replace("__GITAI_USER_NAME__", &html_escape(&auth.name))
-        .replace("__GITAI_USER_NAME_JSON__", &json_string_literal(&auth.name))
-        .replace("__GITAI_USER_EMAIL__", &html_escape(&auth.email))
-        .replace(
-            "__GITAI_USER_EMAIL_JSON__",
-            &json_string_literal(&auth.email),
-        )
-        .replace("__GITAI_USER_INITIAL__", &html_escape(&user_initial))
-        .replace("__GITAI_USER_ROLE_LABEL__", &html_escape(user_role_label))
+    Ok(help_template
         .replace("__GITAI_PUBLIC_BASE_URL__", &html_escape(public_base_url))
         .replace("__GITAI_INSTALL_SECURITY_NOTICE__", install_security_notice))
 }
@@ -254,10 +345,6 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
-}
-
-fn json_string_literal(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn sanitize_static_asset_path(asset_path: &str) -> Option<PathBuf> {
@@ -3200,7 +3287,8 @@ mod tests {
         auth.name = r#"<Admin "A" & 'B'>"#.into();
         auth.email = r#"admin+<test>&"@example.com"#.into();
 
-        let html = render_dashboard_template(&auth, "https://git-ai.example.com/").unwrap();
+        let html = render_dashboard_template(&auth).unwrap();
+        let help = render_dashboard_help_template("https://git-ai.example.com/").unwrap();
         let static_dir = dashboard_static_dir().unwrap();
         let chart_version =
             dashboard_asset_file_version(&static_dir, "assets/vendor/chart.js/chart.umd.js")
@@ -3208,24 +3296,66 @@ mod tests {
         let css_version = dashboard_asset_file_version(&static_dir, "dashboard.css").unwrap();
         let js_version = dashboard_asset_file_version(&static_dir, "dashboard.js").unwrap();
 
-        assert!(html.contains("git-ai login --server https://git-ai.example.com"));
-        assert!(html.contains(r#"href="/auth/register""#));
+        assert!(!html.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(html.contains(r#"id="help-content" aria-busy="true""#));
+        assert!(help.contains("git-ai login --server https://git-ai.example.com"));
+        assert!(help.contains(r#"href="/auth/register""#));
         assert!(html.contains(&format!(
             r#"src="/static/assets/vendor/chart.js/chart.umd.js?v={chart_version}""#
         )));
         assert!(html.contains(&format!(r#"href="/static/dashboard.css?v={css_version}""#)));
         assert!(html.contains(&format!(r#"src="/static/dashboard.js?v={js_version}""#)));
+        assert!(html.contains(
+            r#"<script type="application/json" id="dashboard-bootstrap">{"isAdmin":true}</script>"#
+        ));
+        assert!(html.contains(r#"<body class="dashboard-role-admin">"#));
+        assert!(!html.contains("const isAdmin"));
         assert!(html.contains("&lt;Admin &quot;A&quot; &amp; &#39;B&#39;&gt;"));
         assert!(!html.contains("117.147.213.234"));
         assert!(!html.contains("cdn.jsdelivr.net"));
         assert!(!html.contains("__GITAI_"));
+        assert!(!help.contains("__GITAI_"));
+    }
+
+    #[test]
+    fn dashboard_bootstrap_json_cannot_terminate_its_script_element() {
+        let hostile = json!({
+            "value": "</script><script>alert('xss')</script>&\u{2028}\u{2029}"
+        });
+
+        let serialized = serialize_script_safe_json(&hostile).unwrap();
+
+        assert!(!serialized.contains('<'));
+        assert!(!serialized.contains('>'));
+        assert!(!serialized.contains('&'));
+        assert!(!serialized.contains('\u{2028}'));
+        assert!(!serialized.contains('\u{2029}'));
+        assert_eq!(serde_json::from_str::<Value>(&serialized).unwrap(), hostile);
+    }
+
+    #[test]
+    fn dashboard_member_role_is_hidden_before_javascript_runs() {
+        let auth = department_member_auth(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "engineering",
+            Uuid::new_v4(),
+        )
+        .0;
+
+        let html = render_dashboard_template(&auth).unwrap();
+
+        assert!(html.contains(
+            r#"<script type="application/json" id="dashboard-bootstrap">{"isAdmin":false}</script>"#
+        ));
+        assert!(html.contains(r#"<body class="dashboard-role-member">"#));
+        assert!(html.contains(r#"class="nav-item admin-only" id="org-nav-item""#));
+        assert!(!html.contains("const isAdmin"));
     }
 
     #[test]
     fn dashboard_template_warns_for_explicit_http_development_url() {
-        let auth = global_admin_auth(Uuid::new_v4()).0;
-
-        let html = render_dashboard_template(&auth, "http://127.0.0.1:8080").unwrap();
+        let html = render_dashboard_help_template("http://127.0.0.1:8080").unwrap();
 
         assert!(html.contains("当前部署使用不安全的 HTTP"));
         assert!(!html.contains("| bash"));
@@ -3938,6 +4068,98 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "manual isolated database scale benchmark"]
+    async fn department_aggregate_scale_benchmark() -> anyhow::Result<()> {
+        const PAGE_SIZE: i64 = 25;
+        const WARM_RUNS: usize = 7;
+
+        let Some(db) = TestDatabase::new().await? else {
+            return Ok(());
+        };
+        let mut state = db.state()?;
+        state.config.dashboard_use_rollups = true;
+
+        for department_count in [100_i32, 1_000, 10_000] {
+            let (org_id, org_slug) = insert_organization(
+                &db.pool,
+                &format!("Department Benchmark {department_count}"),
+            )
+            .await?;
+            insert_department_benchmark_fixture(
+                &db.pool,
+                org_id,
+                &format!("benchmark-{}", org_id.simple()),
+                department_count,
+            )
+            .await?;
+            let admin_id = insert_user(&db.pool, org_id, "Admin", "admin", None).await?;
+            let auth = org_admin_auth(admin_id, org_id, &org_slug);
+            sqlx::query("ANALYZE departments").execute(&db.pool).await?;
+
+            let first_started = std::time::Instant::now();
+            let Json(first_page) = aggregate_departments(
+                State(state.clone()),
+                auth.clone(),
+                Query(aggregate_query(
+                    Some(org_slug.clone()),
+                    None,
+                    Some(PAGE_SIZE),
+                    None,
+                )),
+            )
+            .await?;
+            let first_ms = first_started.elapsed().as_secs_f64() * 1_000.0;
+            let returned = first_page["departments"]
+                .as_array()
+                .expect("departments should be an array")
+                .len();
+            let has_more = first_page["pagination"]["has_more"]
+                .as_bool()
+                .expect("has_more should be a boolean");
+            assert_eq!(returned, PAGE_SIZE as usize);
+            assert!(has_more);
+
+            let mut warm_durations_ms = Vec::with_capacity(WARM_RUNS);
+            for _ in 0..WARM_RUNS {
+                let started = std::time::Instant::now();
+                let Json(page) = aggregate_departments(
+                    State(state.clone()),
+                    auth.clone(),
+                    Query(aggregate_query(
+                        Some(org_slug.clone()),
+                        None,
+                        Some(PAGE_SIZE),
+                        None,
+                    )),
+                )
+                .await?;
+                warm_durations_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+                assert_eq!(
+                    page["departments"]
+                        .as_array()
+                        .expect("departments should be an array")
+                        .len(),
+                    PAGE_SIZE as usize
+                );
+            }
+            warm_durations_ms.sort_by(f64::total_cmp);
+            let median_ms = warm_durations_ms[WARM_RUNS / 2];
+            let p95_ms = *warm_durations_ms
+                .last()
+                .expect("the benchmark should contain warm runs");
+
+            eprintln!(
+                "DEPARTMENT_BENCHMARK departments={department_count} page_size={PAGE_SIZE} \
+                 initial_api_requests=1 returned={returned} has_more={has_more} \
+                 first_ms={first_ms:.2} median_ms={median_ms:.2} p95_ms={p95_ms:.2}"
+            );
+        }
+
+        db.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dashboard_stat_aggregates_cursor_paginate() -> anyhow::Result<()> {
         let Some(db) = TestDatabase::new().await? else {
             return Ok(());
@@ -4322,6 +4544,29 @@ mod tests {
 
     async fn insert_department(pool: &PgPool, org_id: Uuid, name: &str) -> anyhow::Result<Uuid> {
         insert_department_with_parent(pool, org_id, name, None).await
+    }
+
+    async fn insert_department_benchmark_fixture(
+        pool: &PgPool,
+        org_id: Uuid,
+        slug_prefix: &str,
+        count: i32,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO departments (org_id, code, name, slug) \
+             SELECT $1, \
+                    'F' || LPAD(series::text, 6, '0'), \
+                    'Department ' || LPAD(series::text, 6, '0'), \
+                    $2 || '-' || series::text \
+             FROM generate_series(1, $3::integer) AS series",
+        )
+        .bind(org_id)
+        .bind(slug_prefix)
+        .bind(count)
+        .execute(pool)
+        .await?;
+
+        Ok(())
     }
 
     async fn insert_department_with_parent(

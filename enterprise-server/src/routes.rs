@@ -183,6 +183,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/me", get(crate::handlers::dashboard::dashboard_me))
         .route(
+            "/api/v1/dashboard/help",
+            get(crate::handlers::dashboard::dashboard_help),
+        )
+        .route(
             "/api/v1/aggregate/summary",
             get(crate::handlers::dashboard::aggregate_summary),
         )
@@ -291,13 +295,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/admin/releases/upload",
-            post(crate::handlers::release::upload_release_asset)
-                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+            post(crate::handlers::release::upload_release_asset).layer(DefaultBodyLimit::max(
+                crate::handlers::release::RELEASE_BINARY_MAX_BYTES,
+            )),
         )
         .route(
             "/api/admin/releases/publish",
-            post(crate::handlers::release::publish_release_bundle)
-                .layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+            post(crate::handlers::release::publish_release_bundle).layer(DefaultBodyLimit::max(
+                crate::handlers::release::RELEASE_UPLOAD_BODY_MAX_BYTES,
+            )),
         )
         .route(
             "/api/admin/releases/assets",
@@ -314,8 +320,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/admin/files/upload",
-            post(crate::handlers::managed_files::upload_managed_file)
-                .layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+            post(crate::handlers::managed_files::upload_managed_file).layer(DefaultBodyLimit::max(
+                crate::handlers::managed_files::MANAGED_FILE_UPLOAD_BODY_MAX_BYTES,
+            )),
         )
         .route(
             "/api/admin/files/{slug}",

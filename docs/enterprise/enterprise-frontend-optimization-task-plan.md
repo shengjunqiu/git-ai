@@ -636,7 +636,7 @@ Make enterprise dashboard navigation responsive
 验收标准：
 
 - [x] 部门页面首屏只发一个有界请求。
-- [ ] 10,000 个部门下首屏请求量不随总部门数线性增长。
+- [x] 10,000 个部门下首屏请求量不随总部门数线性增长。
 - [ ] 当前层级、面包屑和创建父部门选择行为不变。
 
 ### 5.2 替换全量下拉数据
@@ -682,38 +682,42 @@ Make enterprise dashboard navigation responsive
 
 ### 5.4 减少初始 DOM 和无用脚本
 
+执行记录：[`enterprise-frontend-initial-payload.md`](./enterprise-frontend-initial-payload.md)
+
 步骤：
 
-- [ ] 评估帮助页大段内容是否拆成独立页面或按需加载片段。
-- [ ] 删除未使用的 `currentUserId`、`name`、`email` 全局变量。
-- [ ] 删除已失效的 helper 和重复 CSS。
-- [ ] 每个栏目只初始化必要事件和图表。
-- [ ] 不提前创建隐藏栏目的 Chart 实例。
+- [x] 评估帮助页大段内容是否拆成独立页面或按需加载片段。
+- [x] 删除未使用的 `currentUserId`、`name`、`email` 全局变量。
+- [x] 删除已失效的 helper 和重复 CSS。
+- [x] 每个栏目只初始化必要事件和图表。
+- [x] 不提前创建隐藏栏目的 Chart 实例。
 
 验收标准：
 
-- [ ] 初始 HTML、JS 和 DOM 节点数量有优化前后记录。
-- [ ] 删除内容不影响深链接和帮助页复制功能。
+- [x] 初始 HTML、JS 和 DOM 节点数量有优化前后记录。
+- [x] 删除内容不影响深链接和帮助页复制功能。
 
 ### 5.5 管理上传体验
 
+执行记录：[`enterprise-frontend-upload-safeguards.md`](./enterprise-frontend-upload-safeguards.md)
+
 步骤：
 
-- [ ] 客户端预检查文件数量、文件名、扩展名和已知大小限制。
-- [ ] 显示单文件和总上传大小。
-- [ ] 上传期间阻止重复提交。
-- [ ] 页面离开前对进行中的上传给出提示。
-- [ ] 如果上传耗时明显，评估可取消上传和进度展示。
-- [ ] 服务端继续作为最终校验边界。
+- [x] 客户端预检查文件数量、文件名、扩展名和已知大小限制。
+- [x] 显示单文件和总上传大小。
+- [x] 上传期间阻止重复提交。
+- [x] 页面离开前对进行中的上传给出提示。
+- [x] 如果上传耗时明显，评估可取消上传和进度展示。
+- [x] 服务端继续作为最终校验边界。
 
 验收标准：
 
-- [ ] 明显无效的发布包在上传前被提示。
-- [ ] 连续点击不会创建重复发布或重复文件版本。
+- [x] 明显无效的发布包在上传前被提示。
+- [x] 连续点击不会创建重复发布或重复文件版本。
 
 ### 阶段 5 验证
 
-- [ ] 记录部门数据 100、1,000、10,000 条时的请求数和响应时间。
+- [x] 记录部门数据 100、1,000、10,000 条时的请求数和响应时间。
 - [x] 记录静态资源首次和二次加载传输量。
 - [x] 记录 Gzip/Brotli 前后大小。
 - [x] 验证所有下拉选择不会静默截断。
@@ -732,37 +736,39 @@ Cache enterprise static assets efficiently
 
 ### 6.1 建立事件委托
 
+执行记录：[`enterprise-frontend-event-delegation.md`](./enterprise-frontend-event-delegation.md)
+
 步骤：
 
-- [ ] 统计静态 HTML 中所有 `onclick`、`onchange` 和其他 inline handler。
-- [ ] 统计动态模板中生成的 inline handler。
-- [ ] 为操作按钮增加 `data-action`。
-- [ ] 参数通过 `dataset` 或受控状态 Map 传递。
-- [ ] 在栏目容器或 document 上注册一次事件监听器。
-- [ ] 先迁移分页、导航和简单刷新。
-- [ ] 再迁移用户、API Key、发布和文件管理操作。
-- [ ] 最后迁移模态框和帮助页复制按钮。
+- [x] 统计静态 HTML 中所有 `onclick`、`onchange` 和其他 inline handler。
+- [x] 统计动态模板中生成的 inline handler。
+- [x] 为操作按钮增加 `data-action`。
+- [x] 参数通过 `dataset` 或受控状态 Map 传递。
+- [x] 在栏目容器或 document 上注册一次事件监听器。
+- [x] 先迁移分页、导航和简单刷新。
+- [x] 再迁移用户、API Key、发布和文件管理操作。
+- [x] 最后迁移模态框和帮助页复制按钮。
 
 验收标准：
 
-- [ ] HTML 和动态模板中不再出现 inline event handler。
-- [ ] 业务函数不需要挂到 `window`。
-- [ ] 包含特殊字符的名称不会破坏事件参数。
+- [x] HTML 和动态模板中不再出现 inline event handler。
+- [x] 业务函数不需要挂到 `window`。
+- [x] 包含特殊字符的名称不会破坏事件参数。
 
 ### 6.2 删除内联脚本变量
 
 步骤：
 
-- [ ] 用 `<script type="application/json" id="dashboard-bootstrap">` 或 `data-*` 提供启动数据。
-- [ ] JSON 内容必须使用安全序列化，防止 `</script>` 提前结束。
-- [ ] 删除未使用的 `name`、`email` 和 `currentUserId`。
-- [ ] 管理员角色可以由服务端渲染栏目或通过安全 bootstrap 数据提供。
-- [ ] 管理员内容默认隐藏，避免角色判断执行前闪现。
+- [x] 用 `<script type="application/json" id="dashboard-bootstrap">` 或 `data-*` 提供启动数据。
+- [x] JSON 内容必须使用安全序列化，防止 `</script>` 提前结束。
+- [x] 删除未使用的 `name`、`email` 和 `currentUserId`。
+- [x] 管理员角色可以由服务端渲染栏目或通过安全 bootstrap 数据提供。
+- [x] 管理员内容默认隐藏，避免角色判断执行前闪现。
 
 验收标准：
 
-- [ ] 页面 head/body 中不再需要可执行内联脚本。
-- [ ] 非管理员不会收到不必要的管理页面 DOM，或管理内容默认不可见。
+- [x] 页面 head/body 中不再需要可执行内联脚本。
+- [x] 非管理员不会收到不必要的管理页面 DOM，或管理内容默认不可见。
 
 ### 6.3 提取无 UI 基础模块
 
