@@ -598,24 +598,9 @@ fn enqueue_prompt_messages_to_cas(
     metadata.insert("api_version".to_string(), "v1".to_string());
     metadata.insert("kind".to_string(), "prompt".to_string());
 
-    // Get repo URL from default remote
-    let repo_url = repo
-        .get_default_remote()
-        .ok()
-        .flatten()
-        .and_then(|remote_name| {
-            repo.remotes_with_urls().ok().and_then(|remotes| {
-                remotes
-                    .into_iter()
-                    .find(|(name, _)| name == &remote_name)
-                    .map(|(_, url)| url)
-            })
-        });
-
-    if let Some(url) = repo_url
-        && let Ok(normalized) = crate::repo_url::normalize_repo_url(&url)
-    {
-        metadata.insert("repo_url".to_string(), normalized);
+    // Use the same project identity as metrics: remote URL first, local name fallback.
+    if let Ok(Some(identifier)) = crate::repo_url::repository_identifier(repo) {
+        metadata.insert("repo_url".to_string(), identifier);
     }
 
     // Get API base URL for constructing messages_url
@@ -778,13 +763,9 @@ fn record_commit_metrics(
         .commit_sha(commit_sha)
         .base_commit_sha(parent_sha);
 
-    // Get repo URL from default remote
-    if let Ok(Some(remote_name)) = repo.get_default_remote()
-        && let Ok(remotes) = repo.remotes_with_urls()
-        && let Some((_, url)) = remotes.into_iter().find(|(n, _)| n == &remote_name)
-        && let Ok(normalized) = crate::repo_url::normalize_repo_url(&url)
-    {
-        attrs = attrs.repo_url(normalized);
+    // Add the normalized remote URL, or a local directory-name fallback.
+    if let Ok(Some(identifier)) = crate::repo_url::repository_identifier(repo) {
+        attrs = attrs.repo_url(identifier);
     }
 
     // Get current branch

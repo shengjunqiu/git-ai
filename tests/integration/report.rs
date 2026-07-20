@@ -1,6 +1,7 @@
 use crate::repos::test_file::ExpectedLineExt;
 use crate::repos::test_repo::TestRepo;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::time::Instant;
 
@@ -42,6 +43,15 @@ fn report_scan_json_for_head_commit() {
     assert_eq!(report["summary"]["human_additions"], 1);
     assert_eq!(report["ratios"]["ai"], 0.5);
     assert_eq!(report["ratios"]["human"], 0.5);
+    let local_identifier = format!(
+        "local/{}",
+        repo.path()
+            .file_name()
+            .expect("test repository should have a directory name")
+            .to_string_lossy()
+    );
+    let expected_repo_hash = format!("sha256:{:x}", Sha256::digest(local_identifier.as_bytes()));
+    assert_eq!(report["repo"]["remote_url_hash"], expected_repo_hash);
     file.assert_lines_and_blame(crate::lines!["human line".human(), "ai line".ai()]);
 }
 

@@ -75,6 +75,7 @@ pub struct ReportRepoInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Hash of the normalized remote URL, or of `local/<directory-name>` when no remote exists.
     pub remote_url_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

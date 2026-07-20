@@ -23,7 +23,7 @@ pub mod attr_pos {
 /// | Position | Name | Type | Required |
 /// |----------|------|------|----------|
 /// | 0 | git_ai_version | String | Yes |
-/// | 1 | repo_url | String | No (nullable) |
+/// | 1 | repo_url | String | No (normalized URL or `local/<directory-name>`) |
 /// | 2 | author | String | No (nullable) |
 /// | 3 | commit_sha | String | No (nullable) |
 /// | 4 | base_commit_sha | String | No (nullable) |

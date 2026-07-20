@@ -1,4 +1,9 @@
+use crate::error::GitAiError;
+use crate::git::repository::Repository;
+use std::path::Path;
 use url::Url;
+
+const LOCAL_REPOSITORY_PREFIX: &str = "local/";
 
 /// Normalize repo URL to canonical HTTPS format
 /// Accepts: HTTPS, HTTP, SSH (scp-like user@host:path or ssh://), git:// URLs
@@ -36,6 +41,43 @@ pub fn normalize_repo_url(url_str: &str) -> Result<String, String> {
     validate_normalized_url(&canonical)?;
 
     Ok(canonical)
+}
+
+/// Resolve the stable identifier sent in the metrics `repo_url` field.
+///
+/// A normalized remote URL remains the preferred cross-clone identity. Repositories
+/// without a remote fall back to a namespaced local directory name so the server can
+/// display them as projects without receiving the full local filesystem path.
+pub fn repository_identifier(repo: &Repository) -> Result<Option<String>, GitAiError> {
+    let remote_url = if let Some(default_remote) = repo.get_default_remote()? {
+        repo.remotes_with_urls()?
+            .into_iter()
+            .find(|(name, _)| name == &default_remote)
+            .map(|(_, url)| url)
+    } else {
+        None
+    };
+
+    Ok(repository_identifier_from_parts(
+        remote_url.as_deref(),
+        &repo.workdir()?,
+    ))
+}
+
+fn repository_identifier_from_parts(remote_url: Option<&str>, workdir: &Path) -> Option<String> {
+    match remote_url {
+        Some(url) => normalize_repo_url(url).ok(),
+        None => local_repository_identifier(workdir),
+    }
+}
+
+fn local_repository_identifier(workdir: &Path) -> Option<String> {
+    workdir
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("{LOCAL_REPOSITORY_PREFIX}{name}"))
 }
 
 /// Validate that normalized URL is a proper HTTPS URL
@@ -80,7 +122,39 @@ fn normalize_ssh_url(host: &str, path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_repo_url;
+    use super::{normalize_repo_url, repository_identifier_from_parts};
+    use std::path::Path;
+
+    #[test]
+    fn test_repository_identifier_prefers_normalized_remote_url() {
+        assert_eq!(
+            repository_identifier_from_parts(
+                Some("git@github.com:linewell/git-ai-test.git"),
+                Path::new("/work/local-copy"),
+            )
+            .as_deref(),
+            Some("https://github.com/linewell/git-ai-test")
+        );
+    }
+
+    #[test]
+    fn test_repository_identifier_falls_back_to_namespaced_directory_name() {
+        assert_eq!(
+            repository_identifier_from_parts(None, Path::new("/work/git-ai-test")).as_deref(),
+            Some("local/git-ai-test")
+        );
+    }
+
+    #[test]
+    fn test_repository_identifier_does_not_fallback_for_invalid_configured_remote() {
+        assert_eq!(
+            repository_identifier_from_parts(
+                Some("not-a-valid-remote"),
+                Path::new("/work/git-ai-test"),
+            ),
+            None
+        );
+    }
 
     #[test]
     fn test_normalize_repo_url_https() {

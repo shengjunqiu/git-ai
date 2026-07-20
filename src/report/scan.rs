@@ -172,7 +172,8 @@ fn report_repo_info(repo: &Repository) -> Result<ReportRepoInfo, GitAiError> {
         .map(|path| path.to_string_lossy().to_string());
     let head_commit = repo.head().ok().and_then(|h| h.target().ok());
     let branch = repo.head().ok().and_then(|h| h.shorthand().ok());
-    let remote_url_hash = default_remote_url(repo)?.map(|url| hash_remote_url(&url));
+    let remote_url_hash = crate::repo_url::repository_identifier(repo)?
+        .map(|identifier| hash_repository_identifier(&identifier));
 
     Ok(ReportRepoInfo {
         workdir,
@@ -193,10 +194,9 @@ fn default_remote_url(repo: &Repository) -> Result<Option<String>, GitAiError> {
         .map(|(_, url)| url))
 }
 
-fn hash_remote_url(url: &str) -> String {
-    let normalized = crate::repo_url::normalize_repo_url(url).unwrap_or_else(|_| url.to_string());
+fn hash_repository_identifier(identifier: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(normalized.as_bytes());
+    hasher.update(identifier.as_bytes());
     format!("sha256:{:x}", hasher.finalize())
 }
 

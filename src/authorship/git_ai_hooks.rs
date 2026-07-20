@@ -206,18 +206,9 @@ fn spawn_shell_command(command: &str) -> std::io::Result<Child> {
 }
 
 fn build_repo_hook_context(repo: &Repository) -> RepoHookContext {
-    let repo_url = repo
-        .get_default_remote()
+    let repo_url = crate::repo_url::repository_identifier(repo)
         .ok()
         .flatten()
-        .and_then(|remote_name| {
-            repo.remotes_with_urls().ok().and_then(|remotes| {
-                remotes
-                    .into_iter()
-                    .find(|(name, _)| name == &remote_name)
-                    .map(|(_, url)| url)
-            })
-        })
         .unwrap_or_default();
 
     let repo_name = repo_url

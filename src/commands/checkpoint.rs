@@ -147,13 +147,9 @@ fn build_checkpoint_attrs(
     // Attach custom attributes using Config::fresh() to support runtime config updates
     attrs = attrs.custom_attributes_map(crate::config::Config::fresh().custom_attributes());
 
-    // Add repo URL
-    if let Ok(Some(remote_name)) = repo.get_default_remote()
-        && let Ok(remotes) = repo.remotes_with_urls()
-        && let Some((_, url)) = remotes.into_iter().find(|(n, _)| n == &remote_name)
-        && let Ok(normalized) = crate::repo_url::normalize_repo_url(&url)
-    {
-        attrs = attrs.repo_url(normalized);
+    // Add the normalized remote URL, or a local directory-name fallback.
+    if let Ok(Some(identifier)) = crate::repo_url::repository_identifier(repo) {
+        attrs = attrs.repo_url(identifier);
     }
 
     // Add branch
@@ -2378,6 +2374,37 @@ mod tests {
     use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
     use crate::git::test_utils::TmpRepo;
     use std::collections::HashMap;
+
+    #[test]
+    fn checkpoint_metric_attrs_use_local_directory_when_remote_is_missing() {
+        let repo = TmpRepo::new().expect("test repository should initialize");
+        let directory_name = repo
+            .path()
+            .file_name()
+            .expect("test repository should have a directory name")
+            .to_string_lossy();
+
+        let attrs = build_checkpoint_attrs(repo.gitai_repo(), "base", None);
+
+        assert_eq!(
+            attrs.repo_url,
+            Some(Some(format!("local/{directory_name}")))
+        );
+    }
+
+    #[test]
+    fn checkpoint_metric_attrs_prefer_normalized_remote_url() {
+        let repo = TmpRepo::new().expect("test repository should initialize");
+        repo.add_remote("origin", "git@github.com:linewell/git-ai-test.git")
+            .expect("origin should be configured");
+
+        let attrs = build_checkpoint_attrs(repo.gitai_repo(), "base", None);
+
+        assert_eq!(
+            attrs.repo_url,
+            Some(Some("https://github.com/linewell/git-ai-test".to_string()))
+        );
+    }
 
     fn test_agent_run_result(
         checkpoint_kind: CheckpointKind,
