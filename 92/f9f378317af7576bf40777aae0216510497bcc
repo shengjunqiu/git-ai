@@ -1,0 +1,40 @@
+enterprise-server/static/dashboard/render.js
+  69e86842745e0e94 1-89
+enterprise-server/static/dashboard/state.js
+  69e86842745e0e94 1-43
+docs/enterprise/enterprise-frontend-modules.md
+  69e86842745e0e94 50-64
+enterprise-server/src/handlers/dashboard.rs
+  69e86842745e0e94 3204-3205
+enterprise-server/static/dashboard.js
+  69e86842745e0e94 8-28,47,73,174,370,378-381,386,392,429,629-630,653,657,663,666,675-676,679,684-686,706,708,711-712,966,977,1037,2312,2338-2340
+enterprise-server/static/dashboard-state-render.test.cjs
+  69e86842745e0e94 1-102
+enterprise-server/static/dashboard-refresh.test.cjs
+  69e86842745e0e94 11-24,34-38,47-48,56,60,105-106,122-123,143-144,164-165
+enterprise-server/static/dashboard-actions.test.cjs
+  69e86842745e0e94 16-22,244-245,248,396-397
+docs/enterprise/enterprise-frontend-optimization-task-plan.md
+  69e86842745e0e94 778,782
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "3.1.14",
+  "base_commit_sha": "92f9f378317af7576bf40777aae0216510497bcc",
+  "prompts": {
+    "69e86842745e0e94": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa9-9b63-7201-bcb7-67be406fa490",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "邱圣军",
+      "messages": [],
+      "total_additions": 354,
+      "total_deletions": 165,
+      "accepted_lines": 447,
+      "overriden_lines": 0,
+      "messages_url": "http://117.147.213.234:38080/cas/9e9d3518c12f0a208fcd5bc20cce537a0d4291cf6db282d0dd32ce8ff6cf720a"
+    }
+  }
+}
