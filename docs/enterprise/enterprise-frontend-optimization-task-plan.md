@@ -795,7 +795,7 @@ Cache enterprise static assets efficiently
 
 ### 6.4 提取 UI 模块
 
-- [ ] `ui/toast.js`
+- [x] `ui/toast.js`
 - [ ] `ui/modal.js`
 - [ ] 通用 loading、empty、error renderer。
 - [ ] 通用安全文本、属性和 URL helper。

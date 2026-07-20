@@ -110,3 +110,17 @@ git diff --check
 
 专项 Node 测试覆盖碰撞策略、单次手动排队、INITIAL 取消替换、生命周期顺序、后台失败
 语义、刷新时间快照，以及页面可见性和 timer 的启停。
+
+## 阶段 6.4 批次 1：Toast
+
+- `ui/toast.js` 通过 `createToast({ document })` 显式接收 DOM 依赖，入口只保留
+  `showToast()` 操作，不再负责创建、替换和定时移除提示元素。
+- 消息始终写入 `textContent`；提示类型限制为 `info`、`success` 和 `error`，未知类型
+  降级为 `info`，避免外部字符串进入 class。
+- 页面同时只保留一个 Toast。显示新提示或显式关闭时会清理旧 timer，自动关闭 callback
+  也只移除自己对应的元素。
+- `error` 使用 `role="alert"` 和 assertive live region，普通提示使用 `role="status"`
+  和 polite live region，并统一设置 `aria-atomic="true"`。
+
+专项 Node 测试覆盖不可信文本、类型白名单、可访问属性、连续提示替换、timer 清理、自动
+关闭和显式关闭。

@@ -402,6 +402,7 @@ test('dashboard request infrastructure is loaded as an explicit module', () => {
     assert.match(dashboardSource, /from '\.\/dashboard\/render\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/router\.js';/);
     assert.match(dashboardSource, /from '\.\/dashboard\/state\.js';/);
+    assert.match(dashboardSource, /from '\.\/dashboard\/ui\/toast\.js';/);
     assert.match(
         html,
         /<script type="module" src="\/static\/dashboard\.js\?v=__GITAI_DASHBOARD_JS_VERSION__"><\/script>/,

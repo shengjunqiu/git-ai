@@ -29,6 +29,7 @@ import {
     DASHBOARD_DEFAULT_SECTION,
     createDashboardState,
 } from './dashboard/state.js';
+import { createToast } from './dashboard/ui/toast.js';
 
 function readDashboardBootstrap() {
     const element = document.getElementById('dashboard-bootstrap');
@@ -58,6 +59,7 @@ const { apiRequest } = createApiClient({
     location: window.location,
 });
 const appState = createDashboardState();
+const { showToast } = createToast({ document });
 const {
     currentSectionRequestSignal,
     getRefreshSnapshot,
@@ -547,17 +549,6 @@ function showSectionLoadError(id, error, { background = false } = {}) {
     retry.addEventListener('click', () => loadSection(id, { mode: RefreshMode.MANUAL }));
     banner.append(message, retry);
     section.prepend(banner);
-}
-
-// --- Toast notifications ---
-function showToast(message, type = 'info') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
 }
 
 async function copyHelpCommand(button) {
