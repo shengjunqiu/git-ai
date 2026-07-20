@@ -2491,6 +2491,12 @@ const REQUIRED_RELEASE_FILES = [
     'git-ai-macos-x64',
     'git-ai-macos-arm64',
 ];
+const BYTES_PER_MIB = 1024 * 1024;
+const DEFAULT_RELEASE_FILE_MAX_BYTES = 100 * BYTES_PER_MIB;
+const DEFAULT_RELEASE_TOTAL_MAX_BYTES = 500 * BYTES_PER_MIB;
+const DEFAULT_MANAGED_FILE_MAX_BYTES = 500 * BYTES_PER_MIB;
+const UPLOAD_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const activeUploads = new Map();
 
 function formatBytes(value) {
     const bytes = Number(value || 0);
@@ -2500,17 +2506,231 @@ function formatBytes(value) {
     return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function inputUploadLimit(input, datasetKey, fallback) {
+    const value = Number(input?.dataset?.[datasetKey]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function utf8ByteLength(value) {
+    return new TextEncoder().encode(String(value ?? '')).length;
+}
+
+function isValidUploadVersion(value) {
+    const version = String(value ?? '').trim();
+    return version !== '.'
+        && version !== '..'
+        && utf8ByteLength(version) <= 80
+        && /^[A-Za-z0-9._+-]+$/.test(version);
+}
+
+function isSafeUploadFilename(value) {
+    const filename = String(value ?? '').trim();
+    return Boolean(filename)
+        && filename !== '.'
+        && filename !== '..'
+        && utf8ByteLength(filename) <= 240
+        && !filename.includes('/')
+        && !filename.includes('\\')
+        && !filename.includes('\0');
+}
+
+function managedFileExtension(filename) {
+    const normalized = String(filename ?? '').trim().toLowerCase();
+    if (normalized.endsWith('.tar.gz')) return '.tar.gz';
+    const separator = normalized.lastIndexOf('.');
+    return separator > 0 && separator < normalized.length - 1
+        ? normalized.slice(separator)
+        : '无扩展名';
+}
+
+function analyzeReleaseFiles(
+    files,
+    {
+        maxFileBytes = DEFAULT_RELEASE_FILE_MAX_BYTES,
+        maxTotalBytes = DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+    } = {},
+) {
+    const selectedFiles = Array.from(files || []);
+    const filesByName = new Map();
+    const nameCounts = new Map();
+    selectedFiles.forEach(file => {
+        if (!filesByName.has(file.name)) filesByName.set(file.name, file);
+        nameCounts.set(file.name, (nameCounts.get(file.name) || 0) + 1);
+    });
+    const missing = REQUIRED_RELEASE_FILES.filter(filename => !filesByName.has(filename));
+    const unexpected = selectedFiles
+        .filter(file => !REQUIRED_RELEASE_FILES.includes(file.name))
+        .map(file => file.name);
+    const duplicates = Array.from(nameCounts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([filename]) => filename);
+    const empty = selectedFiles.filter(file => file.size === 0).map(file => file.name);
+    const oversized = selectedFiles
+        .filter(file => file.size > maxFileBytes)
+        .map(file => file.name);
+    const totalBytes = selectedFiles.reduce((total, file) => total + Number(file.size || 0), 0);
+    const valid = selectedFiles.length === REQUIRED_RELEASE_FILES.length
+        && missing.length === 0
+        && unexpected.length === 0
+        && duplicates.length === 0
+        && empty.length === 0
+        && oversized.length === 0
+        && totalBytes <= maxTotalBytes;
+
+    return {
+        duplicates,
+        empty,
+        files: selectedFiles,
+        filesByName,
+        maxFileBytes,
+        maxTotalBytes,
+        missing,
+        oversized,
+        totalBytes,
+        unexpected,
+        valid,
+    };
+}
+
+function releaseSelectionError(analysis) {
+    if (analysis.valid) return '';
+    const issues = [];
+    if (analysis.files.length !== REQUIRED_RELEASE_FILES.length) {
+        issues.push(`必须选择 ${REQUIRED_RELEASE_FILES.length} 个文件`);
+    }
+    if (analysis.missing.length) issues.push(`缺少：${analysis.missing.join('、')}`);
+    if (analysis.unexpected.length) issues.push(`文件名不正确：${analysis.unexpected.join('、')}`);
+    if (analysis.duplicates.length) issues.push(`文件名重复：${analysis.duplicates.join('、')}`);
+    if (analysis.empty.length) issues.push(`空文件：${analysis.empty.join('、')}`);
+    if (analysis.oversized.length) {
+        issues.push(
+            `单文件超过 ${formatBytes(analysis.maxFileBytes)}：${analysis.oversized.join('、')}`,
+        );
+    }
+    if (analysis.totalBytes > analysis.maxTotalBytes) {
+        issues.push(`总大小超过 ${formatBytes(analysis.maxTotalBytes)}`);
+    }
+    return issues.join('；');
+}
+
+function analyzeManagedFiles(
+    files,
+    { maxFileBytes = DEFAULT_MANAGED_FILE_MAX_BYTES } = {},
+) {
+    const selectedFiles = Array.from(files || []);
+    const file = selectedFiles[0] || null;
+    const invalidName = Boolean(file && !isSafeUploadFilename(file.name));
+    const empty = Boolean(file && file.size === 0);
+    const oversized = Boolean(file && file.size > maxFileBytes);
+    return {
+        empty,
+        extension: file ? managedFileExtension(file.name) : '',
+        file,
+        files: selectedFiles,
+        invalidName,
+        maxFileBytes,
+        oversized,
+        valid: selectedFiles.length === 1 && !invalidName && !empty && !oversized,
+    };
+}
+
+function managedSelectionError(analysis) {
+    if (analysis.valid) return '';
+    if (analysis.files.length !== 1) return '每次必须且只能选择一个文件';
+    if (analysis.invalidName) return '文件名无效或超过 240 字节';
+    if (analysis.empty) return '不能上传空文件';
+    if (analysis.oversized) {
+        return `文件超过 ${formatBytes(analysis.maxFileBytes)} 上限`;
+    }
+    return '文件无效';
+}
+
+function beginUpload(key, button, busyLabel) {
+    if (activeUploads.has(key)) return false;
+    activeUploads.set(key, {
+        button,
+        label: button?.textContent || '',
+    });
+    if (button) {
+        button.disabled = true;
+        button.textContent = busyLabel;
+    }
+    return true;
+}
+
+function finishUpload(key) {
+    const operation = activeUploads.get(key);
+    if (!operation) return;
+    if (operation.button) {
+        operation.button.disabled = false;
+        operation.button.textContent = operation.label;
+    }
+    activeUploads.delete(key);
+}
+
+function warnBeforeLeavingDuringUpload(event) {
+    if (activeUploads.size === 0) return;
+    event.preventDefault();
+    event.returnValue = '';
+}
+
 function renderSelectedReleaseFiles() {
     const input = document.getElementById('release-files');
     const target = document.getElementById('release-selected-files');
     if (!input || !target) return;
-    const selected = new Map(Array.from(input.files || []).map(file => [file.name, file]));
-    target.innerHTML = REQUIRED_RELEASE_FILES.map(filename => {
-        const file = selected.get(filename);
+    const analysis = analyzeReleaseFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_RELEASE_FILE_MAX_BYTES,
+        ),
+        maxTotalBytes: inputUploadLimit(
+            input,
+            'maxTotalBytes',
+            DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+        ),
+    });
+    const fileRows = REQUIRED_RELEASE_FILES.map(filename => {
+        const file = analysis.filesByName.get(filename);
         return file
             ? `<span class="selected-file-ok">✓ ${escapeHtml(filename)}（${formatBytes(file.size)}）</span>`
             : `<span class="selected-file-missing">缺少 ${escapeHtml(filename)}</span>`;
     }).join('<br>');
+    const unexpectedRows = analysis.unexpected
+        .map(filename => `<span class="selected-file-missing">文件名不正确：${escapeHtml(filename)}</span>`)
+        .join('<br>');
+    const summaryClass = analysis.valid ? 'selected-file-ok' : 'selected-file-missing';
+    target.innerHTML = `${fileRows}${unexpectedRows ? `<br>${unexpectedRows}` : ''}
+        <div class="selected-file-summary ${summaryClass}">
+            已选择 ${analysis.files.length}/${REQUIRED_RELEASE_FILES.length} 个文件 ·
+            总计 ${formatBytes(analysis.totalBytes)} / ${formatBytes(analysis.maxTotalBytes)}
+            ${analysis.valid ? ' · 可以上传' : ` · ${escapeHtml(releaseSelectionError(analysis))}`}
+        </div>`;
+}
+
+function renderSelectedManagedFile() {
+    const input = document.getElementById('managed-file-upload');
+    const target = document.getElementById('managed-file-selected');
+    if (!input || !target) return;
+    const analysis = analyzeManagedFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_MANAGED_FILE_MAX_BYTES,
+        ),
+    });
+    if (!analysis.file) {
+        target.textContent = '尚未选择文件';
+        return;
+    }
+    const stateClass = analysis.valid ? 'selected-file-ok' : 'selected-file-missing';
+    target.innerHTML = `<span class="${stateClass}">
+        ${analysis.valid ? '✓' : '⚠'} ${escapeHtml(analysis.file.name)}
+        · ${formatBytes(analysis.file.size)}
+        · 扩展名 ${escapeHtml(analysis.extension)}
+        · 上限 ${formatBytes(analysis.maxFileBytes)}
+        ${analysis.valid ? '' : ` · ${escapeHtml(managedSelectionError(analysis))}`}
+    </span>`;
 }
 
 async function loadReleaseManagement({ signal, mode }) {
@@ -2582,32 +2802,44 @@ async function publishCliRelease(button) {
     const version = document.getElementById('release-version').value.trim();
     const input = document.getElementById('release-files');
     const status = document.getElementById('release-publish-status');
-    const selectedFiles = Array.from(input.files || []);
-    const selectedNames = new Set(selectedFiles.map(file => file.name));
-    const missing = REQUIRED_RELEASE_FILES.filter(filename => !selectedNames.has(filename));
-    const unexpected = selectedFiles.filter(file => !REQUIRED_RELEASE_FILES.includes(file.name)).map(file => file.name);
-    if (!version) {
-        showToast('请填写版本号', 'error');
+    const analysis = analyzeReleaseFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_RELEASE_FILE_MAX_BYTES,
+        ),
+        maxTotalBytes: inputUploadLimit(
+            input,
+            'maxTotalBytes',
+            DEFAULT_RELEASE_TOTAL_MAX_BYTES,
+        ),
+    });
+    if (!isValidUploadVersion(version)) {
+        showToast('版本号只能使用字母、数字、点、短横线、下划线和加号', 'error');
         return;
     }
-    if (missing.length || unexpected.length || selectedFiles.length !== REQUIRED_RELEASE_FILES.length) {
-        showToast(`发布文件不完整${missing.length ? `，缺少：${missing.join('、')}` : ''}${unexpected.length ? `，多余：${unexpected.join('、')}` : ''}`, 'error');
+    const selectionError = releaseSelectionError(analysis);
+    if (selectionError) {
+        showToast(selectionError, 'error');
         renderSelectedReleaseFiles();
+        return;
+    }
+    if (!beginUpload('release', button, '正在上传...')) {
+        showToast('CLI 发布正在进行，请勿重复提交', 'error');
         return;
     }
 
     const data = new FormData();
     data.append('version', version);
     data.append('promote_to_latest', document.getElementById('release-promote-latest').checked ? 'true' : 'false');
-    selectedFiles.forEach(file => data.append('files', file, file.name));
-    button.disabled = true;
+    analysis.files.forEach(file => data.append('files', file, file.name));
     status.className = 'publish-status';
-    status.textContent = '正在上传并校验完整发布包，请不要关闭页面...';
+    status.textContent = `正在上传并校验 ${analysis.files.length} 个文件（共 ${formatBytes(analysis.totalBytes)}），请不要关闭页面...`;
     try {
         const result = await apiRequest('/api/admin/releases/publish', {
             method: 'POST',
             body: data,
-            timeoutMs: 120000,
+            timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
         });
         status.className = 'publish-status success';
         status.textContent = `版本 ${result.version} 发布成功${result.latest_updated ? '，latest 已更新' : ''}`;
@@ -2620,7 +2852,7 @@ async function publishCliRelease(button) {
         status.textContent = error.message || '发布失败';
         showToast(status.textContent, 'error');
     } finally {
-        button.disabled = false;
+        finishUpload('release');
     }
 }
 
@@ -2693,10 +2925,35 @@ async function uploadManagedFile(button) {
     const version = document.getElementById('managed-file-version').value.trim();
     const description = document.getElementById('managed-file-description').value.trim();
     const input = document.getElementById('managed-file-upload');
-    const file = input.files?.[0];
     const status = document.getElementById('managed-file-upload-status');
+    const analysis = analyzeManagedFiles(input.files, {
+        maxFileBytes: inputUploadLimit(
+            input,
+            'maxFileBytes',
+            DEFAULT_MANAGED_FILE_MAX_BYTES,
+        ),
+    });
+    const file = analysis.file;
     if (!name || !slug || !version || !file) {
         showToast('请填写名称、文件标识、版本号并选择文件', 'error');
+        return;
+    }
+    if (!/^[a-z0-9_-]{1,80}$/.test(slug)) {
+        showToast('文件标识只能使用小写字母、数字、短横线和下划线', 'error');
+        return;
+    }
+    if (!isValidUploadVersion(version)) {
+        showToast('版本号只能使用字母、数字、点、短横线、下划线和加号', 'error');
+        return;
+    }
+    const selectionError = managedSelectionError(analysis);
+    if (selectionError) {
+        showToast(selectionError, 'error');
+        renderSelectedManagedFile();
+        return;
+    }
+    if (!beginUpload('managed-file', button, '正在上传...')) {
+        showToast('文件上传正在进行，请勿重复提交', 'error');
         return;
     }
 
@@ -2707,14 +2964,13 @@ async function uploadManagedFile(button) {
     data.append('description', description);
     data.append('is_public', document.getElementById('managed-file-public').checked ? 'true' : 'false');
     data.append('file', file, file.name);
-    button.disabled = true;
     status.className = 'publish-status';
-    status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}）...`;
+    status.textContent = `正在上传 ${file.name}（${formatBytes(file.size)}，${analysis.extension}）...`;
     try {
         const result = await apiRequest('/api/admin/files/upload', {
             method: 'POST',
             body: data,
-            timeoutMs: 120000,
+            timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
         });
         if (document.getElementById('managed-file-publish-now').checked) {
             await apiRequest(`/api/admin/files/${encodeURIComponent(result.slug)}/publish`, {
@@ -2727,13 +2983,14 @@ async function uploadManagedFile(button) {
         status.textContent = `文件 ${result.filename} ${document.getElementById('managed-file-publish-now').checked ? '上传并发布' : '上传为草稿'}成功`;
         showToast(status.textContent, 'success');
         input.value = '';
+        renderSelectedManagedFile();
         await loadSection('files');
     } catch (error) {
         status.className = 'publish-status error';
         status.textContent = error.message || '上传失败';
         showToast(status.textContent, 'error');
     } finally {
-        button.disabled = false;
+        finishUpload('managed-file');
     }
 }
 
@@ -2824,6 +3081,7 @@ function closeModal() {
 // --- Init ---
 initializeMobileNavigation();
 document.addEventListener('visibilitychange', handleDashboardVisibilityChange);
+window.addEventListener('beforeunload', warnBeforeLeavingDuringUpload);
 const requestedInitialSection = new URL(window.location.href).searchParams.get('section');
 const initialSection = dashboardSectionFromLocation();
 activateDashboardSection(initialSection);

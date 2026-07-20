@@ -363,8 +363,11 @@
                         </div>
                         <div class="form-group publish-grid-wide">
                             <label class="form-label" for="release-files">平台二进制（必须完整选择 6 个文件）</label>
-                            <input id="release-files" class="form-input file-input" type="file" multiple onchange="renderSelectedReleaseFiles()" />
-                            <div class="form-hint">只需要选择六个平台二进制。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
+                            <input id="release-files" class="form-input file-input" type="file" multiple
+                                   data-max-file-bytes="__GITAI_RELEASE_FILE_MAX_BYTES__"
+                                   data-max-total-bytes="__GITAI_RELEASE_TOTAL_MAX_BYTES__"
+                                   onchange="renderSelectedReleaseFiles()" />
+                            <div class="form-hint">只需要选择六个平台二进制；单文件上限 __GITAI_RELEASE_FILE_MAX_MIB__ MiB，总计上限 __GITAI_RELEASE_TOTAL_MAX_MIB__ MiB。服务端会自动生成 install.sh、install.ps1 和 SHA256SUMS，并固定到本次版本。</div>
                         </div>
                     </div>
                     <div id="release-selected-files" class="selected-files">尚未选择文件</div>
@@ -415,13 +418,17 @@
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="managed-file-upload">选择文件</label>
-                            <input id="managed-file-upload" class="form-input file-input" type="file" />
+                            <input id="managed-file-upload" class="form-input file-input" type="file"
+                                   data-max-file-bytes="__GITAI_MANAGED_FILE_MAX_BYTES__"
+                                   onchange="renderSelectedManagedFile()" />
+                            <div class="form-hint">单文件上限 __GITAI_MANAGED_FILE_MAX_MIB__ MiB；文件名不能包含路径分隔符。文件类型不设白名单。</div>
                         </div>
                         <div class="form-group publish-grid-wide">
                             <label class="form-label" for="managed-file-description">说明</label>
                             <input id="managed-file-description" class="form-input" placeholder="可选，说明文件用途或本次更新内容" />
                         </div>
                     </div>
+                    <div id="managed-file-selected" class="selected-files">尚未选择文件</div>
                     <div class="publish-actions">
                         <div class="checkbox-group">
                             <label class="checkbox-label"><input id="managed-file-public" type="checkbox" checked /> 公开下载（无需登录）</label>

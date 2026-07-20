@@ -223,6 +223,30 @@ fn render_dashboard_template(auth: &crate::models::user::AuthIdentity) -> Result
         .replace("__GITAI_DASHBOARD_CSS_VERSION__", &dashboard_css_version)
         .replace("__GITAI_DASHBOARD_JS_VERSION__", &dashboard_js_version)
         .replace(
+            "__GITAI_RELEASE_FILE_MAX_BYTES__",
+            &crate::handlers::release::RELEASE_BINARY_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_FILE_MAX_MIB__",
+            &(crate::handlers::release::RELEASE_BINARY_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_TOTAL_MAX_BYTES__",
+            &crate::handlers::release::RELEASE_UPLOAD_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_RELEASE_TOTAL_MAX_MIB__",
+            &(crate::handlers::release::RELEASE_UPLOAD_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace(
+            "__GITAI_MANAGED_FILE_MAX_BYTES__",
+            &crate::handlers::managed_files::MANAGED_FILE_MAX_BYTES.to_string(),
+        )
+        .replace(
+            "__GITAI_MANAGED_FILE_MAX_MIB__",
+            &(crate::handlers::managed_files::MANAGED_FILE_MAX_BYTES / 1024 / 1024).to_string(),
+        )
+        .replace(
             "__GITAI_IS_ADMIN__",
             if is_admin { "true" } else { "false" },
         )
